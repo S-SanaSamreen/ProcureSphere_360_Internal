@@ -4,6 +4,7 @@ from django.db import connection
 from django.db.models import Avg, Count, Sum
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
+from django.template.loader import select_template
 from redis import Redis
 from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
@@ -67,6 +68,22 @@ class HealthAPIView(APIView):
         return health_check_view(request)
 
 
+def render_role_dashboard(request, template_candidates, context):
+    """
+    Safely render the first existing template among candidates,
+    with automatic fallback to pages/dashboard.html so TemplateDoesNotExist is never raised.
+    """
+    if isinstance(template_candidates, str):
+        template_candidates = [template_candidates]
+    candidates = list(template_candidates) + [
+        "pages/dashboard.html",
+        "pages/dashboards/super_admin.html",
+        "base.html",
+    ]
+    template = select_template(candidates)
+    return render(request, template.template.name, context)
+
+
 @login_required(login_url="/login/")
 def home_view(request):
     """
@@ -87,7 +104,11 @@ def home_view(request):
             },
             "my_recent_prs": my_prs.order_by("-created_at")[:10],
         }
-        return render(request, "pages/dashboards/requester_dashboard.html", context)
+        return render_role_dashboard(
+            request,
+            ["pages/dashboards/requester_dashboard.html", "pages/dashboards/requester.html"],
+            context,
+        )
 
     # 2. DEPARTMENT APPROVER ROLE DASHBOARD
     elif role_code == Role.DEPT_APPROVER:
@@ -102,7 +123,11 @@ def home_view(request):
             },
             "pending_prs": pending_prs,
         }
-        return render(request, "pages/dashboards/approver_dashboard.html", context)
+        return render_role_dashboard(
+            request,
+            ["pages/dashboards/approver_dashboard.html", "pages/dashboards/dept_approver.html"],
+            context,
+        )
 
     # 3. PROCUREMENT MANAGER GOVERNANCE DASHBOARD
     elif role_code == Role.PROC_MGR:
@@ -120,7 +145,11 @@ def home_view(request):
             "pending_prs": pending_prs[:5],
             "kyc_vendors": kyc_vendors[:5],
         }
-        return render(request, "pages/dashboards/manager_dashboard.html", context)
+        return render_role_dashboard(
+            request,
+            ["pages/dashboards/manager_dashboard.html", "pages/dashboards/proc_mgr.html"],
+            context,
+        )
 
     # 4. STORES / RECEIVER DASHBOARD
     elif role_code == Role.STORES_RECEIVER:
@@ -139,7 +168,11 @@ def home_view(request):
             },
             "recent_grns": recent_grns,
         }
-        return render(request, "pages/dashboards/stores_dashboard.html", context)
+        return render_role_dashboard(
+            request,
+            ["pages/dashboards/stores_dashboard.html", "pages/dashboards/stores_receiver.html"],
+            context,
+        )
 
     # 5. VENDOR PORTAL USER DASHBOARD
     elif role_code == Role.VENDOR_USER:
@@ -156,7 +189,11 @@ def home_view(request):
             },
             "vendor_pos": vendor_pos[:5],
         }
-        return render(request, "pages/dashboards/vendor_dashboard.html", context)
+        return render_role_dashboard(
+            request,
+            ["pages/dashboards/vendor_dashboard.html", "pages/dashboards/vendor_user.html"],
+            context,
+        )
 
     # 6. FINANCE / AP SPECIALIST DASHBOARD
     elif role_code == Role.FINANCE_AP:
@@ -173,7 +210,11 @@ def home_view(request):
             },
             "open_exceptions": open_exceptions[:10],
         }
-        return render(request, "pages/dashboards/finance_dashboard.html", context)
+        return render_role_dashboard(
+            request,
+            ["pages/dashboards/finance_dashboard.html", "pages/dashboards/finance_ap.html"],
+            context,
+        )
 
     # 7. PROCUREMENT EXECUTIVE DASHBOARD
     elif role_code == Role.PROC_EXEC:
@@ -190,7 +231,11 @@ def home_view(request):
             },
             "active_events": active_events,
         }
-        return render(request, "pages/dashboards/procurement_dashboard.html", context)
+        return render_role_dashboard(
+            request,
+            ["pages/dashboards/procurement_dashboard.html", "pages/dashboards/proc_exec.html"],
+            context,
+        )
 
     # 8. LEGAL / CONTRACT MANAGER DASHBOARD
     elif role_code == Role.LEGAL_MGR:
@@ -206,13 +251,17 @@ def home_view(request):
             },
             "active_contracts_list": active_contracts[:10],
         }
-        return render(request, "pages/dashboards/legal_dashboard.html", context)
+        return render_role_dashboard(
+            request,
+            ["pages/dashboards/legal_dashboard.html", "pages/dashboards/legal_mgr.html"],
+            context,
+        )
 
     # 9. COMPLIANCE AUDITOR DASHBOARD
     elif role_code == Role.AUDITOR:
         total_logs = AuditLog.objects.count()
         total_approvals = AuditLog.objects.filter(action=AuditLog.ACTION_APPROVE).count()
-        recent_logs = AuditLog.objects.select_related("actor").order_by("-created_at")[:15]
+        recent_logs = AuditLog.objects.select_related("actor").order_by("-timestamp")[:15]
         context = {
             "metrics": {
                 "total_audit_logs": total_logs,
@@ -220,7 +269,11 @@ def home_view(request):
             },
             "recent_logs": recent_logs,
         }
-        return render(request, "pages/dashboards/auditor_dashboard.html", context)
+        return render_role_dashboard(
+            request,
+            ["pages/dashboards/auditor_dashboard.html", "pages/dashboards/auditor.html"],
+            context,
+        )
 
     # 10. SUPER ADMIN / EXECUTIVE CONTROL CENTER
     total_pr_count = PurchaseRequisition.objects.count()
@@ -270,7 +323,10 @@ def home_view(request):
             "total_spend": sum(item["actual"] for item in spend_data) if spend_data else 0,
             "pending_exceptions": len([item for item in inv_data if item["status"] == "OPEN"]),
             "expiring_contracts": len([item for item in contract_data if 0 <= item["days_to_expiry"] <= 60]),
-            "vendor_count": len(scorecard_data),
         },
     }
-    return render(request, "pages/dashboard.html", context)
+    return render_role_dashboard(
+        request,
+        ["pages/dashboard.html", "pages/dashboards/super_admin.html"],
+        context,
+    )

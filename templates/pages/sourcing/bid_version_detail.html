@@ -1,0 +1,172 @@
+{% extends 'base.html' %}
+{% block title %}Bid Snapshot {{ bid.bid_number }} v{{ version.version_number }}{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-4 pb-2 border-bottom">
+    <div class="d-flex align-items-center mb-2 mb-md-0">
+        {% if is_vendor %}
+            <a href="{% url 'sourcing:vendor-bid-workspace' bid.event.id %}" class="btn btn-outline-secondary btn-sm me-3" title="Back to Bid Workspace">
+                <i class="fa-solid fa-arrow-left"></i>
+            </a>
+        {% else %}
+            <a href="{% url 'sourcing:procurement-bid-detail' bid.id %}" class="btn btn-outline-secondary btn-sm me-3" title="Back to Bid Review">
+                <i class="fa-solid fa-arrow-left"></i>
+            </a>
+        {% endif %}
+        <div>
+            <div class="d-flex align-items-center gap-2">
+                <span class="badge bg-primary fs-6">v{{ version.version_number }}</span>
+                <h3 class="fw-bold mb-0 text-dark">Historical Bid Snapshot</h3>
+            </div>
+            <div class="text-muted small mt-1">
+                <span>Bid Ref: <strong>{{ bid.bid_number }}</strong></span>
+                <span class="mx-2">•</span>
+                <span>Vendor: <strong>{{ bid.vendor.legal_name }}</strong></span>
+                <span class="mx-2">•</span>
+                <span>Archived At: <strong>{{ version.submitted_at|date:"d M Y H:i:s e" }}</strong></span>
+            </div>
+        </div>
+    </div>
+    <div>
+        <span class="badge bg-secondary p-2"><i class="fa-solid fa-lock me-1"></i> Immutable Historical Record</span>
+    </div>
+</div>
+
+<div class="alert alert-info d-flex align-items-center mb-4 shadow-sm">
+    <i class="fa-solid fa-clock-rotate-left fa-lg me-3"></i>
+    <div>
+        <strong>Frozen Audit Snapshot (v{{ version.version_number }})</strong>
+        <div class="small">This data represents the exact state of the bid when submitted/amended on {{ version.submitted_at|date:"d M Y H:i:s" }}. Changes made in later versions do not affect this record.</div>
+    </div>
+</div>
+
+<div class="row g-4 mb-4">
+    <div class="col-md-4">
+        <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+                <span class="text-muted small d-block">Total Quoted Amount</span>
+                <h3 class="fw-bold text-success mb-0">${{ version.total_bid_amount }}</h3>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+                <span class="text-muted small d-block">Submitted / Amended By</span>
+                <strong class="text-dark">{{ version.submitted_by.email|default:"Vendor User" }}</strong>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+                <span class="text-muted small d-block">Change Summary</span>
+                <p class="mb-0 text-secondary">{{ version.change_summary|default:"Initial bid submission" }}</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Executive Summary -->
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white fw-bold py-3 border-bottom">
+        <i class="fa-solid fa-file-lines me-2 text-primary"></i> Proposal Summary at Snapshot
+    </div>
+    <div class="card-body">
+        <p class="mb-0 text-secondary" style="white-space: pre-wrap;">{{ version.proposal_summary|default:"No executive summary provided." }}</p>
+    </div>
+</div>
+
+<!-- Technical Responses at Snapshot -->
+{% if snapshot.technical_responses %}
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white fw-bold py-3 border-bottom">
+        <i class="fa-solid fa-microscope me-2 text-info"></i> Technical Responses at Snapshot
+    </div>
+    <div class="card-body">
+        {% for resp in snapshot.technical_responses %}
+        <div class="border rounded p-3 mb-3 bg-light">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <strong class="text-dark">{{ resp.requirement_title }}</strong>
+                <span class="badge {% if resp.compliance_status == 'COMPLIANT' %}bg-success{% elif resp.compliance_status == 'PARTIAL' %}bg-warning text-dark{% else %}bg-danger{% endif %}">
+                    {{ resp.compliance_display }}
+                </span>
+            </div>
+            <p class="mb-0 text-muted small" style="white-space: pre-wrap;">{{ resp.response_text|default:"(No response text)" }}</p>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Commercial BOQ at Snapshot -->
+{% if snapshot.commercial_lines %}
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white fw-bold py-3 border-bottom">
+        <i class="fa-solid fa-dollar-sign me-2 text-success"></i> Commercial Lines at Snapshot
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-3">Item Description</th>
+                        <th>Qty</th>
+                        <th>Quoted Unit Price</th>
+                        <th>Quoted Total</th>
+                        <th>Currency</th>
+                        <th>Lead Time</th>
+                        <th class="pe-3">Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for line in snapshot.commercial_lines %}
+                <tr>
+                    <td class="ps-3 fw-semibold">{{ line.item_description }}</td>
+                    <td>{{ line.quantity }}</td>
+                    <td>${{ line.quoted_unit_price }}</td>
+                    <td class="fw-bold text-success">${{ line.quoted_total_price }}</td>
+                    <td>{{ line.currency }}</td>
+                    <td>{% if line.lead_time_days %}{{ line.lead_time_days }} days{% else %}—{% endif %}</td>
+                    <td class="pe-3 small text-muted">{{ line.notes|default:"—" }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Attachments at Snapshot -->
+{% if snapshot.attachments %}
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white fw-bold py-3 border-bottom">
+        <i class="fa-solid fa-paperclip me-2 text-primary"></i> Attached Documents at Snapshot
+    </div>
+    <div class="card-body p-0">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th class="ps-3">Document Title</th>
+                    <th>Filename</th>
+                    <th>Type</th>
+                    <th class="pe-3">Size</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for att in snapshot.attachments %}
+            <tr>
+                <td class="ps-3 fw-semibold">{{ att.title }}</td>
+                <td>{{ att.original_filename }}</td>
+                <td><span class="badge bg-light text-dark border">{{ att.doc_type_display }}</span></td>
+                <td class="pe-3 small text-muted">{{ att.file_size|filesizeformat }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}

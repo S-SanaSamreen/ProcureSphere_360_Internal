@@ -1,0 +1,75 @@
+{% extends 'base.html' %}
+{% block title %}My Sourcing Invitations{% endblock %}
+{% block content %}
+<div class="mb-4">
+    <h2 class="fw-bold text-dark mb-1"><i class="fa-solid fa-envelope-open-text me-2 text-primary"></i>My Sourcing Invitations</h2>
+    <p class="text-muted">Events your organization ({{ vendor.legal_name }}) has been invited to participate in.</p>
+</div>
+
+{% if messages %}{% for msg in messages %}
+<div class="alert alert-{{ msg.tags|default:'info' }} alert-dismissible fade show">{{ msg }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+{% endfor %}{% endif %}
+
+<div class="card shadow-sm border-0">
+    <div class="card-body p-0">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-dark">
+                <tr>
+                    <th class="ps-3">Event #</th>
+                    <th>Type</th>
+                    <th>Title</th>
+                    <th>Status</th>
+                    <th>Bid Deadline</th>
+                    <th class="pe-3 text-end">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for event in events %}
+            <tr>
+                <td class="ps-3 fw-semibold text-secondary">{{ event.event_number }}</td>
+                <td>
+                    {% if event.event_type == "RFQ" %}
+                        <span class="badge bg-info text-dark">RFQ</span>
+                    {% else %}
+                        <span class="badge" style="background:#6f42c1;color:#fff">RFP</span>
+                    {% endif %}
+                </td>
+                <td class="fw-bold">{{ event.title|truncatechars:50 }}</td>
+                <td>
+                    {% if event.status == "BID_WINDOW" %}
+                        {% if event.is_accepting_bids %}
+                            <span class="badge bg-success"><i class="fa-solid fa-circle-dot me-1"></i>Open</span>
+                        {% else %}
+                            <span class="badge bg-warning text-dark">Window Passed</span>
+                        {% endif %}
+                    {% elif event.status == "CLOSED" %}
+                        <span class="badge bg-danger">Closed</span>
+                    {% elif event.status == "AWARDED" %}
+                        <span class="badge bg-primary">Awarded</span>
+                    {% else %}
+                        <span class="badge bg-secondary">{{ event.get_status_display }}</span>
+                    {% endif %}
+                </td>
+                <td class="small {% if event.is_past_deadline %}text-danger{% else %}text-success{% endif %}">
+                    {% if event.bid_end_date %}{{ event.bid_end_date|date:"d M Y H:i" }}{% else %}—{% endif %}
+                </td>
+                <td class="pe-3 text-end">
+                    <a href="{% url 'sourcing:detail' event.id %}" class="btn btn-sm btn-outline-primary">
+                        <i class="fa-solid fa-eye me-1"></i> View
+                    </a>
+                </td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="6" class="text-center py-5 text-muted">
+                    <i class="fa-solid fa-envelope-open fa-3x mb-3 d-block text-light"></i>
+                    <h5>No Invitations</h5>
+                    <p>Your organization has not been invited to any active sourcing events.</p>
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

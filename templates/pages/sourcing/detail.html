@@ -1,0 +1,356 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ event.event_number }} — Sourcing Detail{% endblock %}
+
+{% block content %}
+<!-- Header -->
+<div class="d-flex justify-content-between align-items-start mb-4">
+    <div class="d-flex align-items-center">
+        <a href="{% url 'sourcing:list' %}" class="btn btn-outline-secondary btn-sm me-3">
+            <i class="fa-solid fa-arrow-left"></i>
+        </a>
+        <div>
+            <h2 class="fw-bold text-dark mb-1">
+                {% if event.event_type == "RFQ" %}<span class="badge bg-info text-dark me-2">RFQ</span>{% else %}<span class="badge me-2" style="background:#6f42c1;color:#fff">RFP</span>{% endif %}
+                {{ event.title }}
+            </h2>
+            <span class="text-muted small">{{ event.event_number }}</span>
+        </div>
+    </div>
+    <!-- Action Buttons by Status -->
+    <div class="d-flex gap-2">
+        {% if event.status == "DRAFT" %}
+            <a href="{% url 'sourcing:edit' event.id %}" class="btn btn-outline-primary btn-sm">
+                <i class="fa-solid fa-pen me-1"></i> Edit
+            </a>
+            <a href="{% url 'sourcing:invite-vendors' event.id %}" class="btn btn-outline-secondary btn-sm">
+                <i class="fa-solid fa-user-plus me-1"></i> Invite Vendors
+            </a>
+            <form method="post" action="{% url 'sourcing:publish' event.id %}" class="d-inline"
+                  onsubmit="return confirm('Publish this event? It will open the bid window.');">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-success btn-sm">
+                    <i class="fa-solid fa-paper-plane me-1"></i> Publish
+                </button>
+            </form>
+        {% elif event.status == "BID_WINDOW" %}
+            <a href="{% url 'sourcing:event-submissions' event.id %}" class="btn btn-primary btn-sm">
+                <i class="fa-solid fa-file-invoice-dollar me-1"></i> View Submissions ({{ event.bids.count }})
+            </a>
+            <a href="{% url 'sourcing:invite-vendors' event.id %}" class="btn btn-outline-secondary btn-sm">
+                <i class="fa-solid fa-user-plus me-1"></i> Invite Vendors
+            </a>
+            <form method="post" action="{% url 'sourcing:close' event.id %}" class="d-inline"
+                  onsubmit="return confirm('Close this event? No new bids will be accepted.');">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-danger btn-sm">
+                    <i class="fa-solid fa-lock me-1"></i> Close Event
+                </button>
+            </form>
+        {% else %}
+            <a href="{% url 'sourcing:event-submissions' event.id %}" class="btn btn-primary btn-sm">
+                <i class="fa-solid fa-file-invoice-dollar me-1"></i> View Submissions ({{ event.bids.count }})
+            </a>
+        {% endif %}
+    </div>
+</div>
+
+{% if messages %}
+    {% for msg in messages %}
+        <div class="alert alert-{{ msg.tags|default:'info' }} alert-dismissible fade show">
+            {{ msg }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    {% endfor %}
+{% endif %}
+
+{% if event.status == "DRAFT" and not event.invitations.exists %}
+<div class="alert alert-warning d-flex align-items-center justify-content-between mb-4 shadow-sm border-0">
+    <div class="d-flex align-items-center">
+        <i class="fa-solid fa-triangle-exclamation text-warning fs-4 me-3"></i>
+        <div>
+            <strong>Vendor Invitation Required:</strong> At least one active or approved vendor must be invited before you can publish this sourcing event.
+        </div>
+    </div>
+    <a href="{% url 'sourcing:invite-vendors' event.id %}" class="btn btn-warning btn-sm fw-semibold text-dark text-nowrap ms-3">
+        <i class="fa-solid fa-user-plus me-1"></i> Invite Vendors Now
+    </a>
+</div>
+{% endif %}
+
+<div class="row g-4">
+    <!-- Left: Main Content -->
+    <div class="col-lg-8">
+
+        <!-- Event Info -->
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header fw-semibold bg-white border-bottom">
+                <i class="fa-solid fa-circle-info me-2 text-primary"></i> Event Information
+            </div>
+            <div class="card-body">
+                <p class="text-muted mb-3">{{ event.description }}</p>
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <div class="small text-muted">Status</div>
+                        <strong>{{ event.get_status_display }}</strong>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="small text-muted">Bid Start</div>
+                        <strong>{% if event.bid_start_date %}{{ event.bid_start_date|date:"d M Y H:i" }}{% else %}—{% endif %}</strong>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="small text-muted">Bid Deadline</div>
+                        <strong class="{% if event.is_past_deadline %}text-danger{% endif %}">
+                            {% if event.bid_end_date %}{{ event.bid_end_date|date:"d M Y H:i" }}{% else %}—{% endif %}
+                        </strong>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="small text-muted">Clarification Deadline</div>
+                        <strong>{% if event.clarification_deadline %}{{ event.clarification_deadline|date:"d M Y H:i" }}{% else %}Same as bid deadline{% endif %}</strong>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Technical Requirements -->
+        {% if event.technical_section_enabled %}
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header fw-semibold bg-white border-bottom d-flex justify-content-between align-items-center">
+                <span><i class="fa-solid fa-microscope me-2 text-info"></i> Technical Requirements</span>
+                <span class="badge bg-light text-dark border">{{ event.technical_requirements.count }}</span>
+            </div>
+            <div class="card-body">
+                {% for req in event.technical_requirements.all %}
+                <div class="border rounded p-3 mb-2">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div class="fw-semibold">{{ req.title }}</div>
+                        <span class="badge {% if req.importance == 'MANDATORY' %}bg-danger{% elif req.importance == 'PREFERRED' %}bg-warning text-dark{% else %}bg-secondary{% endif %}">
+                            {{ req.get_importance_display }}
+                        </span>
+                    </div>
+                    <p class="text-muted small mb-0 mt-1">{{ req.description }}</p>
+                </div>
+                {% empty %}
+                <p class="text-muted fst-italic">No technical requirements added yet.</p>
+                {% endfor %}
+
+                {% if event.status == "DRAFT" %}
+                <hr>
+                <h6 class="fw-semibold text-muted mb-2">Add Technical Requirement</h6>
+                <form method="post" action="{% url 'sourcing:add-tech-req' event.id %}">
+                    {% csrf_token %}
+                    <div class="row g-2 align-items-end">
+                        <div class="col-md-5">
+                            <label class="form-label small text-muted mb-1">Requirement Title *</label>
+                            {{ tech_form.title }}
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label small text-muted mb-1">Importance</label>
+                            {{ tech_form.importance }}
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small text-muted mb-1">Order</label>
+                            {{ tech_form.order }}
+                        </div>
+                        <div class="col-md-2">
+                            <button class="btn btn-outline-info btn-sm w-100" type="submit" style="padding-top:7px;padding-bottom:7px;">
+                                <i class="fa-solid fa-plus me-1"></i> Add
+                            </button>
+                        </div>
+                        <div class="col-12 mt-2">
+                            <label class="form-label small text-muted mb-1">Description / Evaluation Criteria (Optional)</label>
+                            {{ tech_form.description }}
+                        </div>
+                    </div>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Commercial Requirements -->
+        {% if event.commercial_section_enabled %}
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header fw-semibold bg-white border-bottom d-flex justify-content-between align-items-center">
+                <span><i class="fa-solid fa-dollar-sign me-2 text-success"></i> Commercial Requirements</span>
+                <span class="badge bg-light text-dark border">{{ event.commercial_requirements.count }}</span>
+            </div>
+            <div class="card-body">
+                {% if event.commercial_requirements.count %}
+                <table class="table table-sm table-bordered">
+                    <thead class="table-light">
+                        <tr>
+                            <th>#</th>
+                            <th>Title</th>
+                            <th>Type</th>
+                            <th>Unit</th>
+                            <th>Quantity</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for req in event.commercial_requirements.all %}
+                    <tr>
+                        <td class="text-muted">{{ forloop.counter }}</td>
+                        <td>
+                            <strong>{{ req.title }}</strong>
+                            <div class="small text-muted">{{ req.description|truncatechars:60 }}</div>
+                        </td>
+                        <td><span class="badge bg-light text-dark border">{{ req.get_requirement_type_display }}</span></td>
+                        <td>{{ req.unit|default:"—" }}</td>
+                        <td>{{ req.quantity|default:"—" }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <p class="text-muted fst-italic">No commercial requirements added yet.</p>
+                {% endif %}
+
+                {% if event.status == "DRAFT" %}
+                <hr>
+                <h6 class="fw-semibold text-muted mb-2">Add Commercial Requirement</h6>
+                <form method="post" action="{% url 'sourcing:add-comm-req' event.id %}">
+                    {% csrf_token %}
+                    <div class="row g-2 align-items-end">
+                        <div class="col-md-4">
+                            <label class="form-label small text-muted mb-1">Item Title *</label>
+                            {{ comm_form.title }}
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label small text-muted mb-1">Type</label>
+                            {{ comm_form.requirement_type }}
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small text-muted mb-1">Unit</label>
+                            {{ comm_form.unit }}
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label small text-muted mb-1">Quantity</label>
+                            {{ comm_form.quantity }}
+                        </div>
+                        <div class="col-md-1">
+                            <button class="btn btn-outline-success btn-sm w-100" type="submit" style="padding-top:7px;padding-bottom:7px;" title="Add Commercial Requirement">
+                                <i class="fa-solid fa-plus"></i>
+                            </button>
+                        </div>
+                        <div class="col-12 mt-2">
+                            <label class="form-label small text-muted mb-1">Description / Specifications (Optional)</label>
+                            {{ comm_form.description }}
+                        </div>
+                    </div>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Clarifications -->
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header fw-semibold bg-white border-bottom d-flex justify-content-between align-items-center">
+                <span><i class="fa-solid fa-comments me-2 text-warning"></i> Clarifications</span>
+                <span class="badge bg-warning text-dark">{{ clarifications|length }} total</span>
+            </div>
+            <div class="card-body">
+                {% for c in clarifications %}
+                <div class="border rounded p-3 mb-3">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <div>
+                            <span class="fw-semibold">{{ c.vendor.legal_name }}</span>
+                            <span class="text-muted small ms-2">{{ c.created_at|date:"d M Y H:i" }}</span>
+                        </div>
+                        <div>
+                            <span class="badge {% if c.status == 'OPEN' %}bg-warning text-dark{% elif c.status == 'ANSWERED' %}bg-success{% else %}bg-secondary{% endif %}">
+                                {{ c.get_status_display }}
+                            </span>
+                            <span class="badge bg-light text-dark border ms-1">{{ c.get_visibility_display }}</span>
+                        </div>
+                    </div>
+                    <p class="mb-2"><strong>Q:</strong> {{ c.question }}</p>
+                    {% if c.response %}
+                        <div class="bg-light rounded p-2">
+                            <strong>A:</strong> {{ c.response }}
+                            <div class="small text-muted mt-1">Responded by {{ c.responded_by.email|default:"—" }} on {{ c.responded_at|date:"d M Y H:i" }}</div>
+                        </div>
+                    {% else %}
+                        <!-- Response form -->
+                        <form method="post" action="{% url 'sourcing:respond-clarification' event.id c.id %}">
+                            {% csrf_token %}
+                            <div class="row g-2 mt-1">
+                                <div class="col-md-8">
+                                    <textarea name="response" class="form-control form-control-sm" rows="2" placeholder="Type your response..." required></textarea>
+                                </div>
+                                <div class="col-md-2">
+                                    <select name="visibility" class="form-select form-select-sm">
+                                        <option value="PRIVATE">Private</option>
+                                        <option value="ALL_VENDORS">All Vendors</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-2">
+                                    <button type="submit" class="btn btn-primary btn-sm w-100">Respond</button>
+                                </div>
+                            </div>
+                        </form>
+                    {% endif %}
+                </div>
+                {% empty %}
+                <p class="text-muted fst-italic">No clarifications submitted yet.</p>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Right: Sidebar -->
+    <div class="col-lg-4">
+
+        <!-- Invited Vendors -->
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header fw-semibold bg-white border-bottom d-flex justify-content-between">
+                <span><i class="fa-solid fa-users me-2 text-primary"></i> Invited Vendors</span>
+                <span class="badge bg-primary rounded-pill">{{ event.invitations.count }}</span>
+            </div>
+            <div class="list-group list-group-flush">
+                {% for invite in event.invitations.all %}
+                <div class="list-group-item d-flex justify-content-between align-items-center py-2">
+                    <div>
+                        <div class="fw-semibold small">{{ invite.vendor.legal_name }}</div>
+                        <div class="text-muted" style="font-size:0.75rem">{{ invite.invited_at|date:"d M Y" }}</div>
+                    </div>
+                    <div>
+                        {% if invite.is_responded %}
+                            <span class="badge bg-success"><i class="fa-solid fa-check me-1"></i>Responded</span>
+                        {% else %}
+                            <span class="badge bg-secondary">Invited</span>
+                        {% endif %}
+                    </div>
+                </div>
+                {% empty %}
+                <div class="list-group-item text-muted fst-italic small py-3 text-center">No vendors invited yet.</div>
+                {% endfor %}
+            </div>
+            {% if event.status == "DRAFT" %}
+            <div class="card-footer bg-transparent">
+                <a href="{% url 'sourcing:invite-vendors' event.id %}" class="btn btn-outline-primary btn-sm w-100">
+                    <i class="fa-solid fa-user-plus me-1"></i> Manage Invitations
+                </a>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Status Timeline -->
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header fw-semibold bg-white border-bottom">
+                <i class="fa-solid fa-timeline me-2 text-secondary"></i> Lifecycle
+            </div>
+            <div class="card-body small">
+                <div class="text-muted">Created: <strong>{{ event.created_at|date:"d M Y H:i" }}</strong></div>
+                {% if event.published_at %}
+                <div class="text-muted">Published: <strong>{{ event.published_at|date:"d M Y H:i" }}</strong></div>
+                {% endif %}
+                {% if event.closed_at %}
+                <div class="text-muted">Closed: <strong>{{ event.closed_at|date:"d M Y H:i" }}</strong></div>
+                {% endif %}
+                <div class="text-muted mt-2">Created by: <strong>{{ event.created_by.email|default:"—" }}</strong></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

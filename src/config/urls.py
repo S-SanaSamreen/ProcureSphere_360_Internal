@@ -6,25 +6,25 @@ from apps.accounts.api_views import SessionLoginView, SessionLogoutView
 from apps.accounts.views import login_page_view, logout_page_view
 from apps.core.admin_site import admin_site
 
+from django.views.generic.base import RedirectView
+
 urlpatterns = [
     path("admin/logout/", logout_page_view, name="admin_logout_override"),
     path("admin/", admin_site.urls),
     path("login/", login_page_view, name="login"),
     path("logout/", logout_page_view, name="logout"),
-    # Web Auth & Page Views
-    path("", include("apps.accounts.urls")),
-    path("", include("apps.requisitions.urls")),
-    path("", include("apps.approvals.urls")),
-    path("", include("apps.vendors.urls")),
-    path("", include("apps.sourcing.urls")),
-    path("", include("apps.orders.urls")),
-    path("", include("apps.receipts.urls")),
-    path("", include("apps.invoices.urls")),
-    path("", include("apps.contracts.urls")),
-    path("", include("apps.scorecards.urls")),
-    path("", include("apps.reports.urls")),
-    path("", include("apps.audit.urls")),
+    # Health Check & Frontend Domain pages
     path("", include("apps.core.urls")),
+    path("vendors/", include("apps.vendors.urls")),
+    path("requisitions/", include("apps.requisitions.urls")),
+    path("orders/", include("apps.orders.urls")),
+    path("purchase-orders/", RedirectView.as_view(url="/orders/", permanent=False)),
+    path("contracts/", include("apps.contracts.urls")),
+    path("invoices/", include("apps.invoices.urls")),
+    path("sourcing/", include("apps.sourcing.urls")),
+    path("sourcing-events/", RedirectView.as_view(url="/sourcing/", permanent=False)),
+
+
     # OpenAPI Schema & Swagger Docs
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
@@ -38,6 +38,7 @@ urlpatterns = [
     path("api/v1/vendors/", include("apps.vendors.api_urls")),
     path("api/v1/requisitions/", include("apps.requisitions.api_urls")),
     path("api/v1/sourcing-events/", include("apps.sourcing.api_urls")),
+    path("api/v1/sourcing/", include("apps.sourcing.api_urls")),
     path("api/v1/purchase-orders/", include("apps.orders.api_urls")),
     path("api/v1/receipts/", include("apps.receipts.api_urls")),
     path("api/v1/invoices/", include("apps.invoices.api_urls")),

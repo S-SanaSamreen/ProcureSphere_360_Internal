@@ -1,0 +1,109 @@
+{% extends 'base.html' %}
+{% block title %}Invite Vendors — {{ event.event_number }}{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center mb-4">
+    <a href="{% url 'sourcing:detail' event.id %}" class="btn btn-outline-secondary btn-sm me-3">
+        <i class="fa-solid fa-arrow-left me-1"></i> Back to Event
+    </a>
+    <div>
+        <h2 class="fw-bold text-dark mb-1"><i class="fa-solid fa-user-plus me-2 text-primary"></i>Invite Vendors</h2>
+        <p class="text-muted mb-0">{{ event.event_number }} — {{ event.title }}</p>
+    </div>
+</div>
+
+{% if messages %}{% for msg in messages %}
+<div class="alert alert-{{ msg.tags|default:'info' }} alert-dismissible fade show">{{ msg }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+{% endfor %}{% endif %}
+
+<div class="row g-4">
+    <!-- Left: Already Invited -->
+    <div class="col-md-4">
+        <div class="card shadow-sm border-0">
+            <div class="card-header fw-semibold bg-white border-bottom d-flex justify-content-between">
+                <span>Already Invited</span>
+                <span class="badge bg-primary rounded-pill">{{ already_invited.count }}</span>
+            </div>
+            <div class="list-group list-group-flush">
+                {% for invite in already_invited %}
+                <div class="list-group-item d-flex justify-content-between align-items-center py-2">
+                    <div>
+                        <div class="fw-semibold small">{{ invite.vendor.legal_name }}</div>
+                        <div class="text-muted" style="font-size:0.75rem">{{ invite.vendor.status }}</div>
+                    </div>
+                    <form method="post" action="{% url 'sourcing:remove-vendor' event.id invite.vendor.id %}"
+                          onsubmit="return confirm('Remove {{ invite.vendor.legal_name }}?');">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-outline-danger btn-sm py-0">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </form>
+                </div>
+                {% empty %}
+                <div class="list-group-item text-muted small py-3 text-center">No vendors invited yet.</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Right: Available Vendors -->
+    <div class="col-md-8">
+        <div class="card shadow-sm border-0">
+            <div class="card-header fw-semibold bg-white border-bottom">
+                <i class="fa-solid fa-building-user me-2 text-success"></i> Eligible Vendors (Active / Approved)
+            </div>
+            <div class="card-body">
+                <form method="post">
+                    {% csrf_token %}
+                    {% if form.errors %}
+                    <div class="alert alert-danger py-2 mb-3">
+                        <i class="fa-solid fa-circle-exclamation me-1"></i>
+                        {% for err in form.vendors.errors %}
+                            {{ err }}
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+
+                    {% if form.vendors.field.queryset.count %}
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="text-muted small">Select vendors to receive RFQ/RFP invitation:</span>
+                        <button type="button" class="btn btn-outline-secondary btn-sm py-0" id="selectAllBtn" onclick="toggleSelectAll()">
+                            <i class="fa-solid fa-check-double me-1"></i> Select All
+                        </button>
+                    </div>
+                    <div class="mb-3" style="max-height:400px;overflow-y:auto;border:1px solid #dee2e6;border-radius:6px;padding:12px;">
+                        {% for vendor in form.vendors.field.queryset %}
+                        <div class="form-check mb-2">
+                            <input class="form-check-input vendor-checkbox" type="checkbox" name="vendors" value="{{ vendor.id }}" id="vendor_{{ vendor.id }}">
+                            <label class="form-check-label" for="vendor_{{ vendor.id }}">
+                                <strong>{{ vendor.legal_name }}</strong>
+                                <span class="text-muted small ms-2">{{ vendor.category.name }}</span>
+                                <span class="badge bg-success ms-1 small">{{ vendor.status }}</span>
+                            </label>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fa-solid fa-paper-plane me-1"></i> Send Invitations
+                    </button>
+
+                    <script>
+                    function toggleSelectAll() {
+                        const checkboxes = document.querySelectorAll('.vendor-checkbox');
+                        const anyUnchecked = Array.from(checkboxes).some(cb => !cb.checked);
+                        checkboxes.forEach(cb => cb.checked = anyUnchecked);
+                        document.getElementById('selectAllBtn').innerHTML = anyUnchecked ? 
+                            '<i class="fa-solid fa-xmark me-1"></i> Deselect All' : 
+                            '<i class="fa-solid fa-check-double me-1"></i> Select All';
+                    }
+                    </script>
+                    {% else %}
+                    <div class="text-muted fst-italic py-3">
+                        No eligible vendors available. All active/approved vendors are already invited, or none exist in the system.
+                    </div>
+                    {% endif %}
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,299 @@
+{% extends 'base.html' %}
+{% block title %}Review Bid {{ bid.bid_number }} — {{ bid.vendor.legal_name }}{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-4 pb-2 border-bottom">
+    <div class="d-flex align-items-center mb-2 mb-md-0">
+        <a href="{% url 'sourcing:event-submissions' event.id %}" class="btn btn-outline-secondary btn-sm me-3" title="Back to Submissions">
+            <i class="fa-solid fa-arrow-left"></i>
+        </a>
+        <div>
+            <div class="d-flex align-items-center gap-2">
+                <span class="badge bg-secondary fs-6">v{{ bid.current_version_number }}</span>
+                <h3 class="fw-bold mb-0 text-dark">{{ bid.vendor.legal_name }}</h3>
+            </div>
+            <div class="text-muted small mt-1">
+                <span>Bid Ref: <strong>{{ bid.bid_number }}</strong></span>
+                <span class="mx-2">•</span>
+                <span>Event: <strong>{{ event.event_number }}</strong> ({{ event.title }})</span>
+                <span class="mx-2">•</span>
+                <span>Submitted: <strong>{{ bid.submitted_at|date:"d M Y H:i"|default:"Not submitted" }}</strong></span>
+            </div>
+        </div>
+    </div>
+    <div>
+        {% if bid.status == "SUBMITTED" %}
+            <span class="badge bg-success fs-6 p-2"><i class="fa-solid fa-check me-1"></i> Submitted</span>
+        {% elif bid.status == "AMENDED" %}
+            <span class="badge bg-primary fs-6 p-2"><i class="fa-solid fa-code-branch me-1"></i> Amended</span>
+        {% elif bid.status == "DRAFT" %}
+            <span class="badge bg-secondary fs-6 p-2">Draft</span>
+        {% else %}
+            <span class="badge bg-dark fs-6 p-2">{{ bid.get_status_display }}</span>
+        {% endif %}
+    </div>
+</div>
+
+{% if messages %}
+    {% for msg in messages %}
+        <div class="alert alert-{{ msg.tags|default:'info' }} alert-dismissible fade show shadow-sm" role="alert">
+            <i class="fa-solid fa-circle-info me-2"></i>{{ msg }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    {% endfor %}
+{% endif %}
+
+{% if is_sealed %}
+<div class="alert alert-warning d-flex align-items-center mb-4 shadow-sm">
+    <i class="fa-solid fa-shield-halved fa-2x me-3 text-warning"></i>
+    <div>
+        <strong>Sealed Bid Privacy Active</strong>
+        <div class="small">The event is currently in the active bidding window. Commercial pricing details and sensitive attachments remain sealed until the deadline ({{ event.bid_end_date|date:"d M Y H:i" }}).</div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Key Metrics -->
+<div class="row g-4 mb-4">
+    <div class="col-md-3">
+        <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+                <span class="text-muted small d-block">Total Quoted Price</span>
+                {% if is_sealed %}
+                    <span class="badge bg-light text-secondary border mt-2"><i class="fa-solid fa-lock me-1"></i> Sealed</span>
+                {% else %}
+                    <h3 class="fw-bold text-success mb-0">${{ bid.total_bid_amount }}</h3>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+                <span class="text-muted small d-block">Current Version</span>
+                <h4 class="fw-bold text-primary mb-0">Version {{ bid.current_version_number }}</h4>
+                <small class="text-muted">{{ bid.versions.count }} archived version(s)</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+                <span class="text-muted small d-block">Validation Status</span>
+                {% if bid.is_valid %}
+                    <span class="badge bg-success fs-6 mt-1"><i class="fa-solid fa-check me-1"></i> Validated</span>
+                {% else %}
+                    <span class="badge bg-warning text-dark fs-6 mt-1">Pending Validation</span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card shadow-sm border-0 h-100">
+            <div class="card-body">
+                <span class="text-muted small d-block">Attached Documents</span>
+                <h4 class="fw-bold text-dark mb-0">{{ bid.attachments.count }} File(s)</h4>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Executive Summary -->
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white fw-bold py-3 border-bottom">
+        <i class="fa-solid fa-align-left me-2 text-primary"></i> Executive Proposal Summary
+    </div>
+    <div class="card-body">
+        <p class="mb-0 text-secondary" style="white-space: pre-wrap;">{{ bid.proposal_summary|default:"No executive proposal summary provided." }}</p>
+    </div>
+</div>
+
+<!-- Technical Responses -->
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white fw-bold py-3 border-bottom d-flex justify-content-between align-items-center">
+        <div><i class="fa-solid fa-microscope me-2 text-info"></i> Technical Compliance Evaluation</div>
+        <span class="badge bg-secondary">{{ technical_responses.count }} Responses</span>
+    </div>
+    <div class="card-body">
+        {% for resp in technical_responses %}
+        <div class="border rounded p-3 mb-3 bg-light">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <div>
+                    <strong class="text-dark">{{ resp.requirement.title }}</strong>
+                    <span class="badge {% if resp.requirement.importance == 'MANDATORY' %}bg-danger{% elif resp.requirement.importance == 'PREFERRED' %}bg-warning text-dark{% else %}bg-secondary{% endif %} ms-2">
+                        {{ resp.requirement.get_importance_display }}
+                    </span>
+                </div>
+                <span class="badge {% if resp.compliance_status == 'COMPLIANT' %}bg-success{% elif resp.compliance_status == 'PARTIAL' %}bg-warning text-dark{% else %}bg-danger{% endif %} fs-6">
+                    {{ resp.get_compliance_status_display }}
+                </span>
+            </div>
+            {% if resp.requirement.description %}
+                <p class="text-muted small mb-2">{{ resp.requirement.description }}</p>
+            {% endif %}
+            <div class="bg-white p-2 rounded border small">
+                <strong>Vendor Response:</strong>
+                <p class="mb-0 mt-1" style="white-space: pre-wrap;">{{ resp.response_text|default:"(No response provided)" }}</p>
+            </div>
+        </div>
+        {% empty %}
+        <p class="text-muted fst-italic mb-0">No technical requirements specified.</p>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Commercial Lines -->
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white fw-bold py-3 border-bottom d-flex justify-content-between align-items-center">
+        <div><i class="fa-solid fa-dollar-sign me-2 text-success"></i> Commercial Bill of Quantities</div>
+        {% if not is_sealed %}
+            <span class="text-success fw-bold">Total: ${{ bid.total_bid_amount }}</span>
+        {% endif %}
+    </div>
+    <div class="card-body p-0">
+        {% if is_sealed %}
+            <div class="text-center py-4 text-muted">
+                <i class="fa-solid fa-lock fa-2x mb-2 text-secondary d-block"></i>
+                Commercial lines are sealed until the bidding window closes.
+            </div>
+        {% else %}
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="ps-3">Item Description</th>
+                            <th>Qty</th>
+                            <th>Quoted Unit Price</th>
+                            <th>Quoted Total</th>
+                            <th>Currency</th>
+                            <th>Lead Time</th>
+                            <th class="pe-3">Notes</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for line in lines %}
+                    <tr>
+                        <td class="ps-3 fw-semibold">{{ line.item_description }}</td>
+                        <td>{{ line.quantity }}</td>
+                        <td>${{ line.quoted_unit_price }}</td>
+                        <td class="fw-bold text-success">${{ line.quoted_total_price }}</td>
+                        <td>{{ line.currency }}</td>
+                        <td>{% if line.lead_time_days %}{{ line.lead_time_days }} days{% else %}—{% endif %}</td>
+                        <td class="pe-3 small text-muted">{{ line.notes|default:"—" }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="7" class="text-center py-4 text-muted">No commercial lines submitted.</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Supporting Documents -->
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white fw-bold py-3 border-bottom d-flex justify-content-between align-items-center">
+        <div><i class="fa-solid fa-paperclip me-2 text-primary"></i> Supporting Documentation</div>
+        <span class="badge bg-secondary">{{ attachments.count }} Document(s)</span>
+    </div>
+    <div class="card-body p-0">
+        {% if is_sealed %}
+            <div class="text-center py-4 text-muted">
+                <i class="fa-solid fa-lock fa-2x mb-2 text-secondary d-block"></i>
+                Attachments are sealed until the bidding window closes.
+            </div>
+        {% else %}
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-3">Document Title</th>
+                        <th>Type</th>
+                        <th>Size</th>
+                        <th>Uploaded By</th>
+                        <th class="pe-3 text-end">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for att in attachments %}
+                <tr>
+                    <td class="ps-3">
+                        <strong class="text-dark">{{ att.title }}</strong>
+                        <div class="small text-muted">{{ att.original_filename }}</div>
+                    </td>
+                    <td><span class="badge bg-light text-dark border">{{ att.get_doc_type_display }}</span></td>
+                    <td class="small">{{ att.file_size|filesizeformat }}</td>
+                    <td class="small text-muted">{{ att.uploaded_by.email|default:"Vendor User" }}</td>
+                    <td class="pe-3 text-end">
+                        <a href="{% url 'sourcing:bid-download-attachment' att.id %}" class="btn btn-sm btn-outline-primary">
+                            <i class="fa-solid fa-download me-1"></i> Download
+                        </a>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="5" class="text-center py-4 text-muted">No attachments submitted.</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Version History -->
+<div class="card shadow-sm border-0 mb-4">
+    <div class="card-header bg-white fw-bold py-3 border-bottom d-flex justify-content-between align-items-center">
+        <div><i class="fa-solid fa-clock-rotate-left me-2 text-info"></i> Immutable Version Audit Trail</div>
+        <span class="badge bg-secondary">{{ versions.count }} Versions</span>
+    </div>
+    <div class="card-body p-0">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th class="ps-3">Version</th>
+                    <th>Status</th>
+                    <th>Total Bid Quote</th>
+                    <th>Timestamp</th>
+                    <th>Change Justification</th>
+                    <th class="pe-3 text-end">Snapshot</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for v in versions %}
+            <tr>
+                <td class="ps-3">
+                    <span class="badge {% if forloop.first %}bg-primary{% else %}bg-secondary{% endif %} fs-6">v{{ v.version_number }}</span>
+                </td>
+                <td><span class="badge bg-light text-dark border">{{ v.get_status_display }}</span></td>
+                <td>
+                    {% if is_sealed %}
+                        <span class="text-muted small"><i class="fa-solid fa-lock me-1"></i> Sealed</span>
+                    {% else %}
+                        <strong class="text-success">${{ v.total_bid_amount }}</strong>
+                    {% endif %}
+                </td>
+                <td class="small">{{ v.submitted_at|date:"d M Y H:i:s e" }}</td>
+                <td class="small text-muted">{{ v.change_summary|default:"Initial submission" }}</td>
+                <td class="pe-3 text-end">
+                    {% if not is_sealed %}
+                    <a href="{% url 'sourcing:bid-version-detail' bid.id v.version_number %}" class="btn btn-sm btn-outline-info">
+                        <i class="fa-solid fa-eye me-1"></i> View Snapshot
+                    </a>
+                    {% else %}
+                    <span class="badge bg-light text-secondary border">Locked</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="6" class="text-center py-4 text-muted">No versions recorded.</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,142 @@
+{% extends 'base.html' %}
+
+{% block title %}Procurement Executive Dashboard — ProcureSphere 360 ERP{% endblock %}
+
+{% block content %}
+<!-- Procurement Executive Banner -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="glass-card-dark p-4 position-relative overflow-hidden">
+            <div class="row align-items-center">
+                <div class="col-lg-8">
+                    <div class="d-flex align-items-center mb-2">
+                        <span class="badge bg-primary text-white rounded-pill fw-bold px-3 py-1 me-2">PROCUREMENT EXECUTIVE</span>
+                        <span class="text-white-50 small"><i class="fa-solid fa-user-tie me-1"></i> {{ user.email }} &bull; Sourcing, Vendor & Award Desk</span>
+                    </div>
+                    <h1 class="fw-bold text-white mb-2 display-6">Sourcing & Procurement Workspace</h1>
+                    <p class="text-white-50 mb-0">Manage RFQ/RFP sourcing events, monitor sealed vendor bid submissions, oversee vendor performance, and issue purchase orders.</p>
+                </div>
+                <div class="col-lg-4 text-lg-end mt-3 mt-lg-0">
+                    <a href="/sourcing/create/" class="btn btn-primary btn-lg rounded-pill fw-bold px-4 shadow-sm me-2">
+                        <i class="fa-solid fa-plus-circle me-1"></i> New Sourcing Event
+                    </a>
+                    <a href="/sourcing/" class="btn btn-light btn-lg rounded-pill fw-bold px-4 shadow-sm">
+                        <i class="fa-solid fa-list me-1"></i> All Events
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Stat Cards -->
+<div class="row g-4 mb-4">
+    <div class="col-md-3">
+        <div class="stat-card hover-elevate shadow-sm h-100 border-start border-primary border-4">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <span class="text-muted small fw-semibold">OPEN SOURCING EVENTS</span>
+                <i class="fa-solid fa-gavel text-primary fs-4"></i>
+            </div>
+            <div class="metric-value text-navy">{{ metrics.open_sourcing|default:0 }}</div>
+            <div class="text-muted small mt-1">Active RFQs/RFPs in bid window</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card hover-elevate shadow-sm h-100 border-start border-success border-4">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <span class="text-muted small fw-semibold">ACTIVE VENDORS</span>
+                <i class="fa-solid fa-building-user text-success fs-4"></i>
+            </div>
+            <div class="metric-value text-success">{{ metrics.active_vendors|default:0 }}</div>
+            <div class="text-muted small mt-1">Qualified & approved suppliers</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card hover-elevate shadow-sm h-100 border-start border-info border-4">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <span class="text-muted small fw-semibold">TOTAL PURCHASE ORDERS</span>
+                <i class="fa-solid fa-cart-shopping text-info fs-4"></i>
+            </div>
+            <div class="metric-value text-navy">{{ metrics.total_pos|default:0 }}</div>
+            <div class="text-muted small mt-1">Total procurement commitments</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card hover-elevate shadow-sm h-100 border-start border-warning border-4">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+                <span class="text-muted small fw-semibold">AVG SUPPLIER SCORE</span>
+                <i class="fa-solid fa-award text-warning fs-4"></i>
+            </div>
+            <div class="metric-value text-warning">{{ metrics.avg_scorecard|default:"0.0" }} / 100</div>
+            <div class="text-muted small mt-1">Composite vendor performance</div>
+        </div>
+    </div>
+</div>
+
+<!-- Active Sourcing Events Table -->
+<div class="glass-card p-4 shadow-sm">
+    <div class="d-flex align-items-center justify-content-between mb-3">
+        <h5 class="fw-bold text-dark mb-0"><i class="fa-solid fa-gavel text-primary me-2"></i> Active Sourcing Events & Bid Tracking</h5>
+        <a href="/sourcing/" class="btn btn-outline-primary btn-sm rounded-pill px-3">View All Events</a>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr class="small text-uppercase text-muted">
+                    <th class="ps-4">Event Code & Title</th>
+                    <th>Type</th>
+                    <th>Bid Deadline</th>
+                    <th>Status</th>
+                    <th class="text-end pe-4">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for event in active_events %}
+                    <tr>
+                        <td class="ps-4">
+                            <div class="fw-bold text-dark"><code>{{ event.event_number }}</code></div>
+                            <div class="text-muted small">{{ event.title }}</div>
+                        </td>
+                        <td>
+                            <span class="badge bg-light text-dark border">{{ event.event_type }}</span>
+                        </td>
+                        <td class="text-muted small">
+                            <i class="fa-solid fa-calendar-day me-1 text-secondary"></i>
+                            {{ event.bid_submission_deadline|date:"M d, Y H:i" }}
+                        </td>
+                        <td>
+                            {% if event.status == 'BID_WINDOW' %}
+                                <span class="badge badge-status badge-status-approved"><i class="fa-solid fa-door-open me-1"></i> BID WINDOW</span>
+                            {% elif event.status == 'PUBLISHED' %}
+                                <span class="badge badge-status badge-status-pending"><i class="fa-solid fa-bullhorn me-1"></i> PUBLISHED</span>
+                            {% elif event.status == 'CLOSED' %}
+                                <span class="badge badge-status badge-status-suspended"><i class="fa-solid fa-lock me-1"></i> CLOSED</span>
+                            {% else %}
+                                <span class="badge badge-status badge-status-pending">{{ event.status }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-end pe-4">
+                            <a href="/sourcing/{{ event.id }}/" class="btn btn-outline-primary btn-sm rounded-pill px-3 me-1">
+                                Workspace <i class="fa-solid fa-arrow-right ms-1"></i>
+                            </a>
+                            <a href="/sourcing/{{ event.id }}/submissions/" class="btn btn-outline-info btn-sm rounded-pill px-3">
+                                <i class="fa-solid fa-box-archive me-1"></i> Bids
+                            </a>
+                        </td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="5" class="text-center py-5 text-muted">
+                            <i class="fa-solid fa-gavel fa-3x mb-3 text-secondary"></i>
+                            <div>No active sourcing events currently open.</div>
+                            <a href="/sourcing/create/" class="btn btn-sm btn-primary rounded-pill mt-3 px-3">
+                                <i class="fa-solid fa-plus me-1"></i> Create Sourcing Event
+                            </a>
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

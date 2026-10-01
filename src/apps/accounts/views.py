@@ -41,3 +41,9 @@ def portal_logout_view(request):
     logout(request)
     messages.info(request, "You have been logged out successfully.")
     return redirect("/login/")
+
+
+# Aliases for backward/forward compatibility
+login_page_view = portal_login_view
+logout_page_view = portal_logout_view
+
