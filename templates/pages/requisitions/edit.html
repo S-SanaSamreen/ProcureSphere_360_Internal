@@ -217,13 +217,16 @@
                 <p class="text-muted mb-3">
                     Your calculated total amount of <strong class="text-danger fs-5" id="modal_total_amt">$0.00</strong> exceeds the available budget of <strong class="text-success fs-5" id="modal_available_amt">$0.00</strong> for <strong id="modal_cc_code">Cost Center</strong>.
                 </p>
-                <div class="alert alert-warning small border-0 mb-0">
-                    <i class="fa-solid fa-info-circle me-1"></i> Draft requisitions cannot be saved when budget is exceeded. Please reduce quantity or unit prices before saving.
+                <div class="alert alert-warning small border-0 mb-0 text-start">
+                    <i class="fa-solid fa-info-circle me-1"></i> If you proceed, this requisition will be routed for <strong>Budget Exception Review</strong> by the Finance team when submitted.
                 </div>
             </div>
             <div class="modal-footer border-top-0 p-4 justify-content-center">
                 <button type="button" class="btn btn-secondary rounded-pill px-4 fw-bold" data-bs-dismiss="modal">
                     <i class="fa-solid fa-pen me-2"></i>Adjust Quantities / Prices
+                </button>
+                <button type="button" class="btn btn-warning rounded-pill px-4 fw-bold text-dark" onclick="submitOverBudget()">
+                    <i class="fa-solid fa-check-double me-2"></i>Proceed Anyway
                 </button>
             </div>
         </div>
@@ -292,7 +295,11 @@
         }
     }
 
+    let allowOverBudget = false;
+
     document.getElementById('pr_edit_form').addEventListener('submit', function(e) {
+        if (allowOverBudget) return; // bypass check if user confirmed
+
         const total = calculateTotalAmount();
         const select = document.getElementById('cost_center_select');
         const selectedOpt = select ? select.options[select.selectedIndex] : null;
@@ -312,6 +319,11 @@
             }
         }
     });
+
+    function submitOverBudget() {
+        allowOverBudget = true;
+        document.getElementById('pr_edit_form').submit();
+    }
 
     document.addEventListener('DOMContentLoaded', function() {
         updateBudgetNotice();

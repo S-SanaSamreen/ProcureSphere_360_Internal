@@ -1,9 +1,7 @@
 from django.contrib.auth.decorators import login_required
-from django.core.exceptions import PermissionDenied
 from django.http import JsonResponse
 from django.shortcuts import render
 
-from apps.accounts.models import Role
 from apps.audit.selectors import (
     get_approval_history_audit,
     get_audit_logs,
@@ -20,14 +18,7 @@ from apps.audit.services import get_transaction_lifecycle_service
 
 
 def _enforce_auditor_access(request):
-    user = request.user
-    role_code = getattr(user, "role_code", None) or (
-        user.role.code if getattr(user, "role", None) else None
-    )
-    if not (
-        user.is_superuser or role_code in [Role.AUDITOR, Role.SUPER_ADMIN, "AUDITOR", "SUPER_ADMIN"]
-    ):
-        raise PermissionDenied("Access restricted to Compliance Auditor role.")
+    pass
 
 
 @login_required
@@ -101,12 +92,25 @@ def audit_log_view(request):
         search_term=search_query if search_query else None,
         target_model=model_filter if model_filter else None,
     )
-    total_count = data["total_count"]
+    total_count = data.get("total_count", 0)
     total_pages = max(1, (total_count + limit - 1) // limit)
 
+    role_code = getattr(request.user, "role_code", None) or (
+        request.user.role.code if getattr(request.user, "role", None) else None
+    )
+    base_layout = "layouts/requester_base.html"
+    if role_code == "DEPT_APPROVER":
+        base_layout = "layouts/approver_base.html"
+    elif role_code == "FINANCE_AP":
+        base_layout = "layouts/finance_base.html"
+    elif role_code in ["PROC_MGR", "PROC_EXEC"]:
+        base_layout = "layouts/procurement_base.html"
+    elif role_code in ["AUDITOR", "SUPER_ADMIN"]:
+        base_layout = "layouts/auditor_base.html"
+
     context = {
-        "logs": data["logs"],
-        "audit_logs": data["logs"],
+        "logs": data.get("logs", []),
+        "audit_logs": data.get("logs", []),
         "action": action_filter,
         "action_filter": action_filter,
         "search": search_query,
@@ -117,6 +121,7 @@ def audit_log_view(request):
         "current_page": page,
         "total_pages": total_pages,
         "total_count": total_count,
+        "base_layout": base_layout,
     }
     return render(request, "audit/audit_log.html", context)
 

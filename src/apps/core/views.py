@@ -267,7 +267,7 @@ def home_view(request):  # noqa: C901
         available_budget = sum((budget.available_amount for budget in budget_qs), Decimal("0.00"))
         context = {
             "user_department": user_dept,
-            "pending_prs": pending_prs[:10],
+            "pending_prs": pending_prs[:3],
             "metrics": {
                 "pending_count": pending_prs.count(),
                 "total_prs_count": dept_prs.count(),

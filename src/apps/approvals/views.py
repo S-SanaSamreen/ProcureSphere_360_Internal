@@ -131,3 +131,36 @@ def approvals_inbox_view(request):
 
 # Alias for URL route compatibility
 inbox_view = approvals_inbox_view
+
+
+@login_required(login_url="/login/")
+def my_approvals_view(request):
+    """
+    Dedicated view for 'My Approvals' tracking showing how many the user approved vs rejected.
+    """
+    user = request.user
+    from apps.approvals.models import ApprovalAction
+
+    actions = ApprovalAction.objects.filter(
+        actor=user, action__in=["APPROVED", "REJECTED"]
+    ).order_by("-created_at")
+    approved_count = actions.filter(action="APPROVED").count()
+    rejected_count = actions.filter(action="REJECTED").count()
+
+    role_code = getattr(user, "role_code", None) or (
+        user.role.code if hasattr(user, "role") and user.role else Role.SUPER_ADMIN
+    )
+    if role_code == Role.LEGAL_MGR or role_code == "LEGAL_MGR":
+        base_layout = "layouts/legal_base.html"
+    elif role_code in [Role.DEPT_APPROVER, Role.PROC_MGR]:
+        base_layout = "layouts/approver_base.html"
+    else:
+        base_layout = "layouts/requester_base.html"
+
+    context = {
+        "actions": actions,
+        "approved_count": approved_count,
+        "rejected_count": rejected_count,
+        "base_layout": base_layout,
+    }
+    return render(request, "pages/approvals/my_approvals.html", context)
