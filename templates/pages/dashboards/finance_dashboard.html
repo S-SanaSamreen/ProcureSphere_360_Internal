@@ -104,6 +104,7 @@
                                 <th class="ps-3 rounded-start">Exception Type</th>
                                 <th>Invoice Ref</th>
                                 <th>Supplier</th>
+                                <th>Department / Cost Center</th>
                                 <th>Variance</th>
                                 <th>Date Flagged</th>
                                 <th class="text-end pe-3 rounded-end">Action</th>
@@ -119,6 +120,14 @@
                                     <div class="fw-bold text-dark">{{ exception.invoice.invoice_number }}</div>
                                 </td>
                                 <td>{{ exception.invoice.vendor.legal_name }}</td>
+                                <td>
+                                    {% if exception.invoice.po.requisition.department %}
+                                        <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle rounded-pill px-2 py-1 me-1"><i class="fa-solid fa-building me-1"></i>{{ exception.invoice.po.requisition.department.name }}</span>
+                                    {% endif %}
+                                    {% if exception.invoice.po.requisition.cost_center %}
+                                        <span class="badge bg-secondary-subtle text-secondary-emphasis border border-secondary-subtle rounded-pill px-2 py-1"><i class="fa-solid fa-wallet me-1"></i>{{ exception.invoice.po.requisition.cost_center.code }}</span>
+                                    {% endif %}
+                                </td>
                                 <td>
                                     {% if exception.variance_amount > 0 %}
                                         <span class="text-danger fw-bold">+${{ exception.variance_amount|floatformat:2 }}</span>

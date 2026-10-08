@@ -122,27 +122,40 @@ def home_view(request):  # noqa: C901
         from apps.budgets.models import SpendLedger
         from apps.invoices.models import MatchException, SupplierInvoice
 
-        open_match_exceptions = MatchException.objects.filter(
-            status=MatchException.STATUS_OPEN
-        ).order_by("-created_at")
-        open_budget_exceptions = PurchaseRequisition.objects.filter(
-            status=PurchaseRequisition.STATUS_BUDGET_REVIEW
-        ).order_by("-updated_at")
+        open_match_exceptions = (
+            MatchException.objects.filter(status=MatchException.STATUS_OPEN)
+            .select_related(
+                "invoice__vendor",
+                "invoice__po__requisition__department",
+                "invoice__po__requisition__cost_center",
+            )
+            .order_by("-created_at")
+        )
+
+        open_budget_exceptions = (
+            PurchaseRequisition.objects.filter(status=PurchaseRequisition.STATUS_BUDGET_REVIEW)
+            .select_related("department", "cost_center", "requester")
+            .order_by("-updated_at")
+        )
+
         ready_for_payment = SupplierInvoice.objects.filter(
             status=SupplierInvoice.STATUS_READY_FOR_PAYMENT
         ).count()
+
         committed_spend = (
             SpendLedger.objects.filter(entry_type=SpendLedger.ENTRY_COMMITMENT).aggregate(
                 total=Sum("amount")
             )["total"]
             or 0
         )
+
         actual_spend = (
             SpendLedger.objects.filter(entry_type=SpendLedger.ENTRY_ACTUAL).aggregate(
                 total=Sum("amount")
             )["total"]
             or 0
         )
+
         context = {
             "metrics": {
                 "pending_match_exceptions": open_match_exceptions.count(),

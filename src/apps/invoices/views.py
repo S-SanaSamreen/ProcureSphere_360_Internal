@@ -12,13 +12,42 @@ from apps.invoices.services import (
     run_3_way_match_service,
 )
 from apps.orders.models import PurchaseOrder
+from apps.organization.models import CostCenter, Department
 from apps.vendors.models import Vendor
 
 
 @login_required(login_url="/login/")
 def list_view(request):
-    items = SupplierInvoice.objects.all().order_by("-created_at")
-    return render(request, "pages/invoices/list.html", {"items": items})
+    dept_id = request.GET.get("department", "").strip()
+    cc_id = request.GET.get("cost_center", "").strip()
+
+    items = (
+        SupplierInvoice.objects.select_related(
+            "vendor", "po__requisition__department", "po__requisition__cost_center"
+        )
+        .all()
+        .order_by("-created_at")
+    )
+
+    if dept_id:
+        items = items.filter(po__requisition__department_id=dept_id)
+    if cc_id:
+        items = items.filter(po__requisition__cost_center_id=cc_id)
+
+    departments = Department.objects.all().order_by("name")
+    cost_centers = CostCenter.objects.select_related("department").all().order_by("code")
+
+    return render(
+        request,
+        "pages/invoices/list.html",
+        {
+            "items": items,
+            "departments": departments,
+            "cost_centers": cost_centers,
+            "selected_dept": dept_id,
+            "selected_cc": cc_id,
+        },
+    )
 
 
 @login_required(login_url="/login/")
@@ -48,10 +77,38 @@ def invoice_detail_view(request, invoice_id):
 
 @login_required(login_url="/login/")
 def exceptions_list_view(request):
-    exceptions = MatchException.objects.filter(status=MatchException.STATUS_OPEN).order_by(
-        "-created_at"
+    dept_id = request.GET.get("department", "").strip()
+    cc_id = request.GET.get("cost_center", "").strip()
+
+    exceptions = (
+        MatchException.objects.filter(status=MatchException.STATUS_OPEN)
+        .select_related(
+            "invoice__vendor",
+            "invoice__po__requisition__department",
+            "invoice__po__requisition__cost_center",
+        )
+        .order_by("-created_at")
     )
-    return render(request, "pages/invoices/exceptions_list.html", {"exceptions": exceptions})
+
+    if dept_id:
+        exceptions = exceptions.filter(invoice__po__requisition__department_id=dept_id)
+    if cc_id:
+        exceptions = exceptions.filter(invoice__po__requisition__cost_center_id=cc_id)
+
+    departments = Department.objects.all().order_by("name")
+    cost_centers = CostCenter.objects.select_related("department").all().order_by("code")
+
+    return render(
+        request,
+        "pages/invoices/exceptions_list.html",
+        {
+            "exceptions": exceptions,
+            "departments": departments,
+            "cost_centers": cost_centers,
+            "selected_dept": dept_id,
+            "selected_cc": cc_id,
+        },
+    )
 
 
 @login_required(login_url="/login/")
@@ -97,10 +154,34 @@ def resolve_exception_view(request, exception_id):
 
 @login_required(login_url="/login/")
 def ready_for_payment_view(request):
-    invoices = SupplierInvoice.objects.filter(
-        status=SupplierInvoice.STATUS_READY_FOR_PAYMENT
-    ).order_by("-created_at")
-    return render(request, "pages/invoices/ready_list.html", {"invoices": invoices})
+    dept_id = request.GET.get("department", "").strip()
+    cc_id = request.GET.get("cost_center", "").strip()
+
+    invoices = (
+        SupplierInvoice.objects.filter(status=SupplierInvoice.STATUS_READY_FOR_PAYMENT)
+        .select_related("vendor", "po__requisition__department", "po__requisition__cost_center")
+        .order_by("-created_at")
+    )
+
+    if dept_id:
+        invoices = invoices.filter(po__requisition__department_id=dept_id)
+    if cc_id:
+        invoices = invoices.filter(po__requisition__cost_center_id=cc_id)
+
+    departments = Department.objects.all().order_by("name")
+    cost_centers = CostCenter.objects.select_related("department").all().order_by("code")
+
+    return render(
+        request,
+        "pages/invoices/ready_list.html",
+        {
+            "invoices": invoices,
+            "departments": departments,
+            "cost_centers": cost_centers,
+            "selected_dept": dept_id,
+            "selected_cc": cc_id,
+        },
+    )
 
 
 @login_required(login_url="/login/")
