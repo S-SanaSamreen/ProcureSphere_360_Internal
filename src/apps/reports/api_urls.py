@@ -110,7 +110,9 @@ def dashboard_summary_view(request):
     summary = {
         "total_prs": len(pr_data),
         "total_pos": len(po_data),
-        "total_spend": sum(float(item.get("actual_spend") or item.get("actual") or 0.0) for item in spend_data),
+        "total_spend": sum(
+            float(item.get("actual_spend") or item.get("actual") or 0.0) for item in spend_data
+        ),
         "pending_exceptions": len([item for item in inv_data if item["status"] == "OPEN"]),
         "expiring_contracts": len(
             [item for item in contract_data if 0 <= item["days_to_expiry"] <= 60]

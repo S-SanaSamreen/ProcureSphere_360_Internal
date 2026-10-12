@@ -39,10 +39,11 @@ class CanManageGoodsReceipt(BasePermission):
         if request.method in SAFE_METHODS:
             return True
 
-        return (
-            request.user.is_superuser
-            or request.user.role_code in [Role.SUPER_ADMIN, Role.STORES_RECEIVER, Role.PROC_MGR]
-        )
+        return request.user.is_superuser or request.user.role_code in [
+            Role.SUPER_ADMIN,
+            Role.STORES_RECEIVER,
+            Role.PROC_MGR,
+        ]
 
 
 class ReceiptLineSerializer(serializers.ModelSerializer):
@@ -70,7 +71,11 @@ class GoodsReceiptSerializer(serializers.ModelSerializer):
             PurchaseOrder.STATUS_PARTIAL_RECEIPT,
         ]:
             raise serializers.ValidationError(
-                {"po": [f"Cannot record goods receipt against PO in status '{po.status}'. Must be ISSUED or ACKNOWLEDGED."]}
+                {
+                    "po": [
+                        f"Cannot record goods receipt against PO in status '{po.status}'. Must be ISSUED or ACKNOWLEDGED."
+                    ]
+                }
             )
 
         if self.instance is None:
@@ -115,6 +120,7 @@ class GoodsReceiptSerializer(serializers.ModelSerializer):
                 po_line.save(update_fields=["quantity_received", "updated_at"])
 
         from .services import _update_po_completion_status
+
         _update_po_completion_status(po)
         return receipt
 
@@ -190,7 +196,12 @@ class GoodsReceiptViewSet(viewsets.ModelViewSet):
         except ValidationError as e:
             msg = e.messages if hasattr(e, "messages") else [str(e)]
             return Response(
-                {"error": {"code": "VALIDATION_ERROR", "message": msg[0] if isinstance(msg, list) else str(e)}},
+                {
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": msg[0] if isinstance(msg, list) else str(e),
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except Exception as e:
@@ -217,7 +228,12 @@ class GoodsReceiptViewSet(viewsets.ModelViewSet):
         except ValidationError as e:
             msg = e.messages if hasattr(e, "messages") else [str(e)]
             return Response(
-                {"error": {"code": "VALIDATION_ERROR", "message": msg[0] if isinstance(msg, list) else str(e)}},
+                {
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": msg[0] if isinstance(msg, list) else str(e),
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except Exception as e:
@@ -242,4 +258,3 @@ router = DefaultRouter()
 router.register(r"", GoodsReceiptViewSet, basename="goods-receipt")
 
 urlpatterns = router.urls
-

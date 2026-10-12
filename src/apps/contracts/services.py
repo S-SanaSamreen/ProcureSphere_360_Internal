@@ -511,8 +511,11 @@ def upload_contract_document_service(
         raise ValidationError("File size exceeds 10MB upload limit.")
 
     from django.core.files.base import ContentFile
+
     if isinstance(file, str):
-        file = ContentFile(b"document payload", name=file_name.split()[0] if file_name else "document.pdf")
+        file = ContentFile(
+            b"document payload", name=file_name.split()[0] if file_name else "document.pdf"
+        )
 
     document = ContractDocument.objects.create(
         contract=contract,

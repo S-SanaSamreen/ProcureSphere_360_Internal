@@ -89,7 +89,6 @@ class SessionLoginView(views.APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-
         if not user.is_active:
             return Response(
                 {"error": {"code": "USER_INACTIVE", "message": "Account is inactive."}},
@@ -202,4 +201,3 @@ class RoleViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Gen
 
     def get_queryset(self):
         return get_all_roles()
-

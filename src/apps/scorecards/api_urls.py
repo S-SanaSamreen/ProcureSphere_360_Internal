@@ -106,7 +106,10 @@ class VendorScorecardViewSet(viewsets.ModelViewSet):
         qs = self.queryset
 
         # Vendor user scoping - vendors only see their own scorecards
-        if getattr(user, "is_vendor", False) or getattr(user, "role_code", None) == Role.VENDOR_USER:
+        if (
+            getattr(user, "is_vendor", False)
+            or getattr(user, "role_code", None) == Role.VENDOR_USER
+        ):
             if getattr(user, "vendor_id", None):
                 return qs.filter(vendor_id=user.vendor_id)
             return qs.none()
@@ -189,7 +192,9 @@ class VendorScorecardViewSet(viewsets.ModelViewSet):
         attention_required = qs.filter(composite_score__lt=Decimal("70.00")).count()
 
         period_distribution = dict(
-            qs.values_list("evaluation_period").annotate(count=Count("id")).order_by("-evaluation_period")[:6]
+            qs.values_list("evaluation_period")
+            .annotate(count=Count("id"))
+            .order_by("-evaluation_period")[:6]
         )
 
         return Response(

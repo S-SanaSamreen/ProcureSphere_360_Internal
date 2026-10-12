@@ -283,7 +283,6 @@ class VendorSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 
-
 class VendorViewSet(viewsets.ModelViewSet):
     queryset = (
         Vendor.objects.select_related("category")
@@ -334,7 +333,6 @@ class VendorViewSet(viewsets.ModelViewSet):
         if not filterset.is_valid():
             raise serializers.ValidationError(filterset.errors)
         qs = filterset.qs
-
 
         # Search query
         search_query = self.request.query_params.get("search", "").strip()

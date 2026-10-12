@@ -54,10 +54,11 @@ class CanManagePurchaseOrder(BasePermission):
         if request.method in SAFE_METHODS:
             return True
 
-        return (
-            request.user.is_superuser
-            or request.user.role_code in [Role.SUPER_ADMIN, Role.PROC_MGR, Role.PROC_EXEC]
-        )
+        return request.user.is_superuser or request.user.role_code in [
+            Role.SUPER_ADMIN,
+            Role.PROC_MGR,
+            Role.PROC_EXEC,
+        ]
 
 
 class POLineSerializer(serializers.ModelSerializer):
@@ -365,7 +366,11 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             valid_statuses = [choice[0] for choice in PurchaseOrder.STATUS_CHOICES]
             if status_param not in valid_statuses:
                 raise serializers.ValidationError(
-                    {"status": [f"Invalid status '{status_param}'. Valid choices are: {', '.join(valid_statuses)}"]}
+                    {
+                        "status": [
+                            f"Invalid status '{status_param}'. Valid choices are: {', '.join(valid_statuses)}"
+                        ]
+                    }
                 )
             qs = qs.filter(status=status_param)
 
@@ -503,7 +508,12 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
         if not reason:
             return Response(
-                {"error": {"code": "VALIDATION_ERROR", "message": "Cancellation justification reason is mandatory."}},
+                {
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "Cancellation justification reason is mandatory.",
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -522,7 +532,12 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         except ValidationError as e:
             msg = e.messages if hasattr(e, "messages") else [str(e)]
             return Response(
-                {"error": {"code": "VALIDATION_ERROR", "message": msg[0] if isinstance(msg, list) else str(e)}},
+                {
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": msg[0] if isinstance(msg, list) else str(e),
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except Exception as e:
@@ -543,7 +558,12 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         except ValidationError as e:
             msg = e.messages if hasattr(e, "messages") else [str(e)]
             return Response(
-                {"error": {"code": "VALIDATION_ERROR", "message": msg[0] if isinstance(msg, list) else str(e)}},
+                {
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": msg[0] if isinstance(msg, list) else str(e),
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -553,7 +573,12 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         reason = str(request.data.get("reason", "")).strip()
         if not reason:
             return Response(
-                {"error": {"code": "VALIDATION_ERROR", "message": "Amendment justification reason is required."}},
+                {
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "Amendment justification reason is required.",
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -582,7 +607,12 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         except ValidationError as e:
             msg = e.messages if hasattr(e, "messages") else [str(e)]
             return Response(
-                {"error": {"code": "VALIDATION_ERROR", "message": msg[0] if isinstance(msg, list) else str(e)}},
+                {
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": msg[0] if isinstance(msg, list) else str(e),
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -591,4 +621,3 @@ router = DefaultRouter()
 router.register(r"", PurchaseOrderViewSet, basename="purchase-order")
 
 urlpatterns = router.urls
-

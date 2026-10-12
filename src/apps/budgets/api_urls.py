@@ -36,10 +36,10 @@ class CanManageBudget(BasePermission):
         if getattr(request.user, "role_code", None) in [Role.AUDITOR, Role.REQUESTER]:
             return False
 
-        return (
-            request.user.is_superuser
-            or request.user.role_code in [Role.SUPER_ADMIN, Role.FINANCE_AP]
-        )
+        return request.user.is_superuser or request.user.role_code in [
+            Role.SUPER_ADMIN,
+            Role.FINANCE_AP,
+        ]
 
 
 class BudgetSerializer(serializers.ModelSerializer):
@@ -79,4 +79,3 @@ router.register(r"ledger", SpendLedgerViewSet, basename="spend-ledger")
 router.register(r"", BudgetViewSet, basename="budget")
 
 urlpatterns = router.urls
-

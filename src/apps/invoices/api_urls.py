@@ -45,10 +45,10 @@ class CanManageSupplierInvoice(BasePermission):
         if view.action in ["pay_invoice", "pay"]:
             if is_vendor or getattr(request.user, "role_code", None) == Role.AUDITOR:
                 return False
-            return (
-                request.user.is_superuser
-                or request.user.role_code in [Role.SUPER_ADMIN, Role.FINANCE_AP]
-            )
+            return request.user.is_superuser or request.user.role_code in [
+                Role.SUPER_ADMIN,
+                Role.FINANCE_AP,
+            ]
 
         if is_vendor:
             return request.method in SAFE_METHODS
@@ -56,10 +56,12 @@ class CanManageSupplierInvoice(BasePermission):
         if request.method in SAFE_METHODS:
             return True
 
-        return (
-            request.user.is_superuser
-            or request.user.role_code in [Role.SUPER_ADMIN, Role.FINANCE_AP, Role.PROC_MGR, Role.PROC_EXEC]
-        )
+        return request.user.is_superuser or request.user.role_code in [
+            Role.SUPER_ADMIN,
+            Role.FINANCE_AP,
+            Role.PROC_MGR,
+            Role.PROC_EXEC,
+        ]
 
 
 class InvoiceLineSerializer(serializers.ModelSerializer):
@@ -93,13 +95,21 @@ class SupplierInvoiceSerializer(serializers.ModelSerializer):
                 qs = qs.exclude(pk=self.instance.pk)
             if qs.exists():
                 raise serializers.ValidationError(
-                    {"invoice_number": [f"Duplicate invoice detected: Invoice '{invoice_number}' already exists for vendor '{vendor.legal_name}'."]}
+                    {
+                        "invoice_number": [
+                            f"Duplicate invoice detected: Invoice '{invoice_number}' already exists for vendor '{vendor.legal_name}'."
+                        ]
+                    }
                 )
 
         po = attrs.get("po", getattr(self.instance, "po", None))
         if po and vendor and po.vendor_id != vendor.id:
             raise serializers.ValidationError(
-                {"po": [f"Purchase Order {po.po_number} does not belong to vendor '{vendor.legal_name}'."]}
+                {
+                    "po": [
+                        f"Purchase Order {po.po_number} does not belong to vendor '{vendor.legal_name}'."
+                    ]
+                }
             )
 
         subtotal = attrs.get("subtotal")
@@ -107,14 +117,20 @@ class SupplierInvoiceSerializer(serializers.ModelSerializer):
         if subtotal is not None and subtotal < Decimal("0.00"):
             raise serializers.ValidationError({"subtotal": ["Subtotal cannot be negative."]})
         if total_amount is not None and total_amount < Decimal("0.00"):
-            raise serializers.ValidationError({"total_amount": ["Total amount cannot be negative."]})
+            raise serializers.ValidationError(
+                {"total_amount": ["Total amount cannot be negative."]}
+            )
         if subtotal is not None and total_amount is not None and total_amount < subtotal:
-            raise serializers.ValidationError({"total_amount": ["Total amount must be greater than or equal to subtotal."]})
+            raise serializers.ValidationError(
+                {"total_amount": ["Total amount must be greater than or equal to subtotal."]}
+            )
 
         invoice_date = attrs.get("invoice_date", getattr(self.instance, "invoice_date", None))
         due_date = attrs.get("due_date", getattr(self.instance, "due_date", None))
         if invoice_date and due_date and due_date < invoice_date:
-            raise serializers.ValidationError({"due_date": ["Due date cannot be before invoice date."]})
+            raise serializers.ValidationError(
+                {"due_date": ["Due date cannot be before invoice date."]}
+            )
 
         return attrs
 
@@ -142,7 +158,11 @@ class SupplierInvoiceViewSet(viewsets.ModelViewSet):
             valid_statuses = [choice[0] for choice in SupplierInvoice.STATUS_CHOICES]
             if status_param not in valid_statuses:
                 raise serializers.ValidationError(
-                    {"status": [f"Invalid status '{status_param}'. Valid choices are: {', '.join(valid_statuses)}"]}
+                    {
+                        "status": [
+                            f"Invalid status '{status_param}'. Valid choices are: {', '.join(valid_statuses)}"
+                        ]
+                    }
                 )
             qs = qs.filter(status=status_param)
 
@@ -164,7 +184,12 @@ class SupplierInvoiceViewSet(viewsets.ModelViewSet):
 
         if not vendor_id or not po_id or not invoice_number:
             return Response(
-                {"error": {"code": "VALIDATION_ERROR", "message": "vendor_id, po_id, and invoice_number are required."}},
+                {
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": "vendor_id, po_id, and invoice_number are required.",
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -199,7 +224,12 @@ class SupplierInvoiceViewSet(viewsets.ModelViewSet):
         except ValidationError as e:
             msg = e.messages if hasattr(e, "messages") else [str(e)]
             return Response(
-                {"error": {"code": "VALIDATION_ERROR", "message": msg[0] if isinstance(msg, list) else str(e)}},
+                {
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": msg[0] if isinstance(msg, list) else str(e),
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -207,7 +237,9 @@ class SupplierInvoiceViewSet(viewsets.ModelViewSet):
     def run_match(self, request, pk=None):
         invoice = self.get_object()
         try:
-            updated_invoice, exceptions = run_3_way_match_service(invoice=invoice, user=request.user)
+            updated_invoice, exceptions = run_3_way_match_service(
+                invoice=invoice, user=request.user
+            )
             return Response(
                 {
                     "invoice": SupplierInvoiceSerializer(updated_invoice).data,
@@ -218,7 +250,12 @@ class SupplierInvoiceViewSet(viewsets.ModelViewSet):
         except ValidationError as e:
             msg = e.messages if hasattr(e, "messages") else [str(e)]
             return Response(
-                {"error": {"code": "VALIDATION_ERROR", "message": msg[0] if isinstance(msg, list) else str(e)}},
+                {
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": msg[0] if isinstance(msg, list) else str(e),
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -231,7 +268,12 @@ class SupplierInvoiceViewSet(viewsets.ModelViewSet):
         except ValidationError as e:
             msg = e.messages if hasattr(e, "messages") else [str(e)]
             return Response(
-                {"error": {"code": "VALIDATION_ERROR", "message": msg[0] if isinstance(msg, list) else str(e)}},
+                {
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": msg[0] if isinstance(msg, list) else str(e),
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -257,7 +299,12 @@ class MatchExceptionViewSet(viewsets.ModelViewSet):
         except ValidationError as e:
             msg = e.messages if hasattr(e, "messages") else [str(e)]
             return Response(
-                {"error": {"code": "VALIDATION_ERROR", "message": msg[0] if isinstance(msg, list) else str(e)}},
+                {
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": msg[0] if isinstance(msg, list) else str(e),
+                    }
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -267,4 +314,3 @@ router.register(r"exceptions", MatchExceptionViewSet, basename="match-exception"
 router.register(r"", SupplierInvoiceViewSet, basename="invoice")
 
 urlpatterns = router.urls
-

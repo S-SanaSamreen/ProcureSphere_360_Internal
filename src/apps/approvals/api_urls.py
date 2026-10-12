@@ -24,14 +24,17 @@ class CanManageApprovalPolicy(BasePermission):
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
-        if getattr(request.user, "is_vendor", False) or getattr(request.user, "role_code", None) == Role.VENDOR_USER:
+        if (
+            getattr(request.user, "is_vendor", False)
+            or getattr(request.user, "role_code", None) == Role.VENDOR_USER
+        ):
             return False
         if request.method in SAFE_METHODS:
             return True
-        return (
-            request.user.is_superuser
-            or request.user.role_code in [Role.SUPER_ADMIN, Role.PROC_MGR]
-        )
+        return request.user.is_superuser or request.user.role_code in [
+            Role.SUPER_ADMIN,
+            Role.PROC_MGR,
+        ]
 
 
 class ApprovalPolicySerializer(serializers.ModelSerializer):
@@ -51,7 +54,9 @@ class ApprovalActionSerializer(serializers.ModelSerializer):
 class ApprovalActionFilter(django_filters.FilterSet):
     status = django_filters.CharFilter(field_name="action", lookup_expr="iexact")
     action = django_filters.CharFilter(lookup_expr="iexact")
-    target_model = django_filters.CharFilter(field_name="target_model_name", lookup_expr="icontains")
+    target_model = django_filters.CharFilter(
+        field_name="target_model_name", lookup_expr="icontains"
+    )
 
     class Meta:
         model = ApprovalAction
@@ -154,4 +159,3 @@ router.register(r"policies", ApprovalPolicyViewSet, basename="approval-policy")
 router.register(r"actions", ApprovalActionViewSet, basename="approval-action")
 
 urlpatterns = router.urls
-

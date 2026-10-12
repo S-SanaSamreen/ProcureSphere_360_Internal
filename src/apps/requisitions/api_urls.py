@@ -150,7 +150,9 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
             valid_statuses = [c[0] for c in PurchaseRequisition.STATUS_CHOICES]
             if status_param not in valid_statuses:
                 raise serializers.ValidationError(
-                    {"status": f"Invalid status '{status_param}'. Valid choices: {', '.join(valid_statuses)}"}
+                    {
+                        "status": f"Invalid status '{status_param}'. Valid choices: {', '.join(valid_statuses)}"
+                    }
                 )
             qs = qs.filter(status=status_param)
 

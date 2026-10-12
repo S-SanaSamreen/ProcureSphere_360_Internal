@@ -105,4 +105,3 @@ class CanViewContract(permissions.BasePermission):
             return vendor is not None and obj.vendor_id == vendor.id
 
         return obj.contract_owner_id == request.user.id
-

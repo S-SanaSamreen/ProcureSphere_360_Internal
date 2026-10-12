@@ -93,4 +93,3 @@ class SecurityHeadersMiddleware:
         if "Permissions-Policy" not in response:
             response["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
         return response
-

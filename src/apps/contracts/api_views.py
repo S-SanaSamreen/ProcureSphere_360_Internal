@@ -47,7 +47,11 @@ class ContractViewSet(viewsets.ModelViewSet):
             valid_statuses = [choice[0] for choice in Contract.STATUS_CHOICES]
             if status_param not in valid_statuses:
                 raise serializers.ValidationError(
-                    {"status": [f"Invalid status '{status_param}'. Valid choices are: {', '.join(valid_statuses)}"]}
+                    {
+                        "status": [
+                            f"Invalid status '{status_param}'. Valid choices are: {', '.join(valid_statuses)}"
+                        ]
+                    }
                 )
         search_param = self.request.query_params.get("search", "").strip()
         return get_contracts_qs(

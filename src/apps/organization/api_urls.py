@@ -34,7 +34,10 @@ class IsAdminOrReadOnly(BasePermission):
             or getattr(request.user, "role_code", None) == Role.VENDOR_USER
         ):
             return False
-        if request.user.is_superuser or getattr(request.user, "role_code", None) == Role.SUPER_ADMIN:
+        if (
+            request.user.is_superuser
+            or getattr(request.user, "role_code", None) == Role.SUPER_ADMIN
+        ):
             return True
         return request.method in SAFE_METHODS
 
@@ -55,7 +58,6 @@ class CostCenterViewSet(viewsets.ModelViewSet):
     queryset = CostCenter.objects.all()
     serializer_class = CostCenterSerializer
     permission_classes = [IsAdminOrReadOnly]
-
 
 
 router = DefaultRouter()

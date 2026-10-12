@@ -47,7 +47,6 @@ class IsNotVendorUser(BasePermission):
         )
 
 
-
 class IsRequester(BasePermission):
     def has_permission(self, request, view):
         return bool(

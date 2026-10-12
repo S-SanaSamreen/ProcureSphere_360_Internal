@@ -53,9 +53,7 @@ def custom_exception_handler(exc, context):
         # Derive semantic error code based on exception and status code
         if isinstance(exc, (Http404, NotFound)) or status_code == status.HTTP_404_NOT_FOUND:
             error_code = "NOT_FOUND"
-        elif (
-            isinstance(exc, PermissionDenied) or status_code == status.HTTP_403_FORBIDDEN
-        ):
+        elif isinstance(exc, PermissionDenied) or status_code == status.HTTP_403_FORBIDDEN:
             error_code = "PERMISSION_DENIED"
         elif (
             isinstance(exc, (NotAuthenticated, AuthenticationFailed))
@@ -90,4 +88,3 @@ def custom_exception_handler(exc, context):
         return Response(custom_response_data, status=status_code)
 
     return response
-

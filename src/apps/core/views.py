@@ -408,5 +408,3 @@ def custom_403_view(request, exception=None):
             status=403,
         )
     return render(request, "403.html", status=403)
-
-
