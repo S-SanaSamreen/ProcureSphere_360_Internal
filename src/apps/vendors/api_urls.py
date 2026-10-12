@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 from decimal import Decimal
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Count, Q, Sum
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
@@ -415,12 +416,19 @@ class VendorViewSet(viewsets.ModelViewSet):
         vendor = self.get_object()
         new_status = str(request.data.get("status", "")).upper()
         notes = str(request.data.get("notes", request.data.get("reason", ""))).strip()
-        vendor = set_vendor_status_governance_service(
-            vendor=vendor,
-            actor=request.user,
-            new_status=new_status,
-            notes=notes,
-        )
+        try:
+            vendor = set_vendor_status_governance_service(
+                vendor=vendor,
+                actor=request.user,
+                new_status=new_status,
+                notes=notes,
+            )
+        except DjangoValidationError as exc:
+            msg = exc.messages[0] if hasattr(exc, "messages") and exc.messages else str(exc)
+            return Response(
+                {"error": {"code": "INVALID", "message": msg, "details": {}}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return Response(self.get_serializer(vendor).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"], url_path="allowed-transitions")
