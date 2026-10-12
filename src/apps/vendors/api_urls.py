@@ -273,6 +273,16 @@ class VendorSerializer(serializers.ModelSerializer):
             ),
         }
 
+    def create(self, validated_data):
+        if not validated_data.get("vendor_number"):
+            from django.utils import timezone
+
+            count = Vendor.objects.count() + 1
+            year = timezone.now().strftime("%Y")
+            validated_data["vendor_number"] = f"VND-{year}-{count:05d}"
+        return super().create(validated_data)
+
+
 
 class VendorViewSet(viewsets.ModelViewSet):
     queryset = (
@@ -321,8 +331,10 @@ class VendorViewSet(viewsets.ModelViewSet):
                 return qs.none()
 
         filterset = VendorFilter(self.request.query_params, queryset=qs)
-        if filterset.is_valid():
-            qs = filterset.qs
+        if not filterset.is_valid():
+            raise serializers.ValidationError(filterset.errors)
+        qs = filterset.qs
+
 
         # Search query
         search_query = self.request.query_params.get("search", "").strip()
