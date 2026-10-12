@@ -215,6 +215,7 @@ urlpatterns = router.urls + [
     path("dashboard-summary/", dashboard_summary_view, name="dashboard-summary"),
     path("pr-aging/", pr_aging_report_view, name="report-pr-aging"),
     path("spend-analytics/", spend_analytics_report_view, name="report-spend-analytics"),
+    path("spend/", spend_analytics_report_view, name="report-spend-alias"),
     path("sourcing-cycle/", sourcing_cycle_report_view, name="report-sourcing-cycle"),
     path("po-status/", po_status_report_view, name="report-po-status"),
     path("receipt-rejection/", receipt_rejection_report_view, name="report-receipt-rejection"),
