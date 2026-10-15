@@ -147,3 +147,71 @@ def test_serializer_validates_whole_quantity_and_future_date():
     )
     assert not line_ser.is_valid()
     assert "quantity" in line_ser.errors
+
+
+@pytest.mark.django_db
+def test_out_of_budget_pr_saved_as_draft_and_editable(pr_setup, client):
+    from apps.budgets.models import Budget
+    from apps.organization.models import FiscalPeriod
+
+    # Create fiscal period and low budget
+    today = timezone.now().date()
+    period = FiscalPeriod.objects.create(
+        organization=pr_setup["org"],
+        year=2026,
+        period_number=4,
+        name="FY2026-Q4",
+        start_date=today - timezone.timedelta(days=30),
+        end_date=today + timezone.timedelta(days=60),
+    )
+    Budget.objects.create(
+        cost_center=pr_setup["cc"],
+        fiscal_period=period,
+        allocated_amount=Decimal("1000.00"),
+        committed_amount=Decimal("0.00"),
+        actual_amount=Decimal("0.00"),
+        allow_overspend=False,
+    )
+
+    client.force_login(pr_setup["requester"])
+    future_date = (today + timezone.timedelta(days=10)).isoformat()
+
+    # 1. Post out-of-budget draft to /requisitions/create/
+    create_data = {
+        "title": "Expensive Hardware Draft",
+        "justification": "Upgrading core servers",
+        "department": str(pr_setup["dept"].id),
+        "cost_center": str(pr_setup["cc"].id),
+        "requested_delivery_date": future_date,
+        "item_description[]": ["High-end Server Rack"],
+        "quantity[]": ["5"],
+        "estimated_unit_price[]": ["20000.00"],  # Total: $100,000 (Budget is $1,000)
+        "unit_of_measure[]": ["EA"],
+        "submit_action": "draft",
+    }
+
+    resp = client.post("/requisitions/create/", create_data, follow=True)
+    assert resp.status_code == 200
+    pr = PurchaseRequisition.objects.get(title="Expensive Hardware Draft")
+    assert pr.status == PurchaseRequisition.STATUS_DRAFT
+    assert pr.total_amount == Decimal("100000.00")
+
+    # 2. Edit the out-of-budget draft PR via /requisitions/<id>/edit/
+    edit_data = {
+        "title": "Expensive Hardware Draft Updated",
+        "justification": "Upgrading core servers with redundant PSU",
+        "department": str(pr_setup["dept"].id),
+        "cost_center": str(pr_setup["cc"].id),
+        "requested_delivery_date": future_date,
+        "item_description[]": ["High-end Server Rack Extra"],
+        "quantity[]": ["10"],
+        "estimated_unit_price[]": ["20000.00"],  # Total: $200,000
+        "unit_of_measure[]": ["EA"],
+    }
+    resp_edit = client.post(f"/requisitions/{pr.id}/edit/", edit_data, follow=True)
+    assert resp_edit.status_code == 200
+    pr.refresh_from_db()
+    assert pr.title == "Expensive Hardware Draft Updated"
+    assert pr.total_amount == Decimal("200000.00")
+    assert pr.status == PurchaseRequisition.STATUS_DRAFT
+

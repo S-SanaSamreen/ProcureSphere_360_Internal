@@ -260,7 +260,10 @@
 </div>
 
 <script>
+    let isBypassingBudgetCheck = false;
+
     window.forceSubmitForm = function(btn) {
+        isBypassingBudgetCheck = true;
         const modalEl = document.getElementById('budgetExceededModal');
         const form = document.getElementById('pr_edit_form');
         const proceedBtn = btn || (modalEl ? modalEl.querySelector('.btn-warning') : null);
@@ -271,11 +274,19 @@
         if (saveBtn) {
             window.setButtonLoading(saveBtn, 'Saving Changes...');
         }
-        form.removeEventListener('submit', validateBudgetOnSubmit);
-        if (form.requestSubmit) {
-            form.requestSubmit();
-        } else {
-            form.submit();
+        if (modalEl) {
+            const modalInstance = bootstrap.Modal.getInstance(modalEl);
+            if (modalInstance) {
+                modalInstance.hide();
+            }
+        }
+        if (form) {
+            delete form.dataset.submitting;
+            if (form.requestSubmit) {
+                form.requestSubmit(saveBtn || undefined);
+            } else {
+                form.submit();
+            }
         }
     };
 
@@ -288,6 +299,9 @@
     }
 
     function validateBudgetOnSubmit(e) {
+        if (isBypassingBudgetCheck) {
+            return;
+        }
         const total = calculateTotalAmount(false);
         const select = document.getElementById('cost_center_select');
         const selectedOpt = select ? select.options[select.selectedIndex] : null;

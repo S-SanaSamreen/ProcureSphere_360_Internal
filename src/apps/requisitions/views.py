@@ -418,11 +418,6 @@ def edit_view(request, pk):
                         )
                         total_amount += qty_val * price
 
-                    # Validate budget before saving PR total
-                    validate_budget_availability_service(
-                        cost_center=cost_center, amount=Decimal(str(total_amount))
-                    )
-
                     pr.total_amount = total_amount
 
                 pr.save()
