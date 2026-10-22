@@ -192,6 +192,29 @@ def receipt_detail_view(request, grn_id):
         .order_by("-timestamp")
     )
 
+    user = request.user
+    role_code = getattr(user, "role_code", None) or (
+        user.role.code if hasattr(user, "role") and user.role else Role.SUPER_ADMIN
+    )
+    is_stores_receiver = user.is_superuser or role_code in [
+        Role.STORES_RECEIVER,
+        Role.SUPER_ADMIN,
+    ]
+
+    base_layout = "base.html"
+    if role_code == Role.FINANCE_AP:
+        base_layout = "layouts/finance_base.html"
+    elif role_code == Role.AUDITOR:
+        base_layout = "audit/base_auditor.html"
+    elif role_code == Role.PROC_MGR:
+        base_layout = "layouts/manager_base.html"
+    elif role_code == Role.PROC_EXEC:
+        base_layout = "layouts/proc_exec_base.html"
+    elif role_code == Role.SUPER_ADMIN:
+        base_layout = "layouts/superadmin_base.html"
+    elif role_code == Role.REQUESTER:
+        base_layout = "layouts/requester_base.html"
+
     return render(
         request,
         "receipts/receipt_detail.html",
@@ -200,6 +223,9 @@ def receipt_detail_view(request, grn_id):
             "po": grn.po,
             "lines": grn.lines.all(),
             "audit_logs": audit_logs,
+            "is_stores_receiver": is_stores_receiver,
+            "base_layout": base_layout,
+            "role_code": role_code,
         },
     )
 

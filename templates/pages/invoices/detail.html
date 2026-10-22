@@ -106,7 +106,9 @@
                             {% for grn in invoice.po.receipts.all %}
                             <tr>
                                 <td class="ps-4 fw-bold font-monospace text-primary">
-                                    <a href="{% url 'receipt_detail' grn_id=grn.id %}" class="text-decoration-none">{{ grn.grn_number }}</a>
+                                    <button type="button" class="btn btn-link p-0 text-decoration-none font-monospace fw-bold text-primary" data-bs-toggle="modal" data-bs-target="#grnModal_{{ grn.id }}" title="Click to view GRN physical delivery details">
+                                        <i class="fa-solid fa-receipt me-1"></i>{{ grn.grn_number }}
+                                    </button>
                                 </td>
                                 <td>{{ grn.received_date|date:"M d, Y H:i" }}</td>
                                 <td>{{ grn.delivery_note_number|default:"—" }}</td>
@@ -122,9 +124,9 @@
                                     </span>
                                 </td>
                                 <td class="text-end pe-4">
-                                    <a href="{% url 'receipt_detail' grn_id=grn.id %}" class="btn btn-sm btn-outline-primary rounded-pill px-3">
-                                        View GRN
-                                    </a>
+                                    <button type="button" class="btn btn-sm btn-outline-primary rounded-pill px-3 fw-semibold shadow-none" data-bs-toggle="modal" data-bs-target="#grnModal_{{ grn.id }}">
+                                        <i class="fa-solid fa-eye me-1"></i> View GRN
+                                    </button>
                                 </td>
                             </tr>
                             {% endfor %}
@@ -179,4 +181,120 @@
         </div>
     </div>
 </div>
+
+<!-- Associated Goods Receipts Details Modals (Finance Read-Only 3-Way Match Evidence) -->
+{% if invoice.po and invoice.po.receipts.exists %}
+    {% for grn in invoice.po.receipts.all %}
+    <div class="modal fade" id="grnModal_{{ grn.id }}" tabindex="-1" aria-labelledby="grnModalLabel_{{ grn.id }}" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content rounded-4 border-0 shadow">
+                <div class="modal-header border-bottom py-3 px-4 bg-light">
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge bg-primary text-white rounded-pill px-3 py-1 font-monospace">
+                            <i class="fa-solid fa-receipt me-1"></i> {{ grn.grn_number }}
+                        </span>
+                        <h5 class="modal-title fw-bold text-dark mb-0" id="grnModalLabel_{{ grn.id }}">
+                            Goods Receipt Physical Evidence
+                        </h5>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <!-- Delivery Metadata Strip -->
+                    <div class="row g-3 mb-4 p-3 bg-light rounded-3 border">
+                        <div class="col-sm-6 col-md-3">
+                            <small class="text-muted text-uppercase fw-semibold d-block">Received Date</small>
+                            <span class="fw-bold text-dark">{{ grn.received_date|date:"M d, Y H:i" }}</span>
+                        </div>
+                        <div class="col-sm-6 col-md-3">
+                            <small class="text-muted text-uppercase fw-semibold d-block">Delivery Note / DN</small>
+                            <span class="fw-bold text-dark">{{ grn.delivery_note_number|default:"—" }}</span>
+                        </div>
+                        <div class="col-sm-6 col-md-3">
+                            <small class="text-muted text-uppercase fw-semibold d-block">Received By</small>
+                            <span class="fw-bold text-dark">{{ grn.received_by.get_full_name|default:grn.received_by.email }}</span>
+                        </div>
+                        <div class="col-sm-6 col-md-3">
+                            <small class="text-muted text-uppercase fw-semibold d-block">Inspection Status</small>
+                            <span class="badge {% if grn.overall_inspection_status == 'PASSED' %}bg-success text-white{% elif grn.overall_inspection_status == 'FAILED' %}bg-danger text-white{% else %}bg-warning text-dark{% endif %} rounded-pill px-2 py-1">
+                                {{ grn.overall_inspection_status }}
+                            </span>
+                        </div>
+                    </div>
+
+                    {% if grn.remarks %}
+                    <div class="mb-4">
+                        <small class="text-muted text-uppercase fw-semibold d-block mb-1">Receiver Remarks</small>
+                        <p class="small text-secondary mb-0 bg-white p-2 rounded border">{{ grn.remarks }}</p>
+                    </div>
+                    {% endif %}
+
+                    <!-- Line Items Table -->
+                    <h6 class="fw-bold text-dark mb-3"><i class="fa-solid fa-boxes-stacked text-primary me-2"></i>Physical Receipt & Inspection Lines</h6>
+                    <div class="table-responsive border rounded-3 mb-3">
+                        <table class="table table-hover align-middle mb-0">
+                            <thead class="table-light text-muted small text-uppercase">
+                                <tr>
+                                    <th class="ps-3">Item Description</th>
+                                    <th class="text-center">PO Ordered</th>
+                                    <th class="text-center">Qty Received</th>
+                                    <th class="text-center text-success">Qty Accepted</th>
+                                    <th class="text-center text-danger">Qty Rejected</th>
+                                    <th>Inspection Verdict</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for line in grn.lines.all %}
+                                <tr>
+                                    <td class="ps-3 fw-semibold text-dark">{{ line.po_line.item_description|default:"Line Item" }}</td>
+                                    <td class="text-center text-muted">{{ line.po_line.quantity }}</td>
+                                    <td class="text-center fw-bold">{{ line.quantity_received }}</td>
+                                    <td class="text-center fw-bold text-success">{{ line.quantity_accepted }}</td>
+                                    <td class="text-center fw-bold {% if line.quantity_rejected > 0 %}text-danger{% else %}text-muted{% endif %}">
+                                        {{ line.quantity_rejected }}
+                                    </td>
+                                    <td>
+                                        {% if line.inspection %}
+                                            {% if line.inspection.passed %}
+                                                <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1">
+                                                    <i class="fa-solid fa-check me-1"></i> Passed
+                                                </span>
+                                            {% else %}
+                                                <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1">
+                                                    <i class="fa-solid fa-xmark me-1"></i> Failed
+                                                </span>
+                                            {% endif %}
+                                            {% if line.inspection.inspection_notes %}
+                                                <div class="small text-muted mt-1" style="font-size: 0.78rem;">{{ line.inspection.inspection_notes }}</div>
+                                            {% endif %}
+                                        {% else %}
+                                            <span class="badge bg-warning-subtle text-warning border border-warning-subtle px-2 py-1">
+                                                Pending
+                                            </span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% empty %}
+                                <tr>
+                                    <td colspan="6" class="text-center py-3 text-muted">No line items in this receipt.</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="alert alert-info py-2 px-3 rounded-3 small mb-0 d-flex align-items-center">
+                        <i class="fa-solid fa-circle-info me-2 fs-5"></i>
+                        <span>This Goods Receipt record serves as physical evidence for 3-Way Matching against PO <strong>{{ invoice.po.po_number }}</strong>.</span>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light py-2 px-4 border-top d-flex justify-content-between">
+                    <span class="text-muted small"><i class="fa-solid fa-shield-halved text-success me-1"></i> Verified by Stores Receiver</span>
+                    <button type="button" class="btn btn-secondary rounded-pill px-4 fw-semibold" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+{% endif %}
 {% endblock %}

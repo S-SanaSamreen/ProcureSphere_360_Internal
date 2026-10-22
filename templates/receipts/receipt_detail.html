@@ -6,9 +6,15 @@
 {% block content %}
 <div class="d-flex flex-wrap justify-content-between align-items-center mb-4 gap-3">
     <div>
+        {% if is_stores_receiver %}
         <a href="{% url 'receipts_list' %}" class="text-decoration-none text-muted mb-2 d-inline-block">
             <i class="fa-solid fa-arrow-left me-1"></i> Back to Goods Receipts List
         </a>
+        {% else %}
+        <a href="javascript:history.back()" class="text-decoration-none text-muted mb-2 d-inline-block">
+            <i class="fa-solid fa-arrow-left me-1"></i> Back
+        </a>
+        {% endif %}
         <div class="d-flex align-items-center flex-wrap gap-2">
             <span class="badge bg-secondary px-3 py-2 text-uppercase">
                 <i class="fa-solid fa-receipt me-1"></i> GRN Details
@@ -58,53 +64,63 @@
             {% endif %}
         </div>
         <p class="text-muted small mb-0 mt-1">
-            Recorded against PO <a href="{% url 'order_detail' po.id %}" class="fw-semibold text-primary font-monospace">{{ po.po_number }}</a> &bull; 
+            Recorded against PO <span class="fw-semibold text-primary font-monospace">{{ po.po_number }}</span> &bull; 
             Vendor: <span class="fw-semibold text-dark">{{ po.vendor.legal_name }}</span>
         </p>
     </div>
 
-    <!-- Status-Gated Header Actions -->
+    <!-- Status-Gated Header Actions (Only available to Stores Receiver and Super Admin) -->
     <div class="d-flex align-items-center flex-wrap gap-2">
-        {% if grn.overall_inspection_status == 'PENDING' %}
-            <!-- Stage: Pending Quality Inspection -->
-            <a href="{% url 'receipt_inspect' grn_id=grn.id %}" class="btn btn-warning rounded-pill px-4 fw-bold shadow-sm text-dark">
-                <i class="fa-solid fa-clipboard-check me-1"></i> Quality Inspection
-            </a>
-            <a href="{% url 'order_detail' po.id %}" class="btn btn-outline-secondary rounded-pill px-3 fw-semibold">
-                <i class="fa-solid fa-file-invoice me-1"></i> View PO
-            </a>
-        {% elif grn.can_hand_off_to_stock and grn.stock_handoff_status != 'HANDED_OFF' %}
-            <!-- Stage: Inspection Done, Accepted Stock Ready to Hand Off -->
-            <a href="{% url 'receipt_stock_handoff' grn_id=grn.id %}" class="btn btn-success text-white rounded-pill px-4 fw-bold shadow-sm">
-                <i class="fa-solid fa-dolly me-1"></i> Hand Off to Stock
-            </a>
-            <a href="{% url 'receipt_inspect' grn_id=grn.id %}" class="btn btn-outline-warning rounded-pill px-3 fw-semibold text-dark">
-                <i class="fa-solid fa-clipboard-check me-1"></i> Quality Inspection
-            </a>
-            <a href="{% url 'order_detail' po.id %}" class="btn btn-outline-secondary rounded-pill px-3 fw-semibold">
-                <i class="fa-solid fa-file-invoice me-1"></i> View PO
-            </a>
-        {% elif grn.stock_handoff_status == 'HANDED_OFF' %}
-            <!-- Stage: Stock Handoff Complete -->
-            <a href="{% url 'receipt_stock_handoff' grn_id=grn.id %}" class="btn btn-outline-primary rounded-pill px-3 fw-semibold">
-                <i class="fa-solid fa-warehouse me-1"></i> Stock Handoff Details
-            </a>
-            <a href="{% url 'receipt_inspect' grn_id=grn.id %}" class="btn btn-outline-warning rounded-pill px-3 fw-semibold text-dark">
-                <i class="fa-solid fa-clipboard-check me-1"></i> Quality Inspection
-            </a>
-            <a href="{% url 'order_detail' po.id %}" class="btn btn-outline-secondary rounded-pill px-3 fw-semibold">
-                <i class="fa-solid fa-file-invoice me-1"></i> View PO
-            </a>
+        {% if is_stores_receiver %}
+            {% if grn.overall_inspection_status == 'PENDING' %}
+                <!-- Stage: Pending Quality Inspection -->
+                <a href="{% url 'receipt_inspect' grn_id=grn.id %}" class="btn btn-warning rounded-pill px-4 fw-bold shadow-sm text-dark">
+                    <i class="fa-solid fa-clipboard-check me-1"></i> Quality Inspection
+                </a>
+                <a href="{% url 'order_detail' po.id %}" class="btn btn-outline-secondary rounded-pill px-3 fw-semibold">
+                    <i class="fa-solid fa-file-invoice me-1"></i> View PO
+                </a>
+            {% elif grn.can_hand_off_to_stock and grn.stock_handoff_status != 'HANDED_OFF' %}
+                <!-- Stage: Inspection Done, Accepted Stock Ready to Hand Off -->
+                <a href="{% url 'receipt_stock_handoff' grn_id=grn.id %}" class="btn btn-success text-white rounded-pill px-4 fw-bold shadow-sm">
+                    <i class="fa-solid fa-dolly me-1"></i> Hand Off to Stock
+                </a>
+                <a href="{% url 'receipt_inspect' grn_id=grn.id %}" class="btn btn-outline-warning rounded-pill px-3 fw-semibold text-dark">
+                    <i class="fa-solid fa-clipboard-check me-1"></i> Quality Inspection
+                </a>
+                <a href="{% url 'order_detail' po.id %}" class="btn btn-outline-secondary rounded-pill px-3 fw-semibold">
+                    <i class="fa-solid fa-file-invoice me-1"></i> View PO
+                </a>
+            {% elif grn.stock_handoff_status == 'HANDED_OFF' %}
+                <!-- Stage: Stock Handoff Complete -->
+                <a href="{% url 'receipt_stock_handoff' grn_id=grn.id %}" class="btn btn-outline-primary rounded-pill px-3 fw-semibold">
+                    <i class="fa-solid fa-warehouse me-1"></i> Stock Handoff Details
+                </a>
+                <a href="{% url 'receipt_inspect' grn_id=grn.id %}" class="btn btn-outline-warning rounded-pill px-3 fw-semibold text-dark">
+                    <i class="fa-solid fa-clipboard-check me-1"></i> Quality Inspection
+                </a>
+                <a href="{% url 'order_detail' po.id %}" class="btn btn-outline-secondary rounded-pill px-3 fw-semibold">
+                    <i class="fa-solid fa-file-invoice me-1"></i> View PO
+                </a>
+            {% else %}
+                <!-- Stage: All items rejected or other terminal state -->
+                <a href="{% url 'receipt_inspect' grn_id=grn.id %}" class="btn btn-outline-warning rounded-pill px-3 fw-semibold text-dark">
+                    <i class="fa-solid fa-clipboard-check me-1"></i> Quality Inspection
+                </a>
+                <a href="{% url 'receipts_rejections_queue' %}" class="btn btn-outline-danger rounded-pill px-3 fw-semibold">
+                    <i class="fa-solid fa-ban me-1"></i> Rejections &amp; Returns
+                </a>
+                <a href="{% url 'order_detail' po.id %}" class="btn btn-outline-secondary rounded-pill px-3 fw-semibold">
+                    <i class="fa-solid fa-file-invoice me-1"></i> View PO
+                </a>
+            {% endif %}
         {% else %}
-            <!-- Stage: All items rejected or other terminal state -->
-            <a href="{% url 'receipt_inspect' grn_id=grn.id %}" class="btn btn-outline-warning rounded-pill px-3 fw-semibold text-dark">
-                <i class="fa-solid fa-clipboard-check me-1"></i> Quality Inspection
-            </a>
-            <a href="{% url 'receipts_rejections_queue' %}" class="btn btn-outline-danger rounded-pill px-3 fw-semibold">
-                <i class="fa-solid fa-ban me-1"></i> Rejections &amp; Returns
-            </a>
-            <a href="{% url 'order_detail' po.id %}" class="btn btn-outline-secondary rounded-pill px-3 fw-semibold">
-                <i class="fa-solid fa-file-invoice me-1"></i> View PO
+            <!-- Read-only view for Finance, Auditor, Requester, etc. -->
+            <span class="badge bg-light text-secondary border px-3 py-2">
+                <i class="fa-solid fa-shield-halved text-success me-1"></i> Read-Only Receipt Evidence
+            </span>
+            <a href="javascript:history.back()" class="btn btn-outline-secondary rounded-pill px-3 fw-semibold">
+                <i class="fa-solid fa-arrow-left me-1"></i> Back
             </a>
         {% endif %}
     </div>
