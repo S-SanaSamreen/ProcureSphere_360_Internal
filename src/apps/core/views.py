@@ -5,6 +5,7 @@ from django.db.models import Avg, Count, Q, Sum
 from django.http import JsonResponse
 from django.shortcuts import render
 from django.utils import timezone
+from django.views.decorators.csrf import ensure_csrf_cookie
 from redis import Redis
 from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
@@ -56,12 +57,221 @@ class HealthAPIView(APIView):
         return health_check_view(request)
 
 
-@login_required(login_url="/login/")
+ROLES_MARKETING_DATA = [
+    {
+        "role": "Requester",
+        "key": "REQUESTER",
+        "scope": "Department Requisitions",
+        "resp": "Create and track purchase requisitions for authorized departments within policy guidance and real-time budget visibility.",
+        "guard": "Restricted view. Cannot view supplier bid comparisons or modify organizational approval thresholds.",
+        "avatar_active": "/static/landing/roles/requester/active.webp",
+        "avatar_idle": "/static/landing/roles/requester/idle.webp",
+    },
+    {
+        "role": "Procurement",
+        "key": "PROCUREMENT",
+        "scope": "Sourcing & PO Execution",
+        "resp": "Manage vendor relations, run competitive RFQ events, evaluate supplier bids, negotiate commercial terms, and issue purchase orders.",
+        "guard": "Strict segregation. Cannot bypass budget thresholds or approve unbudgeted contracts unilaterally.",
+        "avatar_active": "/static/landing/roles/procurement/active.webp",
+        "avatar_idle": "/static/landing/roles/procurement/idle.webp",
+    },
+    {
+        "role": "Finance",
+        "key": "FINANCE",
+        "scope": "Budget & 3-Way Match",
+        "resp": "Review departmental budgets, conduct invoice validation against PO and physical receipt, and resolve exception workflows.",
+        "guard": "Automated lock. Invoices with unmatched quantities or unauthorized variance are blocked from payment.",
+        "avatar_active": "/static/landing/roles/finance/active.webp",
+        "avatar_idle": "/static/landing/roles/finance/idle.webp",
+    },
+    {
+        "role": "Legal",
+        "key": "LEGAL",
+        "scope": "Contracts & Obligations",
+        "resp": "Oversee master agreements, track version histories, enforce terms, manage obligations, and monitor renewal deadlines.",
+        "guard": "Version locking. Signed contract versions are locked; revisions require an explicit amendment trail.",
+        "avatar_active": "/static/landing/roles/legal/active.webp",
+        "avatar_idle": "/static/landing/roles/legal/idle.webp",
+    },
+    {
+        "role": "Stores",
+        "key": "STORES",
+        "scope": "Receiving & Inspection",
+        "resp": "Receive shipments, perform itemized quantity and quality inspections, log partial receipts, and record rejections.",
+        "guard": "Inventory gate. Goods cannot enter payable status until inspection is logged.",
+        "avatar_active": "/static/landing/roles/stores/active.webp",
+        "avatar_idle": "/static/landing/roles/stores/idle.webp",
+    },
+    {
+        "role": "Vendor",
+        "key": "VENDOR",
+        "scope": "Restricted Supplier Portal",
+        "resp": "Complete self-service onboarding, submit KYC documentation, participate in sealed RFPs, and acknowledge purchase orders.",
+        "guard": "Zero competitor access. Blind bidding enforces data segregation between competing suppliers.",
+        "avatar_active": "/static/landing/roles/vendor/active.webp",
+        "avatar_idle": "/static/landing/roles/vendor/idle.webp",
+    },
+]
+
+PRIMARY_FAQS = [
+    {
+        "q": "What does ProcureSphere 360 connect?",
+        "a": "Requests, approvals, suppliers, sourcing, purchase orders, receipts, invoices, contracts, finance and governance in one connected workflow.",
+    },
+    {
+        "q": "Is the interface shown live company data?",
+        "a": "No. The interface is illustrative demo content designed to show how the operating picture could work without revealing sensitive information.",
+    },
+    {
+        "q": "Can vendors participate in the workflow?",
+        "a": "Yes. The Vendor workspace brings onboarding, bids, and purchase-order acknowledgement into the same connected experience, creating a seamless bridge between you and your suppliers.",
+    },
+    {
+        "q": "How does the approval policy engine work?",
+        "a": "It routes decisions automatically based on custom rules like department, budget thresholds, or risk categories, ensuring the right owner reviews the request at the exact right time.",
+    },
+]
+
+POLICY_FAQS = [
+    {
+        "q": "How does the system ensure zero silent overspend?",
+        "a": "Every Purchase Requisition runs a server-side budget check. Funds are placed into 'Reserved' status immediately upon submission, preventing departments from committing spend beyond approved limits.",
+    },
+    {
+        "q": "How is vendor confidential data protected during bidding?",
+        "a": "Vendor submissions are sealed until the deadline closes. Competing suppliers can never see each other's submissions, and buyers evaluate commercial terms only after technical clearance.",
+    },
+    {
+        "q": "What is 3-Way Matching and how does it prevent overbilling?",
+        "a": "The system compares the original Purchase Order line items, the warehouse Goods Receipt (GRN) quantities, and the vendor Invoice amounts within configurable tolerance rules. Any variance triggers an approval workflow.",
+    },
+    {
+        "q": "How does contract lifecycle management alert against renewal deadlines?",
+        "a": "The system monitors active agreements, terms, and obligations, triggering proactive renewal notifications and milestone alerts to legal and procurement teams prior to expiry.",
+    },
+]
+
+
+@ensure_csrf_cookie
+def landing_home_view(request):
+    """
+    Renders public ProcureSphere 360 home page with Django Templates + HTMX.
+    """
+    return render(
+        request,
+        "landing/home.html",
+        {
+            "active_page": "home",
+            "roles_data": ROLES_MARKETING_DATA,
+        },
+    )
+
+
+@ensure_csrf_cookie
+def landing_about_view(request):
+    """
+    Renders public ProcureSphere 360 About page with Django Templates.
+    """
+    return render(
+        request,
+        "landing/about.html",
+        {
+            "active_page": "about",
+        },
+    )
+
+
+@ensure_csrf_cookie
+def landing_solutions_view(request):
+    """
+    Renders public ProcureSphere 360 Solutions page with Django Templates.
+    """
+    return render(
+        request,
+        "landing/solutions.html",
+        {
+            "active_page": "solutions",
+        },
+    )
+
+
+@ensure_csrf_cookie
+def landing_benefits_view(request):
+    """
+    Renders public ProcureSphere 360 Benefits page with Django Templates.
+    """
+    return render(
+        request,
+        "landing/benefits.html",
+        {
+            "active_page": "benefits",
+        },
+    )
+
+
+@ensure_csrf_cookie
+def landing_process_view(request):
+    """
+    Renders public ProcureSphere 360 Process page with Django Templates.
+    """
+    return render(
+        request,
+        "landing/process.html",
+        {
+            "active_page": "process",
+        },
+    )
+
+
+@ensure_csrf_cookie
+def landing_roles_view(request):
+    """
+    Renders public ProcureSphere 360 Roles page with Django Templates.
+    """
+    return render(
+        request,
+        "landing/roles.html",
+        {
+            "active_page": "roles",
+            "roles_data": ROLES_MARKETING_DATA,
+        },
+    )
+
+
+@ensure_csrf_cookie
+def landing_faq_view(request):
+    """
+    Renders public ProcureSphere 360 FAQ page with Django Templates.
+    """
+    return render(
+        request,
+        "landing/faq.html",
+        {
+            "active_page": "faq",
+            "primary_faqs": PRIMARY_FAQS,
+            "policy_faqs": POLICY_FAQS,
+        },
+    )
+
+
+@ensure_csrf_cookie
+def landing_page_view(request):
+    """
+    Backwards-compatible landing page view forwarding to server-rendered home.
+    """
+    return landing_home_view(request)
+
+
+@ensure_csrf_cookie
 def home_view(request):  # noqa: C901
     """
-    Role-tailored Dashboard page view with live aggregated ERP metrics.
-    Dispatches to custom workspace per user role (Requester, Approver, Procurement, Finance, Vendor, Legal, Auditor, Admin).
+    Role-tailored Dashboard page view with live aggregated ERP metrics for authenticated users,
+    or public custom landing page for anonymous visitors.
     """
+    if not request.user.is_authenticated:
+        return landing_home_view(request)
+
     user = request.user
     role_code = getattr(user, "role_code", None) or (
         user.role.code if hasattr(user, "role") and user.role else Role.SUPER_ADMIN
@@ -385,7 +595,7 @@ def custom_404_view(request, exception=None):
             },
             status=404,
         )
-    return render(request, "404.html", status=404)
+    return render(request, "landing/404.html", status=404)
 
 
 def custom_500_view(request):

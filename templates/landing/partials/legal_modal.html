@@ -1,0 +1,95 @@
+{% load static %}
+<div
+  id="ps-legal-overlay"
+  class="legal-modal-overlay"
+  style="display: none; position: fixed; inset: 0; z-index: 999999; align-items: center; justify-content: center; padding: 24px 16px; background-color: rgba(15, 27, 45, 0.65); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);"
+  onclick="if (event.target === this) closeLegalModal()"
+>
+  <div
+    class="legal-modal-dialog"
+    style="position: relative; width: 100%; max-width: 820px; max-height: 88vh; background: var(--surface, #ffffff); border-radius: 24px; box-shadow: 0 24px 60px rgba(15, 27, 45, 0.25), 0 0 1px rgba(0, 0, 0, 0.1); border: 1px solid var(--line, #e1e7f0); display: flex; flex-direction: column; overflow: hidden;"
+  >
+    <!-- Header -->
+    <div
+      class="legal-modal-header"
+      style="padding: 24px 32px 18px; border-bottom: 1px solid var(--line, #e1e7f0); display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; background: #ffffff;"
+    >
+      <div>
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+          <span style="color: var(--blue, #2858e8); display: flex;">
+            <svg width="20" height="20" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4.5 16h23" />
+              <path d="M16 4v24" />
+              <circle cx="24.8" cy="11" r="2.1" />
+              <circle cx="9.5" cy="21.5" r="2.1" />
+            </svg>
+          </span>
+          <span style="font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 700; color: var(--blue, #2858e8); letter-spacing: 0.04em;">
+            PROCURESPHERE 360
+          </span>
+        </div>
+        <h2 style="margin: 0; font-size: 22px; font-weight: 700; color: var(--navy, #101a2d); font-family: 'Playfair Display', Georgia, serif;">
+          Legal &amp; Regulatory Governance
+        </h2>
+      </div>
+
+      <!-- Close Button -->
+      <button
+        type="button"
+        onclick="closeLegalModal()"
+        aria-label="Close dialog"
+        style="width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--line, #e1e7f0); background: var(--surface, #ffffff); color: var(--ink, #101a2d); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s;"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      </button>
+    </div>
+
+    <!-- Tabs -->
+    <div
+      style="padding: 12px 32px 0; background: #fafcff; border-bottom: 1px solid var(--line, #e1e7f0); display: flex; gap: 24px;"
+    >
+      <button
+        id="legal-tab-privacy-btn"
+        type="button"
+        onclick="switchLegalTab('privacy')"
+        style="padding: 10px 4px 12px; font-size: 14px; font-weight: 700; background: none; border: none; cursor: pointer; border-bottom: 2px solid var(--blue, #2858e8); color: var(--blue, #2858e8);"
+      >
+        Privacy Policy
+      </button>
+      <button
+        id="legal-tab-terms-btn"
+        type="button"
+        onclick="switchLegalTab('terms')"
+        style="padding: 10px 4px 12px; font-size: 14px; font-weight: 700; background: none; border: none; cursor: pointer; border-bottom: 2px solid transparent; color: var(--muted, #526784);"
+      >
+        Terms &amp; Conditions
+      </button>
+    </div>
+
+    <!-- Body / Content -->
+    <div
+      style="padding: 28px 32px; overflow-y: auto; max-height: calc(88vh - 160px); color: var(--ink, #101a2d); font-size: 14.5px; line-height: 1.7;"
+    >
+      <div id="legal-content-privacy">
+        <h3 style="font-size: 18px; margin-top: 0; color: var(--navy, #101a2d);">1. Enterprise Data Privacy</h3>
+        <p>ProcureSphere 360 is dedicated to protecting proprietary organizational procurement, requisition, and vendor pricing data. All transaction records, vendor quotes, and budget logs are encrypted in transit and at rest.</p>
+        <h3 style="font-size: 18px; color: var(--navy, #101a2d);">2. Role-Based Data Isolation</h3>
+        <p>Access to procurement information is strictly governed by verified enterprise roles. Supplier users cannot view competitor quotes or unauthorized internal approvals.</p>
+        <h3 style="font-size: 18px; color: var(--navy, #101a2d);">3. Audit Logging &amp; Retention</h3>
+        <p>Every transaction, approval decision, status change, and login event is written to an immutable append-only audit trail in compliance with enterprise governance standards.</p>
+      </div>
+
+      <div id="legal-content-terms" style="display: none;">
+        <h3 style="font-size: 18px; margin-top: 0; color: var(--navy, #101a2d);">1. Terms of Enterprise Use</h3>
+        <p>Use of ProcureSphere 360 is restricted to authorized enterprise employees and registered vendor representatives with active credentials.</p>
+        <h3 style="font-size: 18px; color: var(--navy, #101a2d);">2. Sourcing &amp; Bidding Integrity</h3>
+        <p>All bids submitted through the sealed bidding portal constitute binding commercial offers subject to technical qualification and management award approval.</p>
+        <h3 style="font-size: 18px; color: var(--navy, #101a2d);">3. Compliance with Financial Controls</h3>
+        <p>Purchase Requisitions, Purchase Orders, and Invoice Matching must adhere to organizational financial delegation of authority and budget constraints.</p>
+      </div>
+    </div>
+  </div>
+</div>

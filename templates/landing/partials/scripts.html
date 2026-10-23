@@ -1,0 +1,256 @@
+<script>
+  // Helper: Get CSRF Token
+  function getCsrfToken() {
+    var tokenInput = document.querySelector('input[name="csrfmiddlewaretoken"]');
+    if (tokenInput && tokenInput.value) {
+      return tokenInput.value;
+    }
+    var match = document.cookie.match(/csrftoken=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : '';
+  }
+
+  // --- Sticky Navbar & Mobile Drawer ---
+  window.addEventListener('scroll', function() {
+    var header = document.getElementById('site-header');
+    if (header) {
+      if (window.scrollY > 20) {
+        header.classList.add('is-scrolled');
+      } else {
+        header.classList.remove('is-scrolled');
+      }
+    }
+  });
+
+  function toggleMobileNav() {
+    var drawer = document.getElementById('mobile-nav-drawer');
+    var hamburger = document.getElementById('hamburger-icon');
+    var closeIcon = document.getElementById('close-icon');
+    var header = document.getElementById('site-header');
+
+    if (!drawer) return;
+    if (drawer.style.display === 'none' || drawer.style.display === '') {
+      drawer.style.display = 'block';
+      if (hamburger) hamburger.style.display = 'none';
+      if (closeIcon) closeIcon.style.display = 'block';
+      if (header) header.classList.add('menu-open');
+    } else {
+      drawer.style.display = 'none';
+      if (hamburger) hamburger.style.display = 'block';
+      if (closeIcon) closeIcon.style.display = 'none';
+      if (header) header.classList.remove('menu-open');
+    }
+  }
+
+  // --- Login Modal Logic ---
+  var currentMascotState = 'normal';
+
+  function setMascotState(state) {
+    if (currentMascotState === 'success') return;
+    currentMascotState = state;
+    var states = ['normal', 'typing', 'failed', 'success'];
+    states.forEach(function(s) {
+      var img = document.getElementById('mascot-img-' + s);
+      if (img) {
+        img.style.opacity = (s === state) ? '1' : '0';
+      }
+    });
+  }
+
+  function handlePasswordBlur() {
+    var pw = document.getElementById('ps-login-password');
+    if (currentMascotState !== 'success' && currentMascotState !== 'failed') {
+      if (!pw || !pw.value) {
+        setMascotState('normal');
+      }
+    }
+  }
+
+  function togglePasswordVisibility() {
+    var pw = document.getElementById('ps-login-password');
+    var eyeOpen = document.getElementById('ps-pw-eye-open');
+    var eyeClosed = document.getElementById('ps-pw-eye-closed');
+    if (!pw) return;
+
+    if (pw.type === 'password') {
+      pw.type = 'text';
+      if (eyeOpen) eyeOpen.style.display = 'none';
+      if (eyeClosed) eyeClosed.style.display = 'block';
+    } else {
+      pw.type = 'password';
+      if (eyeOpen) eyeOpen.style.display = 'block';
+      if (eyeClosed) eyeClosed.style.display = 'none';
+    }
+  }
+
+  function openLoginModal() {
+    var overlay = document.getElementById('ps-login-overlay');
+    if (overlay) {
+      overlay.style.display = 'flex';
+      document.body.style.overflow = 'hidden';
+      resetLoginState();
+      var idInput = document.getElementById('ps-login-user-id');
+      if (idInput) setTimeout(function() { idInput.focus(); }, 100);
+    }
+  }
+
+  function closeLoginModal() {
+    var overlay = document.getElementById('ps-login-overlay');
+    if (overlay) {
+      overlay.style.display = 'none';
+      document.body.style.overflow = '';
+      resetLoginState();
+    }
+  }
+
+  function resetLoginState() {
+    setMascotState('normal');
+    var alertFailed = document.getElementById('ps-login-alert-failed');
+    var alertSuccess = document.getElementById('ps-login-alert-success');
+    var btn = document.getElementById('ps-login-submit-btn');
+    if (alertFailed) alertFailed.style.display = 'none';
+    if (alertSuccess) alertSuccess.style.display = 'none';
+    if (btn) {
+      btn.disabled = false;
+      btn.style.opacity = '1';
+      btn.innerHTML = '<span>Sign In to ProcureSphere</span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>';
+    }
+  }
+
+  async function handleModalLoginSubmit(e) {
+    e.preventDefault();
+    var idInput = document.getElementById('ps-login-user-id');
+    var pwInput = document.getElementById('ps-login-password');
+    var alertFailed = document.getElementById('ps-login-alert-failed');
+    var errorText = document.getElementById('ps-login-error-text');
+    var alertSuccess = document.getElementById('ps-login-alert-success');
+    var btn = document.getElementById('ps-login-submit-btn');
+
+    var email = idInput ? idInput.value.trim() : '';
+    var password = pwInput ? pwInput.value : '';
+
+    if (!email || !password) {
+      setMascotState('failed');
+      if (alertFailed) alertFailed.style.display = 'flex';
+      if (errorText) errorText.textContent = 'Please enter both User ID and Password.';
+      return;
+    }
+
+    if (btn) {
+      btn.disabled = true;
+      btn.style.opacity = '0.7';
+      btn.innerHTML = '<span>Verifying credentials...</span>';
+    }
+
+    try {
+      var csrfToken = getCsrfToken();
+      var response = await fetch('/api/v1/auth/login/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': csrfToken
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({ email: email, password: password })
+      });
+
+      var data = await response.json().catch(function() { return {}; });
+
+      if (!response.ok) {
+        var msg = (data && data.error && data.error.message) || data.detail || 'Invalid email or password. Please try again.';
+        if (response.status === 429) {
+          msg = 'Too many failed login attempts. Account is locked temporarily.';
+        }
+        throw new Error(msg);
+      }
+
+      // Success
+      setMascotState('success');
+      if (alertFailed) alertFailed.style.display = 'none';
+      if (alertSuccess) alertSuccess.style.display = 'block';
+      if (btn) btn.innerHTML = '<span>Authentication Confirmed!</span>';
+
+      setTimeout(function() {
+        closeLoginModal();
+        var user = data && data.user;
+        if (user && user.must_change_password) {
+          window.location.href = '/password-change/';
+        } else if (user && user.role_code === 'VENDOR_USER') {
+          window.location.href = '/vendor/';
+        } else if (user && user.role_code === 'PROC_MGR') {
+          window.location.href = '/manager/';
+        } else if (user && user.role_code === 'AUDITOR') {
+          window.location.href = '/audit/dashboard/';
+        } else {
+          window.location.href = '/';
+        }
+      }, 1000);
+
+    } catch (err) {
+      setMascotState('failed');
+      if (alertFailed) alertFailed.style.display = 'flex';
+      if (errorText) errorText.textContent = err.message || 'Invalid email or password.';
+      if (btn) {
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.innerHTML = '<span>Sign In to ProcureSphere</span>';
+      }
+    }
+  }
+
+  // --- Legal Modal Logic ---
+  function openLegalModal(tab) {
+    var overlay = document.getElementById('ps-legal-overlay');
+    if (overlay) {
+      overlay.style.display = 'flex';
+      document.body.style.overflow = 'hidden';
+      switchLegalTab(tab || 'privacy');
+    }
+  }
+
+  function closeLegalModal() {
+    var overlay = document.getElementById('ps-legal-overlay');
+    if (overlay) {
+      overlay.style.display = 'none';
+      document.body.style.overflow = '';
+    }
+  }
+
+  function switchLegalTab(tab) {
+    var privacyContent = document.getElementById('legal-content-privacy');
+    var termsContent = document.getElementById('legal-content-terms');
+    var privacyBtn = document.getElementById('legal-tab-privacy-btn');
+    var termsBtn = document.getElementById('legal-tab-terms-btn');
+
+    if (tab === 'privacy') {
+      if (privacyContent) privacyContent.style.display = 'block';
+      if (termsContent) termsContent.style.display = 'none';
+      if (privacyBtn) {
+        privacyBtn.style.color = 'var(--blue, #2858e8)';
+        privacyBtn.style.borderBottom = '2px solid var(--blue, #2858e8)';
+      }
+      if (termsBtn) {
+        termsBtn.style.color = 'var(--muted, #526784)';
+        termsBtn.style.borderBottom = '2px solid transparent';
+      }
+    } else {
+      if (privacyContent) privacyContent.style.display = 'none';
+      if (termsContent) termsContent.style.display = 'block';
+      if (privacyBtn) {
+        privacyBtn.style.color = 'var(--muted, #526784)';
+        privacyBtn.style.borderBottom = '2px solid transparent';
+      }
+      if (termsBtn) {
+        termsBtn.style.color = 'var(--blue, #2858e8)';
+        termsBtn.style.borderBottom = '2px solid var(--blue, #2858e8)';
+      }
+    }
+  }
+
+  // Handle ESC key for all modals
+  window.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      closeLoginModal();
+      closeLegalModal();
+    }
+  });
+</script>

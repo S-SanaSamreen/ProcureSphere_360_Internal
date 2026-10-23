@@ -7,7 +7,17 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 from apps.accounts.api_views import SessionLoginView, SessionLogoutView
 from apps.accounts.views import change_password_view, password_change_view, portal_login_view, portal_logout_view
-from apps.core.views import custom_404_view
+from apps.core.views import (
+    custom_404_view,
+    landing_about_view,
+    landing_benefits_view,
+    landing_faq_view,
+    landing_home_view,
+    landing_page_view,
+    landing_process_view,
+    landing_roles_view,
+    landing_solutions_view,
+)
 
 from .healthchecks import health, readyz
 
@@ -20,7 +30,14 @@ urlpatterns = [
     path("login/", portal_login_view, name="login"),
     path("logout/", portal_logout_view, name="logout"),
 path("password-change/", password_change_view, name="password_change"),
-    path("accounts/change-password/", change_password_view, name="change_password"),
+    path("accounts/change-password/", change_password_view, name="change_password"),
+    # Public Marketing & Platform Pages (ProcureSphere 360 Django Templates + HTMX)
+    path("about/", landing_about_view, name="landing_about"),
+    path("solutions/", landing_solutions_view, name="landing_solutions"),
+    path("benefits/", landing_benefits_view, name="landing_benefits"),
+    path("process/", landing_process_view, name="landing_process"),
+    path("roles/", landing_roles_view, name="landing_roles"),
+    path("faq/", landing_faq_view, name="landing_faq"),
     # Superadmin, Manager & Vendor Portals
     path("superadmin/", include("apps.core.superadmin_urls")),
     path("manager/", include("apps.core.manager_urls")),

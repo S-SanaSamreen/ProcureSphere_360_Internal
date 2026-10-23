@@ -1,0 +1,39 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f6f8fb" />
+    <meta name="description" content="ProcureSphere 360 connects requests, suppliers, sourcing, purchasing, finance and contracts in one intelligent procurement platform." />
+    <meta name="keywords" content="procurement platform, supplier management, sourcing, purchase orders, invoice matching, contract lifecycle" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="ProcureSphere 360 — Procurement, connected." />
+    <meta property="og:description" content="One connected system for every procurement decision." />
+    <meta property="og:site_name" content="ProcureSphere 360" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="ProcureSphere 360 — Procurement, connected." />
+    <meta name="twitter:description" content="One connected system for every procurement decision." />
+    <link rel="icon" type="image/svg+xml" href="{% static 'landing/procuresphere-mark.svg' %}" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Berkshire+Swash&family=Playball&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,900&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&family=DM+Mono:wght@500;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" crossorigin href="{% static 'landing/assets/index-WfxcyyMy.css' %}">
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <title>{% block title %}ProcureSphere 360 — Procurement, connected.{% endblock %}</title>
+    {% block extra_head %}{% endblock %}
+  </head>
+  <body class="landing-body">
+    {% include "landing/partials/navbar.html" %}
+
+    <main id="main-content" class="landing-main">
+      {% block content %}{% endblock %}
+    </main>
+
+    {% include "landing/partials/footer.html" %}
+    {% include "landing/partials/login_modal.html" %}
+    {% include "landing/partials/legal_modal.html" %}
+    {% include "landing/partials/scripts.html" %}
+    {% block extra_scripts %}{% endblock %}
+  </body>
+</html>

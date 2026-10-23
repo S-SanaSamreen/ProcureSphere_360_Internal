@@ -1,0 +1,82 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>404 Page Not Found — ProcureSphere 360</title>
+    <link rel="icon" type="image/svg+xml" href="{% static 'landing/procuresphere-mark.svg' %}" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&family=Playfair+Display:ital,wght@0,600;0,700;1,400&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" crossorigin href="{% static 'landing/assets/index-WfxcyyMy.css' %}">
+  </head>
+  <body style="margin: 0; padding: 0; background-color: #f6f8fb; overflow-x: hidden;">
+    <div class="notfound-container">
+      <!-- Background Blend -->
+      <div class="notfound-bg-blend" aria-hidden="true"></div>
+
+      <!-- Discrete Brand Link Top-Left -->
+      <a
+        href="/"
+        class="notfound-brand-anchor"
+        aria-label="ProcureSphere 360 Home"
+        style="text-decoration: none;"
+      >
+        <svg viewBox="0 0 32 32" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" style="color: #2456D6;">
+          <circle cx="16" cy="16" r="12" />
+          <ellipse cx="16" cy="16" rx="12" ry="5.5" />
+          <path d="M4.5 16h23" />
+          <path d="M16 4v24" />
+          <circle cx="24.8" cy="11" r="2.1" fill="currentColor" />
+          <circle cx="9.5" cy="21.5" r="2.1" fill="currentColor" />
+        </svg>
+        <span>
+          ProcureSphere<em>360</em>
+        </span>
+      </a>
+
+      <!-- Stage centering the canvas -->
+      <div class="notfound-exact-stage">
+        <div class="notfound-canvas">
+          <!-- Subtle Warm Golden Glow behind cracked 0 -->
+          <div class="notfound-glow-overlay" aria-hidden="true"></div>
+
+          <!-- The Exact Pristine 16:9 Original 3D Illustration -->
+          <img
+            src="{% static 'landing/404-full.webp' %}"
+            alt="404 Page Not Found - Sleek 3D Illustration"
+            class="notfound-exact-img"
+          />
+
+          <!-- Real Live Frontend Elements: Selectable & Copyable Typography -->
+          <h1 class="notfound-copyable-heading">
+            Oops! Page Not Found
+          </h1>
+
+          <p class="notfound-copyable-desc">
+            The page you’re looking for doesn’t exist or has been moved.
+            <br />
+            Let’s get you back on track.
+          </p>
+
+          <!-- Real Interactive Action Buttons (Hotspots mapped 1:1 on the image buttons) -->
+          <a
+            href="/"
+            class="notfound-hotspot-btn notfound-hotspot-home"
+            aria-label="Go to Home"
+            title="Go to Home"
+          ></a>
+
+          <button
+            type="button"
+            onclick="if (window.history.length > 1) { window.history.back(); } else { window.location.href = '/'; }"
+            class="notfound-hotspot-btn notfound-hotspot-back"
+            aria-label="Go Back"
+            title="Go Back"
+          ></button>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

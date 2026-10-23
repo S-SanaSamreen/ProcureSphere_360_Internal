@@ -1,0 +1,179 @@
+{% extends "landing/base.html" %}
+{% load static %}
+
+{% block title %}Roles &amp; Governance — ProcureSphere 360{% endblock %}
+
+{% block content %}
+<section class="page-header" style="text-align: center; padding: 70px 24px 40px; max-width: 1200px; margin: 0 auto;">
+  <div style="display: inline-flex; align-items: center; gap: 8px; padding: 5px 14px; border-radius: 999px; background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 16px; font-family: 'DM Mono', monospace;">
+    <span style="width: 6px; height: 6px; border-radius: 50%; background: #1d4ed8;"></span>
+    ROLES &amp; GOVERNANCE
+  </div>
+  <h1 style="font-family: 'Playfair Display', Georgia, serif; font-size: clamp(32px, 4.5vw, 52px); font-weight: 700; line-height: 1.18; margin: 0 0 16px; color: #0f172a; letter-spacing: -0.02em;">
+    One Platform. Every Stakeholder.
+  </h1>
+  <p style="font-size: 19px; color: #334155; max-width: 820px; margin: 0 auto; line-height: 1.7; font-weight: 500;">
+    One connected system adapts to the decisions each team owns — from requester to procurement, finance, legal, stores, and external suppliers.
+  </p>
+</section>
+
+<div class="page-body-container" style="max-width: 1240px; margin: 0 auto; padding: 0 24px 100px;">
+  <!-- Role Avatar Selector -->
+  <div style="display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 36px;">
+    {% for r in roles_data %}
+    <button
+      type="button"
+      id="roles-page-tab-{{ r.key }}"
+      onclick="selectPageRole('{{ r.key }}')"
+      style="background: {% if forloop.first %}#ffffff{% else %}#f8fafc{% endif %}; border: {% if forloop.first %}2px solid #2563eb{% else %}2px solid #cbd5e1{% endif %}; border-radius: 16px; padding: 12px 20px; cursor: pointer; display: flex; align-items: center; gap: 10px; box-shadow: {% if forloop.first %}0 8px 24px rgba(37, 99, 235, 0.15){% else %}none{% endif %}; transition: all 0.2s;"
+    >
+      <img
+        id="roles-page-avatar-{{ r.key }}"
+        src="{% if forloop.first %}{{ r.avatar_active }}{% else %}{{ r.avatar_idle }}{% endif %}"
+        alt="{{ r.role }}"
+        style="width: 38px; height: 38px; border-radius: 50%; object-fit: cover;"
+      />
+      <span style="font-weight: 700; font-size: 15px; color: #0f172a;">{{ r.role }}</span>
+    </button>
+    {% endfor %}
+  </div>
+
+  <!-- Role Details Card -->
+  <div
+    style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 24px; padding: 42px 36px; box-shadow: 0 20px 48px rgba(15, 27, 45, 0.12); max-width: 860px; margin: 0 auto 60px;"
+  >
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px;">
+      <h3 id="roles-page-title" style="margin: 0; font-family: 'Playfair Display', Georgia, serif; font-size: 28px; color: #0f172a; font-weight: 700;">
+        Requester
+      </h3>
+      <span id="roles-page-scope" style="font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 700; color: #2563eb; background: #eff6ff; padding: 6px 14px; border-radius: 8px;">
+        Department Requisitions
+      </span>
+    </div>
+    <div style="margin-bottom: 20px;">
+      <h4 style="font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; margin-bottom: 8px;">Key Responsibility</h4>
+      <p id="roles-page-resp" style="font-size: 17px; color: #1e293b; line-height: 1.65; margin: 0;">
+        Create and track purchase requisitions for authorized departments within policy guidance and real-time budget visibility.
+      </p>
+    </div>
+    <div>
+      <h4 style="font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; margin-bottom: 8px;">System Guardrail</h4>
+      <p id="roles-page-guard" style="font-size: 16px; color: #475569; line-height: 1.6; margin: 0; background: #f8fafc; border-left: 4px solid #2563eb; padding: 12px 16px; border-radius: 0 8px 8px 0;">
+        Restricted view. Cannot view supplier bid comparisons or modify organizational approval thresholds.
+      </p>
+    </div>
+  </div>
+
+  <!-- All Roles Grid Overview -->
+  <div style="margin-top: 60px;">
+    <h3 style="font-family: 'Playfair Display', serif; font-size: 28px; color: #0f172a; text-align: center; margin-bottom: 32px; font-weight: 700;">
+      Enterprise Responsibility Matrix
+    </h3>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 24px;">
+      {% for r in roles_data %}
+      <div style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 20px; padding: 30px; box-shadow: 0 10px 28px rgba(15, 27, 45, 0.08);">
+        <div style="display: flex; align-items: center; gap: 14px; margin-bottom: 16px;">
+          <img src="{{ r.avatar_active }}" alt="{{ r.role }}" style="width: 46px; height: 46px; border-radius: 50%; object-fit: cover;" />
+          <div>
+            <h4 style="margin: 0; font-size: 20px; color: #0f172a; font-weight: 700;">{{ r.role }}</h4>
+            <span style="font-size: 12.5px; color: #2563eb; font-weight: 600; font-family: 'DM Mono', monospace;">{{ r.scope }}</span>
+          </div>
+        </div>
+        <p style="font-size: 15px; color: #334155; line-height: 1.6; margin: 0 0 14px;">{{ r.resp }}</p>
+        <div style="font-size: 13.5px; color: #64748b; background: #f8fafc; border-left: 3px solid #2563eb; padding: 8px 12px; border-radius: 0 6px 6px 0;">
+          <strong>Guardrail:</strong> {{ r.guard }}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  var rolesPageDetails = {
+    'REQUESTER': {
+      role: 'Requester',
+      scope: 'Department Requisitions',
+      resp: 'Create and track purchase requisitions for authorized departments within policy guidance and real-time budget visibility.',
+      guard: 'Restricted view. Cannot view supplier bid comparisons or modify organizational approval thresholds.',
+      avatarActive: '/static/landing/roles/requester/active.webp',
+      avatarIdle: '/static/landing/roles/requester/idle.webp'
+    },
+    'PROCUREMENT': {
+      role: 'Procurement',
+      scope: 'Sourcing & PO Execution',
+      resp: 'Manage vendor relations, run competitive RFQ events, evaluate supplier bids, negotiate commercial terms, and issue purchase orders.',
+      guard: 'Strict segregation. Cannot bypass budget thresholds or approve unbudgeted contracts unilaterally.',
+      avatarActive: '/static/landing/roles/procurement/active.webp',
+      avatarIdle: '/static/landing/roles/procurement/idle.webp'
+    },
+    'FINANCE': {
+      role: 'Finance',
+      scope: 'Budget & 3-Way Match',
+      resp: 'Review departmental budgets, conduct invoice validation against PO and physical receipt, and resolve exception workflows.',
+      guard: 'Automated lock. Invoices with unmatched quantities or unauthorized variance are blocked from payment.',
+      avatarActive: '/static/landing/roles/finance/active.webp',
+      avatarIdle: '/static/landing/roles/finance/idle.webp'
+    },
+    'LEGAL': {
+      role: 'Legal',
+      scope: 'Contracts & Obligations',
+      resp: 'Oversee master agreements, track version histories, enforce terms, manage obligations, and monitor renewal deadlines.',
+      guard: 'Version locking. Signed contract versions are locked; revisions require an explicit amendment trail.',
+      avatarActive: '/static/landing/roles/legal/active.webp',
+      avatarIdle: '/static/landing/roles/legal/idle.webp'
+    },
+    'STORES': {
+      role: 'Stores',
+      scope: 'Receiving & Inspection',
+      resp: 'Receive shipments, perform itemized quantity and quality inspections, log partial receipts, and record rejections.',
+      guard: 'Inventory gate. Goods cannot enter payable status until inspection is logged.',
+      avatarActive: '/static/landing/roles/stores/active.webp',
+      avatarIdle: '/static/landing/roles/stores/idle.webp'
+    },
+    'VENDOR': {
+      role: 'Vendor',
+      scope: 'Restricted Supplier Portal',
+      resp: 'Complete self-service onboarding, submit KYC documentation, participate in sealed RFPs, and acknowledge purchase orders.',
+      guard: 'Zero competitor access. Blind bidding enforces data segregation between competing suppliers.',
+      avatarActive: '/static/landing/roles/vendor/active.webp',
+      avatarIdle: '/static/landing/roles/vendor/idle.webp'
+    }
+  };
+
+  function selectPageRole(key) {
+    var data = rolesPageDetails[key];
+    if (!data) return;
+
+    Object.keys(rolesPageDetails).forEach(function(k) {
+      var tab = document.getElementById('roles-page-tab-' + k);
+      var avatar = document.getElementById('roles-page-avatar-' + k);
+      if (tab && avatar) {
+        if (k === key) {
+          tab.style.background = '#ffffff';
+          tab.style.border = '2px solid #2563eb';
+          tab.style.boxShadow = '0 8px 24px rgba(37, 99, 235, 0.15)';
+          avatar.src = rolesPageDetails[k].avatarActive;
+        } else {
+          tab.style.background = '#f8fafc';
+          tab.style.border = '2px solid #cbd5e1';
+          tab.style.boxShadow = 'none';
+          avatar.src = rolesPageDetails[k].avatarIdle;
+        }
+      }
+    });
+
+    var rTitle = document.getElementById('roles-page-title');
+    var rScope = document.getElementById('roles-page-scope');
+    var rResp = document.getElementById('roles-page-resp');
+    var rGuard = document.getElementById('roles-page-guard');
+
+    if (rTitle) rTitle.textContent = data.role;
+    if (rScope) rScope.textContent = data.scope;
+    if (rResp) rResp.textContent = data.resp;
+    if (rGuard) rGuard.textContent = data.guard;
+  }
+</script>
+{% endblock %}

@@ -1,0 +1,652 @@
+{% extends "landing/base.html" %}
+{% load static %}
+
+{% block title %}ProcureSphere 360 — Procurement, connected.{% endblock %}
+
+{% block content %}
+<!-- Optional Intro Screen -->
+<div id="intro-screen" class="intro-screen" style="display: none;">
+  <video
+    id="intro-video"
+    src="{% static 'landing/videos/intro.mp4' %}"
+    muted
+    playsinline
+    preload="auto"
+    class="intro-video"
+  ></video>
+</div>
+
+<!-- HERO SECTION -->
+<section id="top" class="hero-section" style="position: relative; padding: clamp(40px, 8vh, 90px) 24px clamp(50px, 10vh, 100px); max-width: 1400px; margin: 0 auto; text-align: center;">
+  <div style="display: inline-flex; align-items: center; gap: 8px; padding: 6px 16px; border-radius: 999px; background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 20px; font-family: 'DM Mono', monospace;">
+    <span style="width: 8px; height: 8px; border-radius: 50%; background: #1d4ed8;"></span>
+    ENTERPRISE SOURCE-TO-PAY PLATFORM
+  </div>
+
+  <h1 style="font-family: 'Playfair Display', Georgia, serif; font-size: clamp(34px, 5.2vw, 68px); line-height: 1.15; font-weight: 700; color: #0f172a; margin: 0 auto 24px; max-width: 1100px; letter-spacing: -0.02em;">
+    Procurement, connected from <br class="hero-br" />
+    <span style="color: #2456D6;">intake to invoice settlement.</span>
+  </h1>
+
+  <p style="font-size: clamp(17px, 2vw, 21px); color: #334155; line-height: 1.65; max-width: 820px; margin: 0 auto 36px; font-weight: 500;">
+    ProcureSphere 360 unifies requisitions, sealed RFx sourcing, automated purchase orders, receiving inspection, and 3-way invoice matching in one audit-ready ERP.
+  </p>
+
+  <div style="display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; margin-bottom: 50px;">
+    <a href="/#contact" class="navarino-blue-btn" style="padding: 14px 32px; font-size: 15px;">
+      Request a Demo
+    </a>
+    <a href="/solutions/" class="button button-secondary" style="padding: 14px 28px; font-size: 15px; border-radius: 999px; border: 1.5px solid #cbd5e1; background: #ffffff; color: #0f172a; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 8px;">
+      <span>Explore Solutions</span>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="5" y1="12" x2="19" y2="12"></line>
+        <polyline points="12 5 19 12 12 19"></polyline>
+      </svg>
+    </a>
+  </div>
+
+  <!-- Hero Video Showcase Card -->
+  <div class="hero-showcase-wrapper" style="position: relative; max-width: 1200px; margin: 0 auto; border-radius: 28px; overflow: hidden; box-shadow: 0 30px 80px rgba(15, 27, 45, 0.2), 0 8px 24px rgba(15, 27, 45, 0.1); border: 2px solid #cbd5e1;">
+    <video
+      autoplay
+      loop
+      muted
+      playsinline
+      class="hero-video"
+      style="width: 100%; height: auto; display: block; object-fit: cover; aspect-ratio: 16 / 9;"
+    >
+      <source src="{% static 'landing/hero-video-matched.mp4' %}" type="video/mp4" />
+    </video>
+  </div>
+</section>
+
+<!-- ABOUT PLATFORM / CINEMATIC STATS SECTION -->
+<section id="about" class="about-platform-section" style="position: relative; padding: clamp(44px, 5.5vh, 68px) 0; max-width: 1440px; margin: 0 auto; width: 100%; box-sizing: border-box;">
+  <div style="padding: 0 clamp(24px, 4vw, 56px); margin-bottom: 22px;">
+    <div style="display: inline-flex; align-items: center; gap: 8px; padding: 5px 14px; border-radius: 999px; background: #eff6ff; color: #1d68f6; border: 1px solid #dbeafe; font-size: 11.5px; font-weight: 750; letter-spacing: 0.08em; margin-bottom: 10px; text-transform: uppercase;">
+      <span style="width: 7px; height: 7px; border-radius: 50%; background: #1d68f6;"></span>
+      ABOUT PLATFORM
+    </div>
+    <h2 style="display: flex; flex-wrap: wrap; gap: 0 8px; font-family: 'Playfair Display', Georgia, serif; font-size: clamp(26px, 2.8vw, 38px); line-height: 1.2; margin-top: 0; margin-bottom: 8px; color: #0F1B2D; font-weight: 700;">
+      Replacing chaos with a controlled <span class="highlight-underline">source-to-pay</span> workflow.
+    </h2>
+    <p style="font-size: 15px; color: '#334155'; line-height: 1.55; margin: 0; max-width: 780px; font-weight: 500;">
+      ProcureSphere 360 eliminates disconnected emails, spreadsheets, and manual approvals, bringing total traceability to every transaction across your enterprise.
+    </p>
+  </div>
+
+  <div style="display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(380px, 0.95fr); gap: clamp(24px, 3vw, 40px); align-items: stretch; padding: 0 clamp(24px, 4vw, 56px);" class="about-grid-2col">
+    <!-- Left Column: 4 Interactive Cards -->
+    <div style="display: flex; flex-direction: column;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; font-size: 13px; color: #475569; font-weight: 650;">
+        <span>Select or hover on any module below:</span>
+        <span id="selected-module-cue" style="color: #0052cc; font-weight: 750;">Purchase &amp; Approvals selected →</span>
+      </div>
+
+      <div class="cinematic-cards-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+        <!-- Card 1 -->
+        <div
+          class="uiverse-card card-theme-1 is-active"
+          id="stat-card-1"
+          onmouseenter="selectPlatformModule(1)"
+          onclick="selectPlatformModule(1)"
+          role="button"
+          tabindex="0"
+          style="cursor: pointer; height: 178px; min-height: 178px; border-radius: 16px; outline: 3.5px solid #00d2ff; outline-offset: 2px; transform: scale(1.025); box-shadow: 0 22px 48px -8px rgba(0, 82, 204, 0.4), 0 8px 22px rgba(15, 27, 45, 0.22); transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);"
+        >
+          <div class="title" style="font-size: 1.3rem; top: 50%; font-weight: 800; color: #ffffff;">Purchase &amp; Approvals</div>
+          <div class="box box1">
+            <div class="content" style="padding: 1rem;">
+              <span class="box-title" style="font-size: 1.1rem; margin-bottom: 6px;">Purchase &amp; Approvals</span>
+              <span class="box-text" style="font-size: 0.85rem; line-height: 1.4;">Automated requisition intake and multi-tier approval routing.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 2 -->
+        <div
+          class="uiverse-card card-theme-2"
+          id="stat-card-2"
+          onmouseenter="selectPlatformModule(2)"
+          onclick="selectPlatformModule(2)"
+          role="button"
+          tabindex="0"
+          style="cursor: pointer; height: 178px; min-height: 178px; border-radius: 16px; outline: 1.5px solid rgba(15, 27, 45, 0.12); outline-offset: 2px; box-shadow: 0 12px 30px -6px rgba(15, 27, 45, 0.24); transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);"
+        >
+          <div class="title" style="font-size: 1.3rem; top: 50%; font-weight: 800; color: #ffffff;">Sourcing &amp; Vendors</div>
+          <div class="box box1">
+            <div class="content" style="padding: 1rem;">
+              <span class="box-title" style="font-size: 1.1rem; margin-bottom: 6px;">Sourcing &amp; Vendors</span>
+              <span class="box-text" style="font-size: 0.85rem; line-height: 1.4;">Supplier onboarding, sealed RFQ bidding, and proposal scoring.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 3 -->
+        <div
+          class="uiverse-card card-theme-3"
+          id="stat-card-3"
+          onmouseenter="selectPlatformModule(3)"
+          onclick="selectPlatformModule(3)"
+          role="button"
+          tabindex="0"
+          style="cursor: pointer; height: 178px; min-height: 178px; border-radius: 16px; outline: 1.5px solid rgba(15, 27, 45, 0.12); outline-offset: 2px; box-shadow: 0 12px 30px -6px rgba(15, 27, 45, 0.24); transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);"
+        >
+          <div class="title" style="font-size: 1.3rem; top: 50%; font-weight: 800; color: #ffffff;">Orders &amp; Invoicing</div>
+          <div class="box box1">
+            <div class="content" style="padding: 1rem;">
+              <span class="box-title" style="font-size: 1.1rem; margin-bottom: 6px;">Orders &amp; Invoicing</span>
+              <span class="box-text" style="font-size: 0.85rem; line-height: 1.4;">PO dispatch, warehouse receiving, and touchless invoice matching.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 4 -->
+        <div
+          class="uiverse-card card-theme-4"
+          id="stat-card-4"
+          onmouseenter="selectPlatformModule(4)"
+          onclick="selectPlatformModule(4)"
+          role="button"
+          tabindex="0"
+          style="cursor: pointer; height: 178px; min-height: 178px; border-radius: 16px; outline: 1.5px solid rgba(15, 27, 45, 0.12); outline-offset: 2px; box-shadow: 0 12px 30px -6px rgba(15, 27, 45, 0.24); transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);"
+        >
+          <div class="title" style="font-size: 1.3rem; top: 50%; font-weight: 800; color: #ffffff;">Contracts &amp; Compliance</div>
+          <div class="box box1">
+            <div class="content" style="padding: 1rem;">
+              <span class="box-title" style="font-size: 1.1rem; margin-bottom: 6px;">Contracts &amp; Compliance</span>
+              <span class="box-text" style="font-size: 0.85rem; line-height: 1.4;">Centralized contract vault, SLA milestones, and renewal alerts.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Column: Meaningful Details Panel -->
+    <div
+      style="position: relative; width: 100%; height: 100%; min-height: 372px; border-radius: 18px; overflow: hidden; background: #ffffff; border: 2px solid #94a3b8; box-shadow: 0 24px 60px -12px rgba(15, 27, 45, 0.22); display: flex; flex-direction: column; box-sizing: border-box;"
+    >
+      <div id="panel-stripe" style="height: 5px; width: 100%; background: linear-gradient(90deg, #0052cc, #00d2ff);"></div>
+
+      <div style="padding: 22px 26px; display: flex; flex-direction: column; justify-content: space-between; height: 100%; box-sizing: border-box;">
+        <div>
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+            <h3 id="panel-title" style="margin: 0; font-size: 25px; font-weight: 800; font-family: 'Playfair Display', Georgia, serif; color: #0F1B2D;">
+              Purchase &amp; Approvals
+            </h3>
+            <span id="panel-tag" style="font-size: 11.5px; font-weight: 750; color: #0052cc; background: #0052cc18; padding: 5px 11px; border-radius: 6px; font-family: 'DM Mono', monospace; letter-spacing: 0.04em;">
+              ENTERPRISE CAPABILITY
+            </span>
+          </div>
+
+          <p id="panel-summary" style="margin: 0 0 16px 0; font-size: 16px; color: #0F1B2D; line-height: 1.55; font-weight: 600;">
+            Streamline purchase requests with automated approval hierarchies and live budget verification.
+          </p>
+
+          <div id="panel-points" style="display: flex; flex-direction: column; gap: 11px;">
+            <!-- Points inserted by JavaScript -->
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- BENEFITS SECTION -->
+<section id="benefits" style="padding: 80px 24px; background: #f8fafc; border-top: 1px solid #e2e8f0;">
+  <div style="max-width: 1240px; margin: 0 auto; text-align: center; margin-bottom: 48px;">
+    <span style="font-size: 13px; font-weight: 800; color: #2563eb; letter-spacing: 0.12em; text-transform: uppercase; font-family: 'DM Mono', monospace;">
+      BUILT FOR CONTROL
+    </span>
+    <h2 style="font-family: 'Playfair Display', Georgia, serif; font-size: clamp(28px, 4vw, 42px); color: #0f172a; margin: 12px 0 16px; font-weight: 700;">
+      Core Enterprise Capabilities
+    </h2>
+    <p style="font-size: 18px; color: #475569; max-width: 720px; margin: 0 auto; line-height: 1.6;">
+      Engineered from the ground up to enforce strict separation of duties, real-time budget guards, and complete lifecycle auditability.
+    </p>
+  </div>
+
+  <div style="max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 28px;">
+    <!-- Benefit Card 1 -->
+    <div style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 20px; padding: 36px 30px; box-shadow: 0 12px 32px rgba(15, 27, 45, 0.08);">
+      <div style="width: 44px; height: 44px; border-radius: 12px; background: #eff6ff; color: #2563eb; display: flex; align-items: center; justify-content: center; margin-bottom: 20px;">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
+      </div>
+      <h3 style="font-family: 'Playfair Display', Georgia, serif; font-size: 22px; color: #0f172a; margin: 0 0 12px; font-weight: 700;">Traceable Workflows</h3>
+      <p style="font-size: 16px; color: #475569; line-height: 1.65; margin: 0;">No more approvals lost in email. Every requisition, bid, purchase order, and invoice is strictly traceable to its state and timestamp.</p>
+    </div>
+
+    <!-- Benefit Card 2 -->
+    <div style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 20px; padding: 36px 30px; box-shadow: 0 12px 32px rgba(15, 27, 45, 0.08);">
+      <div style="width: 44px; height: 44px; border-radius: 12px; background: #ecfdf5; color: #059669; display: flex; align-items: center; justify-content: center; margin-bottom: 20px;">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+      </div>
+      <h3 style="font-family: 'Playfair Display', Georgia, serif; font-size: 22px; color: #0f172a; margin: 0 0 12px; font-weight: 700;">Zero Silent Overspend</h3>
+      <p style="font-size: 16px; color: #475569; line-height: 1.65; margin: 0;">Real-time budget validation distinguishes available, reserved, and actual spend. Exceptions require an explicit, documented route.</p>
+    </div>
+
+    <!-- Benefit Card 3 -->
+    <div style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 20px; padding: 36px 30px; box-shadow: 0 12px 32px rgba(15, 27, 45, 0.08);">
+      <div style="width: 44px; height: 44px; border-radius: 12px; background: #fffbeb; color: #d97706; display: flex; align-items: center; justify-content: center; margin-bottom: 20px;">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+      </div>
+      <h3 style="font-family: 'Playfair Display', Georgia, serif; font-size: 22px; color: #0f172a; margin: 0 0 12px; font-weight: 700;">Supplier Governance</h3>
+      <p style="font-size: 16px; color: #475569; line-height: 1.65; margin: 0;">Vendor onboarding, KYC, and risk management with built-in due-diligence. Keep supplier identity and performance in constant view.</p>
+    </div>
+
+    <!-- Benefit Card 4 -->
+    <div style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 20px; padding: 36px 30px; box-shadow: 0 12px 32px rgba(15, 27, 45, 0.08);">
+      <div style="width: 44px; height: 44px; border-radius: 12px; background: #f5f3ff; color: #7c3aed; display: flex; align-items: center; justify-content: center; margin-bottom: 20px;">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /><path d="M16 13H8" /><path d="M16 17H8" /></svg>
+      </div>
+      <h3 style="font-family: 'Playfair Display', Georgia, serif; font-size: 22px; color: #0f172a; margin: 0 0 12px; font-weight: 700;">Three-Way Match Precision</h3>
+      <p style="font-size: 16px; color: #475569; line-height: 1.65; margin: 0;">Automated validation comparing PO, receipt, and invoice. Configurable tolerances ensure accurate payment and clear exception workflows.</p>
+    </div>
+
+    <!-- Benefit Card 5 -->
+    <div style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 20px; padding: 36px 30px; box-shadow: 0 12px 32px rgba(15, 27, 45, 0.08);">
+      <div style="width: 44px; height: 44px; border-radius: 12px; background: #fdf2f8; color: #db2777; display: flex; align-items: center; justify-content: center; margin-bottom: 20px;">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
+      </div>
+      <h3 style="font-family: 'Playfair Display', Georgia, serif; font-size: 22px; color: #0f172a; margin: 0 0 12px; font-weight: 700;">Contract Lifecycle Control</h3>
+      <p style="font-size: 16px; color: #475569; line-height: 1.65; margin: 0;">Never miss a renewal deadline. Keep obligations, SLAs, and version histories organized with automated expiry alerts.</p>
+    </div>
+
+    <!-- Benefit Card 6 -->
+    <div style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 20px; padding: 36px 30px; box-shadow: 0 12px 32px rgba(15, 27, 45, 0.08);">
+      <div style="width: 44px; height: 44px; border-radius: 12px; background: #ecfeff; color: #0891b2; display: flex; align-items: center; justify-content: center; margin-bottom: 20px;">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><circle cx="12" cy="11" r="3" /></svg>
+      </div>
+      <h3 style="font-family: 'Playfair Display', Georgia, serif; font-size: 22px; color: #0f172a; margin: 0 0 12px; font-weight: 700;">Traceable Audit Trails</h3>
+      <p style="font-size: 16px; color: #475569; line-height: 1.65; margin: 0;">Every critical action captures the actor, state change, and timestamp, providing structured event reporting for audit readiness.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ROLES SECTION -->
+<section id="roles" style="padding: 90px 24px; max-width: 1240px; margin: 0 auto;">
+  <div style="text-align: center; margin-bottom: 40px;">
+    <span style="font-size: 13px; font-weight: 800; color: #2563eb; letter-spacing: 0.12em; text-transform: uppercase; font-family: 'DM Mono', monospace;">
+      ROLES &amp; GOVERNANCE
+    </span>
+    <h2 style="font-family: 'Playfair Display', Georgia, serif; font-size: clamp(28px, 4vw, 42px); color: #0f172a; margin: 12px 0 16px; font-weight: 700;">
+      One Platform. Every Stakeholder.
+    </h2>
+    <p style="font-size: 18px; color: #475569; max-width: 720px; margin: 0 auto; line-height: 1.6;">
+      Custom tailored dashboards adapt to the specific responsibilities of each enterprise role.
+    </p>
+  </div>
+
+  <!-- Role Avatar Selector -->
+  <div style="display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 36px;">
+    {% for r in roles_data %}
+    <button
+      type="button"
+      id="role-tab-{{ r.key }}"
+      onclick="selectRole('{{ r.key }}')"
+      style="background: {% if forloop.first %}#ffffff{% else %}#f8fafc{% endif %}; border: {% if forloop.first %}2px solid #2563eb{% else %}2px solid #cbd5e1{% endif %}; border-radius: 16px; padding: 12px 20px; cursor: pointer; display: flex; align-items: center; gap: 10px; box-shadow: {% if forloop.first %}0 8px 24px rgba(37, 99, 235, 0.15){% else %}none{% endif %}; transition: all 0.2s;"
+    >
+      <img
+        id="role-avatar-{{ r.key }}"
+        src="{% if forloop.first %}{{ r.avatar_active }}{% else %}{{ r.avatar_idle }}{% endif %}"
+        alt="{{ r.role }}"
+        style="width: 38px; height: 38px; border-radius: 50%; object-fit: cover;"
+      />
+      <span style="font-weight: 700; font-size: 15px; color: #0f172a;">{{ r.role }}</span>
+    </button>
+    {% endfor %}
+  </div>
+
+  <!-- Role Details Card -->
+  <div
+    id="role-details-card"
+    style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 24px; padding: 42px 36px; box-shadow: 0 20px 48px rgba(15, 27, 45, 0.12); max-width: 860px; margin: 0 auto;"
+  >
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px;">
+      <h3 id="role-title" style="margin: 0; font-family: 'Playfair Display', Georgia, serif; font-size: 28px; color: #0f172a; font-weight: 700;">
+        Requester
+      </h3>
+      <span id="role-scope" style="font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 700; color: #2563eb; background: #eff6ff; padding: 6px 14px; border-radius: 8px;">
+        Department Requisitions
+      </span>
+    </div>
+    <div style="margin-bottom: 20px;">
+      <h4 style="font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; margin-bottom: 8px;">Key Responsibility</h4>
+      <p id="role-resp" style="font-size: 17px; color: #1e293b; line-height: 1.65; margin: 0;">
+        Create and track purchase requisitions for authorized departments within policy guidance and real-time budget visibility.
+      </p>
+    </div>
+    <div>
+      <h4 style="font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; margin-bottom: 8px;">System Guardrail</h4>
+      <p id="role-guard" style="font-size: 16px; color: #475569; line-height: 1.6; margin: 0; background: #f8fafc; border-left: 4px solid #2563eb; padding: 12px 16px; border-radius: 0 8px 8px 0;">
+        Restricted view. Cannot view supplier bid comparisons or modify organizational approval thresholds.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- FAQ ACCORDION SECTION -->
+<section id="faq" style="padding: 80px 24px; background: #f8fafc; border-top: 1px solid #e2e8f0;">
+  <div style="max-width: 860px; margin: 0 auto; text-align: center; margin-bottom: 40px;">
+    <span style="font-size: 13px; font-weight: 800; color: #2563eb; letter-spacing: 0.12em; text-transform: uppercase; font-family: 'DM Mono', monospace;">
+      CLARITY &amp; GOVERNANCE
+    </span>
+    <h2 style="font-family: 'Playfair Display', Georgia, serif; font-size: clamp(28px, 4vw, 40px); color: #0f172a; margin: 12px 0 16px; font-weight: 700;">
+      Frequently Asked Questions
+    </h2>
+  </div>
+
+  <div style="max-width: 820px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px;">
+    <!-- FAQ Item 1 -->
+    <div class="faq-accordion-card" style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 18px; overflow: hidden; box-shadow: 0 10px 28px rgba(15, 27, 45, 0.08);">
+      <button type="button" onclick="toggleFaq(1)" style="width: 100%; padding: 24px 32px; display: flex; justify-content: space-between; align-items: center; background: transparent; border: none; cursor: pointer; text-align: left; color: #0f1b2d; font-size: 18px; font-weight: 600;">
+        <span>What does ProcureSphere 360 connect?</span>
+        <span id="faq-icon-1" style="font-size: 22px; color: #2563eb; font-weight: 700;">+</span>
+      </button>
+      <div id="faq-answer-1" style="display: none; padding: 0 32px 28px; color: #475569; font-size: 17px; line-height: 1.7;">
+        Requests, approvals, suppliers, sourcing, purchase orders, receipts, invoices, contracts, finance and governance in one connected workflow.
+      </div>
+    </div>
+
+    <!-- FAQ Item 2 -->
+    <div class="faq-accordion-card" style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 18px; overflow: hidden; box-shadow: 0 10px 28px rgba(15, 27, 45, 0.08);">
+      <button type="button" onclick="toggleFaq(2)" style="width: 100%; padding: 24px 32px; display: flex; justify-content: space-between; align-items: center; background: transparent; border: none; cursor: pointer; text-align: left; color: #0f1b2d; font-size: 18px; font-weight: 600;">
+        <span>Can vendors participate in the workflow?</span>
+        <span id="faq-icon-2" style="font-size: 22px; color: #2563eb; font-weight: 700;">+</span>
+      </button>
+      <div id="faq-answer-2" style="display: none; padding: 0 32px 28px; color: #475569; font-size: 17px; line-height: 1.7;">
+        Yes. The Vendor workspace brings onboarding, bids, and purchase-order acknowledgement into the same connected experience, creating a seamless bridge between you and your suppliers.
+      </div>
+    </div>
+
+    <!-- FAQ Item 3 -->
+    <div class="faq-accordion-card" style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 18px; overflow: hidden; box-shadow: 0 10px 28px rgba(15, 27, 45, 0.08);">
+      <button type="button" onclick="toggleFaq(3)" style="width: 100%; padding: 24px 32px; display: flex; justify-content: space-between; align-items: center; background: transparent; border: none; cursor: pointer; text-align: left; color: #0f1b2d; font-size: 18px; font-weight: 600;">
+        <span>How does the approval policy engine work?</span>
+        <span id="faq-icon-3" style="font-size: 22px; color: #2563eb; font-weight: 700;">+</span>
+      </button>
+      <div id="faq-answer-3" style="display: none; padding: 0 32px 28px; color: #475569; font-size: 17px; line-height: 1.7;">
+        It routes decisions automatically based on custom rules like department, budget thresholds, or risk categories, ensuring the right owner reviews the request at the exact right time.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CONTACT / REQUEST A DEMO SECTION -->
+<section id="contact" style="padding: 90px 24px; max-width: 900px; margin: 0 auto;">
+  <div style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 26px; padding: 48px 40px; box-shadow: 0 24px 60px rgba(15, 27, 45, 0.12);">
+    <div style="text-align: center; margin-bottom: 32px;">
+      <span style="font-size: 12px; font-weight: 800; color: #2563eb; letter-spacing: 0.12em; text-transform: uppercase; font-family: 'DM Mono', monospace;">
+        GET IN TOUCH
+      </span>
+      <h2 style="font-family: 'Playfair Display', Georgia, serif; font-size: 32px; color: #0f172a; margin: 10px 0 8px; font-weight: 700;">
+        Request an Enterprise Walkthrough
+      </h2>
+      <p style="color: #64748b; font-size: 16px; margin: 0;">
+        Experience how ProcureSphere 360 brings clarity and governance to your procurement operations.
+      </p>
+    </div>
+
+    <form id="contact-form" onsubmit="handleContactSubmit(event)" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+      <div>
+        <label style="display: block; font-size: 13px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">Full Name *</label>
+        <input type="text" required placeholder="Jane Doe" style="width: 100%; height: 46px; border: 1px solid #cbd5e1; border-radius: 10px; padding: 0 16px; font-size: 15px; box-sizing: border-box;" />
+      </div>
+      <div>
+        <label style="display: block; font-size: 13px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">Corporate Email *</label>
+        <input type="email" required placeholder="jane.doe@enterprise.com" style="width: 100%; height: 46px; border: 1px solid #cbd5e1; border-radius: 10px; padding: 0 16px; font-size: 15px; box-sizing: border-box;" />
+      </div>
+      <div>
+        <label style="display: block; font-size: 13px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">Organization Name *</label>
+        <input type="text" required placeholder="Acme Global Inc." style="width: 100%; height: 46px; border: 1px solid #cbd5e1; border-radius: 10px; padding: 0 16px; font-size: 15px; box-sizing: border-box;" />
+      </div>
+      <div>
+        <label style="display: block; font-size: 13px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">Primary Focus Area</label>
+        <select style="width: 100%; height: 46px; border: 1px solid #cbd5e1; border-radius: 10px; padding: 0 16px; font-size: 15px; box-sizing: border-box; background: #fff;">
+          <option>Source-to-Pay End-to-End</option>
+          <option>Requisitions &amp; Budget Controls</option>
+          <option>Strategic Sourcing &amp; Sealed Bids</option>
+          <option>3-Way Invoice Matching</option>
+          <option>Contract Lifecycle Management</option>
+        </select>
+      </div>
+      <div style="grid-column: 1 / -1;">
+        <label style="display: block; font-size: 13px; font-weight: 600; color: #0f172a; margin-bottom: 6px;">Operational Note / Requirements</label>
+        <textarea rows="3" placeholder="Tell us about your procurement challenges or current ERP setup..." style="width: 100%; border: 1px solid #cbd5e1; border-radius: 10px; padding: 12px 16px; font-size: 15px; box-sizing: border-box;"></textarea>
+      </div>
+      <div style="grid-column: 1 / -1; text-align: center; margin-top: 10px;">
+        <button type="submit" class="navarino-blue-btn" style="width: 100%; max-width: 280px; padding: 14px; font-size: 15px;">
+          Submit Request
+        </button>
+      </div>
+    </form>
+    <div id="contact-success" style="display: none; margin-top: 20px; padding: 16px; border-radius: 10px; background: #ecfdf5; border: 1px solid #10b981; color: #065f46; text-align: center; font-weight: 600;">
+      Thank you! Your inquiry has been received. Our enterprise architecture team will contact you shortly.
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  // Data for 4 Interactive Cards
+  var platformModules = {
+    1: {
+      name: 'Purchase & Approvals',
+      themeColor: '#0052cc',
+      accentLight: '#00d2ff',
+      summary: 'Streamline purchase requests with automated approval hierarchies and live budget verification.',
+      points: [
+        { title: 'Smart Purchase Requisitions', desc: 'Dynamic forms automatically validate cost centers, project codes, and line-item requirements.' },
+        { title: 'Automated Approval Matrix', desc: 'Intelligently routes requests to department heads and finance managers based on spend thresholds.' },
+        { title: 'Real-Time Budget Validation', desc: 'Verifies fund availability instantly before purchase commitments are locked, preventing overspend.' }
+      ]
+    },
+    2: {
+      name: 'Sourcing & Vendors',
+      themeColor: '#6554c0',
+      accentLight: '#907cfc',
+      summary: 'Centralize supplier management, request for quotations (RFQs), and competitive bid evaluation.',
+      points: [
+        { title: 'Supplier Self-Service Portal', desc: 'Vendors easily register, maintain profiles, upload documentation, and submit quote proposals.' },
+        { title: 'Structured RFQ & Sourcing Events', desc: 'Publish requirement sheets to invited suppliers and collect comparable quotes within set deadlines.' },
+        { title: 'Comparative Proposal Evaluation', desc: 'Evaluate commercial terms, technical ratings, and vendor delivery track records side-by-side.' }
+      ]
+    },
+    3: {
+      name: 'Orders & Invoicing',
+      themeColor: '#172b4d',
+      accentLight: '#60a5fa',
+      summary: 'Dispatch official purchase orders and reconcile warehouse receiving notes against supplier invoices.',
+      points: [
+        { title: 'Purchase Order Execution', desc: 'Converts approved requisitions into official POs dispatched directly to suppliers with version tracking.' },
+        { title: 'Warehouse Goods Receipt (GRN)', desc: 'Receiving docks record delivered items, inspect quality, and flag partial shipments accurately.' },
+        { title: 'Automated 3-Way Match', desc: 'Cross-verifies PO line items, receiving notes, and vendor invoices to prevent duplicate payments.' }
+      ]
+    },
+    4: {
+      name: 'Contracts & Compliance',
+      themeColor: '#ff5630',
+      accentLight: '#ff8f73',
+      summary: 'Maintain a centralized agreement repository with milestone deliverables and proactive renewal alerts.',
+      points: [
+        { title: 'Centralized Contract Vault', desc: 'Single secure repository for master service agreements, vendor rate sheets, and contractual terms.' },
+        { title: 'Milestone & Obligation Tracking', desc: 'Tracks key vendor deliverables against contract milestones and release schedules.' },
+        { title: 'Proactive Renewal Notifications', desc: 'Automated advance reminders prevent unexpected contract expirations and facilitate timely renegotiation.' }
+      ]
+    }
+  };
+
+  function selectPlatformModule(id) {
+    var mod = platformModules[id];
+    if (!mod) return;
+
+    for (var i = 1; i <= 4; i++) {
+      var card = document.getElementById('stat-card-' + i);
+      if (card) {
+        if (i === id) {
+          card.classList.add('is-active');
+          card.style.outline = '3.5px solid ' + mod.accentLight;
+          card.style.transform = 'scale(1.025)';
+          card.style.boxShadow = '0 22px 48px -8px ' + mod.themeColor + '66, 0 8px 22px rgba(15, 27, 45, 0.22)';
+        } else {
+          card.classList.remove('is-active');
+          card.style.outline = '1.5px solid rgba(15, 27, 45, 0.12)';
+          card.style.transform = 'none';
+          card.style.boxShadow = '0 12px 30px -6px rgba(15, 27, 45, 0.24)';
+        }
+      }
+    }
+
+    var cue = document.getElementById('selected-module-cue');
+    if (cue) {
+      cue.textContent = mod.name + ' selected →';
+      cue.style.color = mod.themeColor;
+    }
+
+    var stripe = document.getElementById('panel-stripe');
+    if (stripe) stripe.style.background = 'linear-gradient(90deg, ' + mod.themeColor + ', ' + mod.accentLight + ')';
+
+    var title = document.getElementById('panel-title');
+    if (title) title.textContent = mod.name;
+
+    var tag = document.getElementById('panel-tag');
+    if (tag) {
+      tag.style.color = mod.themeColor;
+      tag.style.background = mod.themeColor + '18';
+    }
+
+    var summary = document.getElementById('panel-summary');
+    if (summary) summary.textContent = mod.summary;
+
+    var pointsContainer = document.getElementById('panel-points');
+    if (pointsContainer) {
+      pointsContainer.innerHTML = '';
+      mod.points.forEach(function(pt) {
+        var row = document.createElement('div');
+        row.style.display = 'flex';
+        row.style.alignItems = 'flex-start';
+        row.style.gap = '14px';
+        row.style.padding = '12px 16px';
+        row.style.borderRadius = '12px';
+        row.style.background = '#f8fafc';
+        row.style.border = '1.5px solid #cbd5e1';
+        row.innerHTML = '<div style="width: 28px; height: 28px; border-radius: 6px; background: ' + mod.themeColor + '20; color: ' + mod.themeColor + '; display: flex; align-items: center; justify-content: center; font-weight: bold; flex-shrink: 0; margin-top: 2px;">✓</div><div style="display: flex; flex-direction: column;"><span style="font-size: 16px; font-weight: 800; color: #0a101d;">' + pt.title + '</span><span style="font-size: 14px; color: #1e293b; line-height: 1.5; margin-top: 3px;">' + pt.desc + '</span></div>';
+        pointsContainer.appendChild(row);
+      });
+    }
+  }
+
+  // Initialize Module Panel
+  selectPlatformModule(1);
+
+  // Role Tab Switching Data
+  var rolesDetails = {
+    'REQUESTER': {
+      role: 'Requester',
+      scope: 'Department Requisitions',
+      resp: 'Create and track purchase requisitions for authorized departments within policy guidance and real-time budget visibility.',
+      guard: 'Restricted view. Cannot view supplier bid comparisons or modify organizational approval thresholds.',
+      avatarActive: '/static/landing/roles/requester/active.webp',
+      avatarIdle: '/static/landing/roles/requester/idle.webp'
+    },
+    'PROCUREMENT': {
+      role: 'Procurement',
+      scope: 'Sourcing & PO Execution',
+      resp: 'Manage vendor relations, run competitive RFQ events, evaluate supplier bids, negotiate commercial terms, and issue purchase orders.',
+      guard: 'Strict segregation. Cannot bypass budget thresholds or approve unbudgeted contracts unilaterally.',
+      avatarActive: '/static/landing/roles/procurement/active.webp',
+      avatarIdle: '/static/landing/roles/procurement/idle.webp'
+    },
+    'FINANCE': {
+      role: 'Finance',
+      scope: 'Budget & 3-Way Match',
+      resp: 'Review departmental budgets, conduct invoice validation against PO and physical receipt, and resolve exception workflows.',
+      guard: 'Automated lock. Invoices with unmatched quantities or unauthorized variance are blocked from payment.',
+      avatarActive: '/static/landing/roles/finance/active.webp',
+      avatarIdle: '/static/landing/roles/finance/idle.webp'
+    },
+    'LEGAL': {
+      role: 'Legal',
+      scope: 'Contracts & Obligations',
+      resp: 'Oversee master agreements, track version histories, enforce terms, manage obligations, and monitor renewal deadlines.',
+      guard: 'Version locking. Signed contract versions are locked; revisions require an explicit amendment trail.',
+      avatarActive: '/static/landing/roles/legal/active.webp',
+      avatarIdle: '/static/landing/roles/legal/idle.webp'
+    },
+    'STORES': {
+      role: 'Stores',
+      scope: 'Receiving & Inspection',
+      resp: 'Receive shipments, perform itemized quantity and quality inspections, log partial receipts, and record rejections.',
+      guard: 'Inventory gate. Goods cannot enter payable status until inspection is logged.',
+      avatarActive: '/static/landing/roles/stores/active.webp',
+      avatarIdle: '/static/landing/roles/stores/idle.webp'
+    },
+    'VENDOR': {
+      role: 'Vendor',
+      scope: 'Restricted Supplier Portal',
+      resp: 'Complete self-service onboarding, submit KYC documentation, participate in sealed RFPs, and acknowledge purchase orders.',
+      guard: 'Zero competitor access. Blind bidding enforces data segregation between competing suppliers.',
+      avatarActive: '/static/landing/roles/vendor/active.webp',
+      avatarIdle: '/static/landing/roles/vendor/idle.webp'
+    }
+  };
+
+  function selectRole(key) {
+    var data = rolesDetails[key];
+    if (!data) return;
+
+    Object.keys(rolesDetails).forEach(function(k) {
+      var tab = document.getElementById('role-tab-' + k);
+      var avatar = document.getElementById('role-avatar-' + k);
+      if (tab && avatar) {
+        if (k === key) {
+          tab.style.background = '#ffffff';
+          tab.style.border = '2px solid #2563eb';
+          tab.style.boxShadow = '0 8px 24px rgba(37, 99, 235, 0.15)';
+          avatar.src = rolesDetails[k].avatarActive;
+        } else {
+          tab.style.background = '#f8fafc';
+          tab.style.border = '2px solid #cbd5e1';
+          tab.style.boxShadow = 'none';
+          avatar.src = rolesDetails[k].avatarIdle;
+        }
+      }
+    });
+
+    var rTitle = document.getElementById('role-title');
+    var rScope = document.getElementById('role-scope');
+    var rResp = document.getElementById('role-resp');
+    var rGuard = document.getElementById('role-guard');
+
+    if (rTitle) rTitle.textContent = data.role;
+    if (rScope) rScope.textContent = data.scope;
+    if (rResp) rResp.textContent = data.resp;
+    if (rGuard) rGuard.textContent = data.guard;
+  }
+
+  // FAQ Accordion Toggle
+  function toggleFaq(num) {
+    var ans = document.getElementById('faq-answer-' + num);
+    var icon = document.getElementById('faq-icon-' + num);
+    if (!ans) return;
+
+    if (ans.style.display === 'none' || ans.style.display === '') {
+      ans.style.display = 'block';
+      if (icon) icon.textContent = '−';
+    } else {
+      ans.style.display = 'none';
+      if (icon) icon.textContent = '+';
+    }
+  }
+
+  // Contact Form Submission
+  function handleContactSubmit(e) {
+    e.preventDefault();
+    var form = document.getElementById('contact-form');
+    var success = document.getElementById('contact-success');
+    if (form) form.style.display = 'none';
+    if (success) success.style.display = 'block';
+  }
+</script>
+{% endblock %}

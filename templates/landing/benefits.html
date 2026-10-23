@@ -1,0 +1,105 @@
+{% extends "landing/base.html" %}
+{% load static %}
+
+{% block title %}Benefits — ProcureSphere 360{% endblock %}
+
+{% block content %}
+<section class="page-header" style="text-align: center; padding: 70px 24px 40px; max-width: 1200px; margin: 0 auto;">
+  <div style="display: inline-flex; align-items: center; gap: 8px; padding: 5px 14px; border-radius: 999px; background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 16px; font-family: 'DM Mono', monospace;">
+    <span style="width: 6px; height: 6px; border-radius: 50%; background: #1d4ed8;"></span>
+    ARCHITECTURAL ADVANTAGE
+  </div>
+  <h1 style="font-family: 'Playfair Display', Georgia, serif; font-size: clamp(32px, 4.5vw, 52px); font-weight: 700; line-height: 1.18; margin: 0 0 16px; color: #0f172a; letter-spacing: -0.02em;">
+    Legacy Procurement vs. ProcureSphere 360
+  </h1>
+  <p style="font-size: 19px; color: #334155; max-width: 820px; margin: 0 auto; line-height: 1.7; font-weight: 500;">
+    Why disconnected ERP modules and spreadsheet trackers fail modern global enterprises.
+  </p>
+</section>
+
+<div class="page-body-container" style="max-width: 1240px; margin: 0 auto; padding: 0 24px 100px;">
+  <!-- Comparison Table Card -->
+  <div
+    class="benefits-table-wrapper"
+    style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 24px; overflow: hidden; box-shadow: 0 20px 48px rgba(15, 27, 45, 0.16), 0 6px 16px rgba(15, 27, 45, 0.08);"
+  >
+    <div class="benefits-table-card">
+      <!-- Table Header -->
+      <div
+        class="benefits-table-head"
+        style="display: grid; grid-template-columns: 1.2fr 1.6fr 1.8fr 1.2fr; gap: 18px; padding: 24px 32px; background: #0f172a; color: #ffffff; font-weight: 800; font-size: 15px; letter-spacing: 0.06em; text-transform: uppercase;"
+      >
+        <div>Process Domain</div>
+        <div>Traditional / Legacy Mode</div>
+        <div style="color: #60a5fa;">ProcureSphere 360 Approach</div>
+        <div>Strategic Outcome</div>
+      </div>
+
+      <!-- Row 1 -->
+      <div
+        class="benefits-table-row"
+        style="display: grid; grid-template-columns: 1.2fr 1.6fr 1.8fr 1.2fr; gap: 18px; padding: 26px 32px; border-bottom: 1px solid #e2e8f0; align-items: center;"
+      >
+        <div style="font-weight: 700; font-size: 16px; color: #0f172a;">Spend Authorization</div>
+        <div style="color: #64748b; font-size: 15px; line-height: 1.6;">Manual spreadsheet tracking; overspend discovered weeks after commitment.</div>
+        <div style="color: #0f172a; font-size: 15px; font-weight: 600; line-height: 1.6;">Pre-approval budget reservation distinguishing available, reserved, and actual spend to prevent silent overspend.</div>
+        <div>
+          <span style="display: inline-block; padding: 6px 12px; background: #ecfdf5; color: #059669; font-size: 13px; font-weight: 700; border-radius: 8px;">Zero Silent Overspend</span>
+        </div>
+      </div>
+
+      <!-- Row 2 -->
+      <div
+        class="benefits-table-row"
+        style="display: grid; grid-template-columns: 1.2fr 1.6fr 1.8fr 1.2fr; gap: 18px; padding: 26px 32px; border-bottom: 1px solid #e2e8f0; align-items: center;"
+      >
+        <div style="font-weight: 700; font-size: 16px; color: #0f172a;">Supplier Sourcing</div>
+        <div style="color: #64748b; font-size: 15px; line-height: 1.6;">Uncontrolled email quote exchanges with fragmented pricing records.</div>
+        <div style="color: #0f172a; font-size: 15px; font-weight: 600; line-height: 1.6;">Restricted vendor portal with sealed bid submissions and weighted technical and commercial scoring.</div>
+        <div>
+          <span style="display: inline-block; padding: 6px 12px; background: #eff6ff; color: #2563eb; font-size: 13px; font-weight: 700; border-radius: 8px;">Sealed Bidding Vault</span>
+        </div>
+      </div>
+
+      <!-- Row 3 -->
+      <div
+        class="benefits-table-row"
+        style="display: grid; grid-template-columns: 1.2fr 1.6fr 1.8fr 1.2fr; gap: 18px; padding: 26px 32px; border-bottom: 1px solid #e2e8f0; align-items: center;"
+      >
+        <div style="font-weight: 700; font-size: 16px; color: #0f172a;">Invoice Processing</div>
+        <div style="color: #64748b; font-size: 15px; line-height: 1.6;">Manual 3-way matching on paper, prone to quantity and pricing discrepancies.</div>
+        <div style="color: #0f172a; font-size: 15px; font-weight: 600; line-height: 1.6;">Automated 3-way matching comparing PO, receipt, and invoice with configurable tolerance rules.</div>
+        <div>
+          <span style="display: inline-block; padding: 6px 12px; background: #ecfdf5; color: #059669; font-size: 13px; font-weight: 700; border-radius: 8px;">Automated Tolerances</span>
+        </div>
+      </div>
+
+      <!-- Row 4 -->
+      <div
+        class="benefits-table-row"
+        style="display: grid; grid-template-columns: 1.2fr 1.6fr 1.8fr 1.2fr; gap: 18px; padding: 26px 32px; border-bottom: 1px solid #e2e8f0; align-items: center;"
+      >
+        <div style="font-weight: 700; font-size: 16px; color: #0f172a;">Audit &amp; Compliance</div>
+        <div style="color: #64748b; font-size: 15px; line-height: 1.6;">Painful retrospective audit sampling taking days of document gathering.</div>
+        <div style="color: #0f172a; font-size: 15px; font-weight: 600; line-height: 1.6;">Immutable audit logging capturing actor, state changes, and timestamps with instant audit export.</div>
+        <div>
+          <span style="display: inline-block; padding: 6px 12px; background: #eff6ff; color: #2563eb; font-size: 13px; font-weight: 700; border-radius: 8px;">100% Audit Readiness</span>
+        </div>
+      </div>
+
+      <!-- Row 5 -->
+      <div
+        class="benefits-table-row"
+        style="display: grid; grid-template-columns: 1.2fr 1.6fr 1.8fr 1.2fr; gap: 18px; padding: 26px 32px; align-items: center;"
+      >
+        <div style="font-weight: 700; font-size: 16px; color: #0f172a;">Contract Expirations</div>
+        <div style="color: #64748b; font-size: 15px; line-height: 1.6;">Forgotten contracts autorenewing at unfavorable rates without review.</div>
+        <div style="color: #0f172a; font-size: 15px; font-weight: 600; line-height: 1.6;">Proactive contract renewal alerts, milestone tracking, and vendor obligation governance.</div>
+        <div>
+          <span style="display: inline-block; padding: 6px 12px; background: #fffbeb; color: #d97706; font-size: 13px; font-weight: 700; border-radius: 8px;">Proactive Renewal</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

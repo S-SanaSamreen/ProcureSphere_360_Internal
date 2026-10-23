@@ -1,0 +1,161 @@
+{% extends "landing/base.html" %}
+{% load static %}
+
+{% block title %}Process — ProcureSphere 360{% endblock %}
+
+{% block content %}
+<section class="page-header" style="text-align: center; padding: 70px 24px 40px; max-width: 1200px; margin: 0 auto;">
+  <div style="display: inline-flex; align-items: center; gap: 8px; padding: 5px 14px; border-radius: 999px; background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 16px; font-family: 'DM Mono', monospace;">
+    <span style="width: 6px; height: 6px; border-radius: 50%; background: #1d4ed8;"></span>
+    LIFECYCLE ARCHITECTURE
+  </div>
+  <h1 style="font-family: 'Playfair Display', Georgia, serif; font-size: clamp(32px, 4.5vw, 52px); font-weight: 700; line-height: 1.18; margin: 0 0 16px; color: #0f172a; letter-spacing: -0.02em;">
+    The End-to-End Procurement Process
+  </h1>
+  <p style="font-size: 19px; color: #334155; max-width: 820px; margin: 0 auto; line-height: 1.7; font-weight: 500;">
+    Trace every stage of purchasing intent from department requisition initialization to final payment reconciliation.
+  </p>
+</section>
+
+<div class="page-body-container" style="max-width: 1240px; margin: 0 auto; padding: 0 24px 100px;">
+  <div style="display: flex; flex-direction: column; gap: 32px;">
+    <!-- Step 1 -->
+    <div style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 22px; padding: 36px 32px; box-shadow: 0 16px 40px rgba(15, 27, 45, 0.1);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <span style="font-family: 'DM Mono', monospace; font-size: 18px; font-weight: 800; color: #2563eb; background: #eff6ff; padding: 4px 12px; border-radius: 8px;">01</span>
+        <span style="font-size: 13px; color: #64748b; font-weight: 600;">Standard cycle: 2-4 business hours</span>
+      </div>
+      <h3 style="font-family: 'Playfair Display', serif; font-size: 24px; color: #0f172a; margin: 0 0 12px; font-weight: 700;">
+        Requirement &amp; Budget Verification
+      </h3>
+      <p style="font-size: 16px; color: #475569; line-height: 1.65; margin: 0 0 16px;">
+        Departments draft purchase requests with specified item lists, specifications, and project allocations. The system checks available budget allocations prior to submission.
+      </p>
+      <div style="background: #f8fafc; border-left: 4px solid #2563eb; padding: 12px 18px; border-radius: 0 8px 8px 0; margin-bottom: 16px;">
+        <strong style="color: #0f172a; font-size: 14px;">Key Deliverable / Output:</strong>
+        <span style="color: #334155; font-size: 14px; margin-left: 6px;">Approved Requisition with reserved budget allotment</span>
+      </div>
+      <ul style="margin: 0; padding-left: 20px; color: #64748b; font-size: 14.5px; line-height: 1.7;">
+        <li>Department user creates structured requisition</li>
+        <li>Automatic cost-center budget allocation check</li>
+        <li>Initial supervisor and department head approval routing</li>
+      </ul>
+    </div>
+
+    <!-- Step 2 -->
+    <div style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 22px; padding: 36px 32px; box-shadow: 0 16px 40px rgba(15, 27, 45, 0.1);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <span style="font-family: 'DM Mono', monospace; font-size: 18px; font-weight: 800; color: #2563eb; background: #eff6ff; padding: 4px 12px; border-radius: 8px;">02</span>
+        <span style="font-size: 13px; color: #64748b; font-weight: 600;">Standard cycle: 2-5 business days</span>
+      </div>
+      <h3 style="font-family: 'Playfair Display', serif; font-size: 24px; color: #0f172a; margin: 0 0 12px; font-weight: 700;">
+        Sourcing &amp; Vendor Quotations
+      </h3>
+      <p style="font-size: 16px; color: #475569; line-height: 1.65; margin: 0 0 16px;">
+        Procurement teams issue RFQ (Request for Quotation) packages to qualified suppliers. Suppliers submit quotations with pricing, delivery schedules, and technical catalogs.
+      </p>
+      <div style="background: #f8fafc; border-left: 4px solid #2563eb; padding: 12px 18px; border-radius: 0 8px 8px 0; margin-bottom: 16px;">
+        <strong style="color: #0f172a; font-size: 14px;">Key Deliverable / Output:</strong>
+        <span style="color: #334155; font-size: 14px; margin-left: 6px;">Comparative Bid Analysis &amp; Supplier Selection Record</span>
+      </div>
+      <ul style="margin: 0; padding-left: 20px; color: #64748b; font-size: 14.5px; line-height: 1.7;">
+        <li>RFQ published to selected supplier categories</li>
+        <li>Supplier portal submission for sealed quotes and timelines</li>
+        <li>Side-by-side commercial and technical comparison matrix</li>
+      </ul>
+    </div>
+
+    <!-- Step 3 -->
+    <div style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 22px; padding: 36px 32px; box-shadow: 0 16px 40px rgba(15, 27, 45, 0.1);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <span style="font-family: 'DM Mono', monospace; font-size: 18px; font-weight: 800; color: #2563eb; background: #eff6ff; padding: 4px 12px; border-radius: 8px;">03</span>
+        <span style="font-size: 13px; color: #64748b; font-weight: 600;">Standard cycle: Same-day turnaround</span>
+      </div>
+      <h3 style="font-family: 'Playfair Display', serif; font-size: 24px; color: #0f172a; margin: 0 0 12px; font-weight: 700;">
+        Purchase Order Generation
+      </h3>
+      <p style="font-size: 16px; color: #475569; line-height: 1.65; margin: 0 0 16px;">
+        Once a quotation is selected, a formal Purchase Order is generated with clear line-item descriptions, payment schedules, delivery dates, and terms of service.
+      </p>
+      <div style="background: #f8fafc; border-left: 4px solid #2563eb; padding: 12px 18px; border-radius: 0 8px 8px 0; margin-bottom: 16px;">
+        <strong style="color: #0f172a; font-size: 14px;">Key Deliverable / Output:</strong>
+        <span style="color: #334155; font-size: 14px; margin-left: 6px;">Dispatched &amp; Confirmed Purchase Order (PO)</span>
+      </div>
+      <ul style="margin: 0; padding-left: 20px; color: #64748b; font-size: 14.5px; line-height: 1.7;">
+        <li>PO document generated with unique reference tracking</li>
+        <li>Digital dispatch to supplier via connected workspace</li>
+        <li>Supplier formal acknowledgement and delivery confirmation</li>
+      </ul>
+    </div>
+
+    <!-- Step 4 -->
+    <div style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 22px; padding: 36px 32px; box-shadow: 0 16px 40px rgba(15, 27, 45, 0.1);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <span style="font-family: 'DM Mono', monospace; font-size: 18px; font-weight: 800; color: #2563eb; background: #eff6ff; padding: 4px 12px; border-radius: 8px;">04</span>
+        <span style="font-size: 13px; color: #64748b; font-weight: 600;">Standard cycle: Upon delivery arrival</span>
+      </div>
+      <h3 style="font-family: 'Playfair Display', serif; font-size: 24px; color: #0f172a; margin: 0 0 12px; font-weight: 700;">
+        Shipment, Receiving &amp; Inspection
+      </h3>
+      <p style="font-size: 16px; color: #475569; line-height: 1.65; margin: 0 0 16px;">
+        Upon arrival of physical goods or completion of services, warehouse and operations teams inspect delivery quantities against PO specifications.
+      </p>
+      <div style="background: #f8fafc; border-left: 4px solid #2563eb; padding: 12px 18px; border-radius: 0 8px 8px 0; margin-bottom: 16px;">
+        <strong style="color: #0f172a; font-size: 14px;">Key Deliverable / Output:</strong>
+        <span style="color: #334155; font-size: 14px; margin-left: 6px;">Verified Goods Receipt Note (GRN)</span>
+      </div>
+      <ul style="margin: 0; padding-left: 20px; color: #64748b; font-size: 14.5px; line-height: 1.7;">
+        <li>Receiving team logs quantity count and physical condition</li>
+        <li>Quality checklist verification and acceptance record</li>
+        <li>Goods Receipt Note (GRN) created for matched items</li>
+      </ul>
+    </div>
+
+    <!-- Step 5 -->
+    <div style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 22px; padding: 36px 32px; box-shadow: 0 16px 40px rgba(15, 27, 45, 0.1);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <span style="font-family: 'DM Mono', monospace; font-size: 18px; font-weight: 800; color: #2563eb; background: #eff6ff; padding: 4px 12px; border-radius: 8px;">05</span>
+        <span style="font-size: 13px; color: #64748b; font-weight: 600;">Standard cycle: 1 business day</span>
+      </div>
+      <h3 style="font-family: 'Playfair Display', serif; font-size: 24px; color: #0f172a; margin: 0 0 12px; font-weight: 700;">
+        Invoice Review &amp; 3-Way Reconciliation
+      </h3>
+      <p style="font-size: 16px; color: #475569; line-height: 1.65; margin: 0 0 16px;">
+        Finance matches the vendor invoice against both the original Purchase Order and the Goods Receipt Note to confirm item quantities, rates, and totals match.
+      </p>
+      <div style="background: #f8fafc; border-left: 4px solid #2563eb; padding: 12px 18px; border-radius: 0 8px 8px 0; margin-bottom: 16px;">
+        <strong style="color: #0f172a; font-size: 14px;">Key Deliverable / Output:</strong>
+        <span style="color: #334155; font-size: 14px; margin-left: 6px;">Reconciled Invoice Package Ready for Payment</span>
+      </div>
+      <ul style="margin: 0; padding-left: 20px; color: #64748b; font-size: 14.5px; line-height: 1.7;">
+        <li>Line-by-line item rate verification against Purchase Order</li>
+        <li>Quantity received reconciliation against Goods Receipt Note</li>
+        <li>Variance detection flag for unexpected price or quantity deviations</li>
+      </ul>
+    </div>
+
+    <!-- Step 6 -->
+    <div style="background: #ffffff; border: 2px solid #cbd5e1; border-radius: 22px; padding: 36px 32px; box-shadow: 0 16px 40px rgba(15, 27, 45, 0.1);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <span style="font-family: 'DM Mono', monospace; font-size: 18px; font-weight: 800; color: #2563eb; background: #eff6ff; padding: 4px 12px; border-radius: 8px;">06</span>
+        <span style="font-size: 13px; color: #64748b; font-weight: 600;">Standard cycle: As per contract terms</span>
+      </div>
+      <h3 style="font-family: 'Playfair Display', serif; font-size: 24px; color: #0f172a; margin: 0 0 12px; font-weight: 700;">
+        Payment Settlement &amp; Order Closeout
+      </h3>
+      <p style="font-size: 16px; color: #475569; line-height: 1.65; margin: 0 0 16px;">
+        Accounts payable releases payment according to agreed payment terms, updates financial ledgers, and archives the completed order dossier for historical reference.
+      </p>
+      <div style="background: #f8fafc; border-left: 4px solid #2563eb; padding: 12px 18px; border-radius: 0 8px 8px 0; margin-bottom: 16px;">
+        <strong style="color: #0f172a; font-size: 14px;">Key Deliverable / Output:</strong>
+        <span style="color: #334155; font-size: 14px; margin-left: 6px;">Settlement Confirmation &amp; Archived Order History</span>
+      </div>
+      <ul style="margin: 0; padding-left: 20px; color: #64748b; font-size: 14.5px; line-height: 1.7;">
+        <li>Payment scheduling according to vendor terms</li>
+        <li>Remittance advice generated and shared with supplier</li>
+        <li>Order status updated to Completed with complete document history</li>
+      </ul>
+    </div>
+  </div>
+</div>
+{% endblock %}

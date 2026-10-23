@@ -1,0 +1,132 @@
+{% load static %}
+<header id="site-header" class="site-nav navarino-nav" style="z-index: 1000;">
+  <div class="nav-inner navarino-inner">
+    <!-- Left Side: Brand Logo + Desktop Nav Links -->
+    <div class="nav-left-group">
+      <a class="brand nav-brand" href="/" aria-label="ProcureSphere 360 Home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32">
+            <circle cx="16" cy="16" r="12" />
+            <ellipse cx="16" cy="16" rx="12" ry="5.5" />
+            <path d="M4.5 16h23" />
+            <path d="M16 4v24" />
+            <circle cx="24.8" cy="11" r="2.1" />
+            <circle cx="9.5" cy="21.5" r="2.1" />
+          </svg>
+        </span>
+        <div class="brand-text-block">
+          <span class="brand-text">
+            <strong>procuresphere</strong>
+          </span>
+        </div>
+      </a>
+
+      <!-- Desktop Navigation Links -->
+      <nav class="navarino-links-desktop" aria-label="Main Navigation">
+        <div class="nav-item">
+          <a href="/" class="nav-link {% if active_page == 'home' %}is-active{% endif %}">
+            <span>Home</span>
+          </a>
+        </div>
+        <div class="nav-item has-dropdown">
+          <a href="/about/" class="nav-link {% if active_page == 'about' %}is-active{% endif %}">
+            <span>About Us</span>
+            <svg class="nav-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </a>
+          <div class="nav-dropdown-menu">
+            <a href="/about/" class="nav-dropdown-link">
+              <span class="d-title">About ProcureSphere</span>
+              <span class="d-desc">Next-generation enterprise procurement platform</span>
+            </a>
+            <a href="/about/" class="nav-dropdown-link">
+              <span class="d-title">Enterprise Vision</span>
+              <span class="d-desc">Connecting decisions, compliance and intelligence</span>
+            </a>
+          </div>
+        </div>
+        <div class="nav-item has-dropdown">
+          <a href="/solutions/" class="nav-link {% if active_page == 'solutions' %}is-active{% endif %}">
+            <span>Solutions</span>
+            <svg class="nav-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </a>
+          <div class="nav-dropdown-menu">
+            <a href="/solutions/" class="nav-dropdown-link">
+              <span class="d-title">All Solutions Overview</span>
+              <span class="d-desc">Unified lifecycle from requisition to ledger</span>
+            </a>
+            <a href="/solutions/" class="nav-dropdown-link">
+              <span class="d-title">Autonomous 3-Way Match</span>
+              <span class="d-desc">Zero-touch purchase order & invoice validation</span>
+            </a>
+            <a href="/solutions/" class="nav-dropdown-link">
+              <span class="d-title">Supplier & Financial Control</span>
+              <span class="d-desc">Risk scoring, live budget guards and audit trails</span>
+            </a>
+          </div>
+        </div>
+        <div class="nav-item">
+          <a href="/benefits/" class="nav-link {% if active_page == 'benefits' %}is-active{% endif %}">
+            <span>Benefits</span>
+          </a>
+        </div>
+        <div class="nav-item">
+          <a href="/process/" class="nav-link {% if active_page == 'process' %}is-active{% endif %}">
+            <span>Process</span>
+          </a>
+        </div>
+        <div class="nav-item">
+          <a href="/roles/" class="nav-link {% if active_page == 'roles' %}is-active{% endif %}">
+            <span>Roles</span>
+          </a>
+        </div>
+        <div class="nav-item">
+          <a href="/faq/" class="nav-link {% if active_page == 'faq' %}is-active{% endif %}">
+            <span>FAQ</span>
+          </a>
+        </div>
+      </nav>
+    </div>
+
+    <!-- Right Side: Login Button + Blue CTA Button + Mobile Toggle -->
+    <div class="nav-right-group">
+      <button type="button" class="nav-login-btn" onclick="openLoginModal()" aria-label="Login to Portal">
+        Login
+      </button>
+      <a href="/#contact" class="navarino-blue-btn">
+        Request a Demo
+      </a>
+      <button type="button" class="navarino-mobile-toggle" onclick="toggleMobileNav()" aria-label="Toggle Navigation">
+        <svg id="hamburger-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="4" y1="7" x2="20" y2="7"></line>
+          <line x1="4" y1="12" x2="20" y2="12"></line>
+          <line x1="4" y1="17" x2="20" y2="17"></line>
+        </svg>
+        <svg id="close-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Mobile Drawer / Overlay Menu -->
+  <div id="mobile-nav-drawer" class="mobile-nav-drawer" style="display:none;">
+    <div class="mobile-nav-content">
+      <a href="/" class="mobile-nav-link {% if active_page == 'home' %}is-active{% endif %}">Home</a>
+      <a href="/about/" class="mobile-nav-link {% if active_page == 'about' %}is-active{% endif %}">About Us</a>
+      <a href="/solutions/" class="mobile-nav-link {% if active_page == 'solutions' %}is-active{% endif %}">Solutions</a>
+      <a href="/benefits/" class="mobile-nav-link {% if active_page == 'benefits' %}is-active{% endif %}">Benefits</a>
+      <a href="/process/" class="mobile-nav-link {% if active_page == 'process' %}is-active{% endif %}">Process</a>
+      <a href="/roles/" class="mobile-nav-link {% if active_page == 'roles' %}is-active{% endif %}">Roles</a>
+      <a href="/faq/" class="mobile-nav-link {% if active_page == 'faq' %}is-active{% endif %}">FAQ</a>
+      <div class="mobile-nav-actions" style="margin-top: 24px; display: flex; flex-direction: column; gap: 12px;">
+        <button type="button" class="nav-login-btn" style="width: 100%; text-align: center; justify-content: center;" onclick="openLoginModal(); toggleMobileNav();">Login</button>
+        <a href="/#contact" class="navarino-blue-btn" style="width: 100%; text-align: center;" onclick="toggleMobileNav();">Request a Demo</a>
+      </div>
+    </div>
+  </div>
+</header>
