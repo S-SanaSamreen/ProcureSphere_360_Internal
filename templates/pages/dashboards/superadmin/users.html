@@ -35,7 +35,7 @@
                     {% for u in users %}
                     <tr>
                         <td class="ps-4 fw-bold text-dark">
-                            {{ u.email }}
+                            {{ u.email|default:u.username }}
                             {% if u.must_change_password %}
                             <span class="badge bg-warning bg-opacity-25 text-dark border border-warning ms-1 small" title="Password change required on first login">
                                 <i class="fa-solid fa-key me-1"></i> First Login Pending

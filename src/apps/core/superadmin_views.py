@@ -76,7 +76,8 @@ def user_list_view(request):
     admin_org = get_admin_organization(request.user)
     users = (
         User.objects.select_related("role", "department", "cost_center", "organization")
-        .all()
+        .exclude(email="")
+        .filter(email__isnull=False)
         .order_by("-date_joined")
     )
     if admin_org:
