@@ -1,7 +1,7 @@
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.http import JsonResponse
-from django.shortcuts import render
+from django.shortcuts import redirect, render
 
 from apps.accounts.models import Role
 from apps.audit.selectors import (
@@ -92,6 +92,12 @@ def audit_log_view(request):
     Dedicated Append-Only Immutable Audit Log Register Page.
     """
     _enforce_auditor_access(request)
+    role_code = getattr(request.user, "role_code", None) or (
+        request.user.role.code if getattr(request.user, "role", None) else None
+    )
+    if request.user.is_superuser or role_code in ["SUPER_ADMIN", "ADMIN"]:
+        return redirect("/superadmin/audit/")
+
     action_filter = request.GET.get("action", "").strip()
     search_query = request.GET.get("q", "").strip() or request.GET.get("search", "").strip()
     model_filter = (

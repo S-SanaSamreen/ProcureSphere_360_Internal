@@ -38,10 +38,14 @@ def _get_approval_querysets(user, role_code):
 
 def _get_base_layout(role_code):
     """Determine layout template based on user role."""
+    if role_code in [Role.SUPER_ADMIN, "SUPER_ADMIN"]:
+        return "layouts/superadmin_base.html"
     if role_code in [Role.LEGAL_MGR, "LEGAL_MGR"]:
         return "layouts/legal_base.html"
     if role_code in [Role.DEPT_APPROVER, Role.PROC_MGR]:
         return "layouts/approver_base.html"
+    if role_code in [Role.FINANCE_AP, "FINANCE_AP"]:
+        return "layouts/finance_base.html"
     return "layouts/requester_base.html"
 
 

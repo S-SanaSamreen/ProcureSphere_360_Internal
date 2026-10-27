@@ -84,10 +84,14 @@ def list_view(request):
         query_params.pop("page")
     querystring = query_params.urlencode()
 
-    if role_code == Role.LEGAL_MGR or role_code == "LEGAL_MGR":
+    if role_code in [Role.SUPER_ADMIN, "SUPER_ADMIN"] or user.is_superuser:
+        base_layout = "layouts/superadmin_base.html"
+    elif role_code == Role.LEGAL_MGR or role_code == "LEGAL_MGR":
         base_layout = "layouts/legal_base.html"
     elif role_code in [Role.DEPT_APPROVER, Role.PROC_MGR]:
         base_layout = "layouts/approver_base.html"
+    elif role_code == Role.FINANCE_AP:
+        base_layout = "layouts/finance_base.html"
     else:
         base_layout = "layouts/requester_base.html"
 
@@ -306,6 +310,12 @@ def create_view(request):
 
     cost_centers = _attach_available_budgets(cost_centers)
 
+    create_base_layout = (
+        "layouts/superadmin_base.html"
+        if (role_code in [Role.SUPER_ADMIN, "SUPER_ADMIN"] or user.is_superuser)
+        else "layouts/requester_base.html"
+    )
+
     return render(
         request,
         "pages/requisitions/create.html",
@@ -314,6 +324,7 @@ def create_view(request):
             "cost_centers": cost_centers,
             "user_assigned_cost_center": getattr(user, "cost_center", None),
             "today": timezone.now().date().isoformat(),
+            "base_layout": create_base_layout,
         },
     )
 
@@ -480,6 +491,15 @@ def edit_view(request, pk):
 
     cost_centers = _attach_available_budgets(cost_centers)
 
+    edit_role_code = getattr(request.user, "role_code", None) or (
+        request.user.role.code if hasattr(request.user, "role") and request.user.role else Role.SUPER_ADMIN
+    )
+    edit_base_layout = (
+        "layouts/superadmin_base.html"
+        if (edit_role_code in [Role.SUPER_ADMIN, "SUPER_ADMIN"] or request.user.is_superuser)
+        else "layouts/requester_base.html"
+    )
+
     return render(
         request,
         "pages/requisitions/edit.html",
@@ -488,6 +508,7 @@ def edit_view(request, pk):
             "departments": departments,
             "cost_centers": cost_centers,
             "today": timezone.now().date().isoformat(),
+            "base_layout": edit_base_layout,
         },
     )
 
@@ -564,21 +585,25 @@ def detail_view(request, pk):
     )
 
     base_layout = (
-        "manager/base_manager.html"
-        if role_code == Role.PROC_MGR
+        "layouts/superadmin_base.html"
+        if (role_code in [Role.SUPER_ADMIN, "SUPER_ADMIN"] or user.is_superuser)
         else (
-            "audit/base_auditor.html"
-            if role_code == Role.AUDITOR
+            "manager/base_manager.html"
+            if role_code == Role.PROC_MGR
             else (
-                "layouts/legal_base.html"
-                if role_code == Role.LEGAL_MGR
+                "audit/base_auditor.html"
+                if role_code == Role.AUDITOR
                 else (
-                    "layouts/approver_base.html"
-                    if role_code in [Role.DEPT_APPROVER, Role.PROC_EXEC]
+                    "layouts/legal_base.html"
+                    if role_code == Role.LEGAL_MGR
                     else (
-                        "layouts/finance_base.html"
-                        if role_code == Role.FINANCE_AP
-                        else "layouts/requester_base.html"
+                        "layouts/approver_base.html"
+                        if role_code in [Role.DEPT_APPROVER, Role.PROC_EXEC]
+                        else (
+                            "layouts/finance_base.html"
+                            if role_code == Role.FINANCE_AP
+                            else "layouts/requester_base.html"
+                        )
                     )
                 )
             )

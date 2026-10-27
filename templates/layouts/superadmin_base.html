@@ -36,7 +36,7 @@
                     <li><a class="dropdown-item text-white py-2" href="/scorecards/"><i class="fa-solid fa-award text-success me-2"></i> Vendor Scorecards</a></li>
                     <li><hr class="dropdown-divider border-secondary"></li>
                     <li><a class="dropdown-item text-white py-2" href="/reports/hub/"><i class="fa-solid fa-chart-line text-primary me-2"></i> Reports &amp; Analytics</a></li>
-                    <li><a class="dropdown-item text-white py-2" href="/audit/logs/"><i class="fa-solid fa-shield-halved text-cyan me-2"></i> Audit Trail Log</a></li>
+                    <li><a class="dropdown-item text-white py-2" href="/superadmin/audit/"><i class="fa-solid fa-shield-halved text-cyan me-2"></i> Audit Trail Log</a></li>
                 </ul>
             </div>
 
@@ -165,9 +165,6 @@
 
                     <div class="nav-section-label">Audit &amp; Oversight</div>
                     <a href="/superadmin/audit/" class="vendor-navlink unified-navlink {% if '/superadmin/audit/' in request.path %}active-nav-item{% endif %}">
-                        <i class="fa-solid fa-clock-rotate-left nav-icon text-warning"></i>Audit History
-                    </a>
-                    <a href="/audit/logs/" class="vendor-navlink unified-navlink {% if '/audit/logs/' in request.path %}active-nav-item{% endif %}">
                         <i class="fa-solid fa-shield-halved nav-icon text-danger"></i>Audit Trail Log
                     </a>
 
