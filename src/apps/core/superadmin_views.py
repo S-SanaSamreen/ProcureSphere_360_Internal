@@ -5,7 +5,7 @@ import openpyxl
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
-from django.db import transaction
+from django.db import models, transaction
 from django.db.models import Prefetch
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, render
@@ -35,6 +35,24 @@ def _is_super_admin(user):
     )
 
 
+def get_admin_organization(user):
+    """
+    Resolves the organization for a logged-in Super Admin.
+    Ensures multi-tenant data isolation: Super Admins can only see and manage
+    data belonging to their designated organization.
+    """
+    if not user or not user.is_authenticated:
+        return None
+    if getattr(user, "organization", None):
+        return user.organization
+    if getattr(user, "department", None) and getattr(user.department, "organization", None):
+        return user.department.organization
+    email = (getattr(user, "email", "") or "").lower()
+    if "@hpe.com" in email:
+        return Organization.objects.filter(code="HPE-GLOBAL").first()
+    return None
+
+
 def super_admin_required(view_func):
     @wraps(view_func)
     def _wrapped(request, *args, **kwargs):
@@ -48,7 +66,6 @@ def super_admin_required(view_func):
     return _wrapped
 
 
-
 @login_required
 def user_list_view(request):
     if not _is_super_admin(request.user):
@@ -56,8 +73,22 @@ def user_list_view(request):
             "<div class='alert alert-danger m-3'>Permission Denied: Super Admin access required.</div>",
             status=403,
         )
-    users = User.objects.select_related("role", "department", "cost_center").all().order_by("-date_joined")
-    return render(request, "pages/dashboards/superadmin/users.html", {"users": users})
+    admin_org = get_admin_organization(request.user)
+    users = (
+        User.objects.select_related("role", "department", "cost_center", "organization")
+        .all()
+        .order_by("-date_joined")
+    )
+    if admin_org:
+        users = users.filter(
+            models.Q(organization=admin_org)
+            | (models.Q(organization__isnull=True) & models.Q(department__organization=admin_org))
+        )
+    return render(
+        request,
+        "pages/dashboards/superadmin/users.html",
+        {"users": users, "admin_org": admin_org},
+    )
 
 
 @login_required
@@ -68,13 +99,16 @@ def user_create_view(request):
             status=403,
         )
 
+    admin_org = get_admin_organization(request.user)
     if request.method == "POST":
-        form = UserAdminForm(request.POST)
+        form = UserAdminForm(request.POST, admin_org=admin_org)
         if form.is_valid():
             with transaction.atomic():
                 user = form.save(commit=False)
                 user.username = form.cleaned_data["email"]
                 user.must_change_password = True
+                if admin_org:
+                    user.organization = admin_org
 
                 raw_password = form.cleaned_data.get("password")
                 if not raw_password:
@@ -124,7 +158,7 @@ def user_create_view(request):
 
             return HttpResponse("<script>window.location.reload();</script>")
     else:
-        form = UserAdminForm()
+        form = UserAdminForm(admin_org=admin_org)
     return render(request, "pages/dashboards/superadmin/user_form.html", {"form": form, "is_edit": False})
 
 
@@ -136,7 +170,14 @@ def user_edit_view(request, user_id):
             status=403,
         )
 
-    user = get_object_or_404(User, pk=user_id)
+    admin_org = get_admin_organization(request.user)
+    user_qs = User.objects.all()
+    if admin_org:
+        user_qs = user_qs.filter(
+            models.Q(organization=admin_org)
+            | (models.Q(organization__isnull=True) & models.Q(department__organization=admin_org))
+        )
+    user = get_object_or_404(user_qs, pk=user_id)
     if request.method == "POST":
         old_state = {
             "email": user.email,
@@ -146,10 +187,12 @@ def user_edit_view(request, user_id):
             "cost_center": user.cost_center.code if user.cost_center else None,
             "is_active": user.is_active,
         }
-        form = UserAdminForm(request.POST, instance=user)
+        form = UserAdminForm(request.POST, instance=user, admin_org=admin_org)
         if form.is_valid():
             user = form.save(commit=False)
             user.username = form.cleaned_data["email"]
+            if admin_org and not user.organization_id:
+                user.organization = admin_org
             new_password = form.cleaned_data.get("password")
             if new_password:
                 user.set_password(new_password)
@@ -178,7 +221,7 @@ def user_edit_view(request, user_id):
             messages.success(request, f"User '{user.email}' updated successfully.")
             return HttpResponse("<script>window.location.reload();</script>")
     else:
-        form = UserAdminForm(instance=user)
+        form = UserAdminForm(instance=user, admin_org=admin_org)
     return render(request, "pages/dashboards/superadmin/user_form.html", {"form": form, "is_edit": True, "user_obj": user})
 
 
@@ -238,13 +281,18 @@ def user_resend_welcome_email_view(request, user_id):
 def cost_center_options_view(request):
     if not _is_super_admin(request.user):
         return HttpResponse("<option value=''>-- Unauthorized --</option>", status=403)
+    admin_org = get_admin_organization(request.user)
     dept_id = request.GET.get("department", "").strip()
     cost_centers = CostCenter.objects.none()
     if dept_id:
         try:
             import uuid
             uuid.UUID(dept_id)
-            cost_centers = CostCenter.objects.filter(department_id=dept_id).order_by("name")
+            dept_qs = Department.objects.all()
+            if admin_org:
+                dept_qs = dept_qs.filter(organization=admin_org)
+            if dept_qs.filter(id=dept_id).exists():
+                cost_centers = CostCenter.objects.filter(department_id=dept_id).order_by("name")
         except (ValueError, AttributeError):
             pass
     return render(
@@ -253,24 +301,43 @@ def cost_center_options_view(request):
         {"cost_centers": cost_centers},
     )
 
+
+@login_required
+@super_admin_required
 def org_list_view(request):
     if not _is_super_admin(request.user):
         return HttpResponse(
             "<div class='alert alert-danger m-3'>Permission Denied: Super Admin access required.</div>",
             status=403,
         )
-    orgs = Organization.objects.all().order_by("name")
-    departments = Department.objects.select_related("organization").all().order_by("name")
-    cost_centers = (
-        CostCenter.objects.select_related("department", "manager")
-        .prefetch_related(
-            Prefetch(
-                "requester_users",
-                queryset=User.objects.order_by("email"),
+    admin_org = get_admin_organization(request.user)
+    if admin_org:
+        orgs = Organization.objects.filter(pk=admin_org.pk)
+        departments = Department.objects.filter(organization=admin_org).select_related("organization").order_by("name")
+        cost_centers = (
+            CostCenter.objects.filter(department__organization=admin_org)
+            .select_related("department", "manager")
+            .prefetch_related(
+                Prefetch(
+                    "requester_users",
+                    queryset=User.objects.order_by("email"),
+                )
             )
+            .order_by("code")
         )
-        .order_by("code")
-    )
+    else:
+        orgs = Organization.objects.all().order_by("name")
+        departments = Department.objects.select_related("organization").all().order_by("name")
+        cost_centers = (
+            CostCenter.objects.select_related("department", "manager")
+            .prefetch_related(
+                Prefetch(
+                    "requester_users",
+                    queryset=User.objects.order_by("email"),
+                )
+            )
+            .order_by("code")
+        )
     selected_dept = request.GET.get("department", "").strip()
     if selected_dept:
         try:
@@ -288,6 +355,7 @@ def org_list_view(request):
             "departments": departments,
             "cost_centers": cost_centers,
             "selected_dept": selected_dept,
+            "admin_org": admin_org,
         },
     )
 
@@ -295,20 +363,14 @@ def org_list_view(request):
 @login_required
 @super_admin_required
 def org_create_view(request):
-    if not _is_super_admin(request.user):
-        return HttpResponse(
-            "<div class='alert alert-danger m-3'>Permission Denied: Super Admin access required.</div>",
-            status=403,
-        )
-
-    if request.method == "POST":
-        form = OrganizationAdminForm(request.POST)
-        if form.is_valid():
-            form.save()
-            return HttpResponse("<script>window.location.reload();</script>")
-    else:
-        form = OrganizationAdminForm()
-    return render(request, "pages/dashboards/superadmin/org_form.html", {"form": form, "is_edit": False})
+    """
+    Organization creation is restricted exclusively to Django Admin (/admin/).
+    Super Admin dashboard only manages departments and cost centers within its own org.
+    """
+    return HttpResponse(
+        "<div class='alert alert-warning m-3'><i class='fa-solid fa-lock me-2'></i>Creating new organizations is restricted to Django Admin.</div>",
+        status=403,
+    )
 
 
 @login_required
@@ -317,6 +379,13 @@ def org_edit_view(request, org_id):
     if not _is_super_admin(request.user):
         return HttpResponse(
             "<div class='alert alert-danger m-3'>Permission Denied: Super Admin access required.</div>",
+            status=403,
+        )
+
+    admin_org = get_admin_organization(request.user)
+    if admin_org and str(admin_org.pk) != str(org_id):
+        return HttpResponse(
+            "<div class='alert alert-danger m-3'>Permission Denied: Cannot edit external organizations.</div>",
             status=403,
         )
 
@@ -339,10 +408,13 @@ def dept_create_view(request):
             status=403,
         )
 
+    admin_org = get_admin_organization(request.user)
     if request.method == "POST":
-        form = DepartmentAdminForm(request.POST)
+        form = DepartmentAdminForm(request.POST, admin_org=admin_org)
         if form.is_valid():
             dept = form.save(commit=False)
+            if admin_org:
+                dept.organization = admin_org
             if hasattr(dept, "created_by_id") and not dept.created_by_id:
                 dept.created_by = request.user
             dept.save()
@@ -367,7 +439,7 @@ def dept_create_view(request):
 
             return HttpResponse("<script>window.location.reload();</script>")
     else:
-        form = DepartmentAdminForm()
+        form = DepartmentAdminForm(admin_org=admin_org)
     return render(request, "pages/dashboards/superadmin/dept_form.html", {"form": form, "is_edit": False})
 
 
@@ -379,7 +451,11 @@ def dept_edit_view(request, dept_id):
             status=403,
         )
 
-    dept = get_object_or_404(Department, pk=dept_id)
+    admin_org = get_admin_organization(request.user)
+    dept_qs = Department.objects.all()
+    if admin_org:
+        dept_qs = dept_qs.filter(organization=admin_org)
+    dept = get_object_or_404(dept_qs, pk=dept_id)
     if request.method == "POST":
         old_state = {
             "code": dept.code,
@@ -387,9 +463,12 @@ def dept_edit_view(request, dept_id):
             "organization": dept.organization.code,
             "description": dept.description,
         }
-        form = DepartmentAdminForm(request.POST, instance=dept)
+        form = DepartmentAdminForm(request.POST, instance=dept, admin_org=admin_org)
         if form.is_valid():
-            dept = form.save()
+            dept = form.save(commit=False)
+            if admin_org:
+                dept.organization = admin_org
+            dept.save()
 
             from apps.audit.services import create_audit_log_service
 
@@ -411,7 +490,7 @@ def dept_edit_view(request, dept_id):
 
             return HttpResponse("<script>window.location.reload();</script>")
     else:
-        form = DepartmentAdminForm(instance=dept)
+        form = DepartmentAdminForm(instance=dept, admin_org=admin_org)
     return render(request, "pages/dashboards/superadmin/dept_form.html", {"form": form, "is_edit": True, "dept": dept})
 
 
@@ -423,8 +502,9 @@ def cost_center_create_view(request):
             status=403,
         )
 
+    admin_org = get_admin_organization(request.user)
     if request.method == "POST":
-        form = CostCenterAdminForm(request.POST)
+        form = CostCenterAdminForm(request.POST, admin_org=admin_org)
         if form.is_valid():
             cleaned = form.cleaned_data
             from apps.organization.services import create_cost_center_service
@@ -456,7 +536,7 @@ def cost_center_create_view(request):
 
             return HttpResponse("<script>window.location.reload();</script>")
     else:
-        form = CostCenterAdminForm()
+        form = CostCenterAdminForm(admin_org=admin_org)
     return render(
         request,
         "pages/dashboards/superadmin/cost_center_form.html",
@@ -472,7 +552,11 @@ def cost_center_edit_view(request, cc_id):
             status=403,
         )
 
-    cost_center = get_object_or_404(CostCenter, pk=cc_id)
+    admin_org = get_admin_organization(request.user)
+    cc_qs = CostCenter.objects.all()
+    if admin_org:
+        cc_qs = cc_qs.filter(department__organization=admin_org)
+    cost_center = get_object_or_404(cc_qs, pk=cc_id)
     if request.method == "POST":
         old_state = {
             "code": cost_center.code,
@@ -480,7 +564,7 @@ def cost_center_edit_view(request, cc_id):
             "department": cost_center.department.code,
             "manager": cost_center.manager.email if cost_center.manager else None,
         }
-        form = CostCenterAdminForm(request.POST, instance=cost_center)
+        form = CostCenterAdminForm(request.POST, instance=cost_center, admin_org=admin_org)
         if form.is_valid():
             cost_center = form.save()
 
@@ -504,7 +588,7 @@ def cost_center_edit_view(request, cc_id):
 
             return HttpResponse("<script>window.location.reload();</script>")
     else:
-        form = CostCenterAdminForm(instance=cost_center)
+        form = CostCenterAdminForm(instance=cost_center, admin_org=admin_org)
     return render(
         request,
         "pages/dashboards/superadmin/cost_center_form.html",
@@ -520,8 +604,11 @@ def budget_list_view(request):
             "<div class='alert alert-danger m-3'>Permission Denied: Super Admin access required.</div>",
             status=403,
         )
+    admin_org = get_admin_organization(request.user)
     budgets = Budget.objects.select_related("cost_center", "fiscal_period").all()
-    return render(request, "pages/dashboards/superadmin/budgets.html", {"budgets": budgets})
+    if admin_org:
+        budgets = budgets.filter(cost_center__department__organization=admin_org)
+    return render(request, "pages/dashboards/superadmin/budgets.html", {"budgets": budgets, "admin_org": admin_org})
 
 
 @login_required
@@ -532,8 +619,11 @@ def policy_list_view(request):
             "<div class='alert alert-danger m-3'>Permission Denied: Super Admin access required.</div>",
             status=403,
         )
+    admin_org = get_admin_organization(request.user)
     policies = ApprovalPolicy.objects.select_related("department").all()
-    return render(request, "pages/dashboards/superadmin/policies.html", {"policies": policies})
+    if admin_org:
+        policies = policies.filter(department__organization=admin_org)
+    return render(request, "pages/dashboards/superadmin/policies.html", {"policies": policies, "admin_org": admin_org})
 
 
 @login_required
@@ -562,13 +652,14 @@ def budget_create_view(request):
             status=403,
         )
 
+    admin_org = get_admin_organization(request.user)
     if request.method == "POST":
-        form = BudgetAdminForm(request.POST)
+        form = BudgetAdminForm(request.POST, admin_org=admin_org)
         if form.is_valid():
             form.save()
             return HttpResponse("<script>window.location.reload();</script>")
     else:
-        form = BudgetAdminForm()
+        form = BudgetAdminForm(admin_org=admin_org)
     return render(request, "pages/dashboards/superadmin/budget_form.html", {"form": form, "is_edit": False})
 
 
@@ -581,14 +672,18 @@ def budget_edit_view(request, budget_id):
             status=403,
         )
 
-    budget = get_object_or_404(Budget, pk=budget_id)
+    admin_org = get_admin_organization(request.user)
+    budget_qs = Budget.objects.all()
+    if admin_org:
+        budget_qs = budget_qs.filter(cost_center__department__organization=admin_org)
+    budget = get_object_or_404(budget_qs, pk=budget_id)
     if request.method == "POST":
-        form = BudgetAdminForm(request.POST, instance=budget)
+        form = BudgetAdminForm(request.POST, instance=budget, admin_org=admin_org)
         if form.is_valid():
             form.save()
             return HttpResponse("<script>window.location.reload();</script>")
     else:
-        form = BudgetAdminForm(instance=budget)
+        form = BudgetAdminForm(instance=budget, admin_org=admin_org)
     return render(request, "pages/dashboards/superadmin/budget_form.html", {"form": form, "is_edit": True, "budget": budget})
 
 
@@ -601,13 +696,14 @@ def policy_create_view(request):
             status=403,
         )
 
+    admin_org = get_admin_organization(request.user)
     if request.method == "POST":
-        form = PolicyAdminForm(request.POST)
+        form = PolicyAdminForm(request.POST, admin_org=admin_org)
         if form.is_valid():
             form.save()
             return HttpResponse("<script>window.location.reload();</script>")
     else:
-        form = PolicyAdminForm()
+        form = PolicyAdminForm(admin_org=admin_org)
     return render(request, "pages/dashboards/superadmin/policy_form.html", {"form": form, "is_edit": False})
 
 
@@ -620,14 +716,18 @@ def policy_edit_view(request, policy_id):
             status=403,
         )
 
-    policy = get_object_or_404(ApprovalPolicy, pk=policy_id)
+    admin_org = get_admin_organization(request.user)
+    policy_qs = ApprovalPolicy.objects.all()
+    if admin_org:
+        policy_qs = policy_qs.filter(department__organization=admin_org)
+    policy = get_object_or_404(policy_qs, pk=policy_id)
     if request.method == "POST":
-        form = PolicyAdminForm(request.POST, instance=policy)
+        form = PolicyAdminForm(request.POST, instance=policy, admin_org=admin_org)
         if form.is_valid():
             form.save()
             return HttpResponse("<script>window.location.reload();</script>")
     else:
-        form = PolicyAdminForm(instance=policy)
+        form = PolicyAdminForm(instance=policy, admin_org=admin_org)
     return render(request, "pages/dashboards/superadmin/policy_form.html", {"form": form, "is_edit": True, "policy": policy})
 
 

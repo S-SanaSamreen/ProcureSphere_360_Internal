@@ -232,7 +232,7 @@ class TestRequesterCostCenterAssignment:
         assert form.is_valid()
         user = form.save()
         assert user.cost_center is None
-        assert user.department == dept_hr
+        assert user.department is None
         assert user.role == role_approver
 
         # Even if a cost center was mistakenly posted for a non-requester, form cleans it to None
@@ -247,6 +247,7 @@ class TestRequesterCostCenterAssignment:
         assert form2.is_valid()
         user2 = form2.save()
         assert user2.cost_center is None
+        assert user2.department is None
 
     def test_07_requester_pr_creation_restricted_to_authorized_cost_center(
         self, client, role_requester, dept_hr, dept_it, cc_hr_101, cc_it_101

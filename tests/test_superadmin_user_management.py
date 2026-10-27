@@ -131,6 +131,8 @@ def test_user_edit_modal_and_update(superadmin_client, sample_roles_and_departme
         email="test_edit@procuresphere.local",
         password="Password123!",
         role=role_req,
+        organization=dept_hr.organization,
+        department=dept_hr,
         phone_number="1234567890",
     )
 
@@ -159,7 +161,7 @@ def test_user_edit_modal_and_update(superadmin_client, sample_roles_and_departme
     target_user.refresh_from_db()
     assert target_user.phone_number == "9998887777"
     assert target_user.role == role_app
-    assert target_user.department == dept_hr
+    assert target_user.department is None
 
     # Verify AuditLog update
     audit_log = AuditLog.objects.filter(

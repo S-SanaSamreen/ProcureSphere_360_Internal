@@ -24,8 +24,8 @@
                 {{ form.role }}
                 {% if form.role.errors %}<div class="text-danger small mt-1">{{ form.role.errors }}</div>{% endif %}
             </div>
-            <div class="col-md-6">
-                <label class="form-label fw-semibold text-secondary small">Department</label>
+            <div class="col-md-6" id="department-wrapper" style="display: none;">
+                <label class="form-label fw-semibold text-secondary small">Department <span class="text-danger">*</span></label>
                 <div id="department-select-container">
                     {{ form.department }}
                 </div>
@@ -110,13 +110,17 @@
         return selectedOpt.text.toUpperCase().indexOf("REQUESTER") !== -1;
     }
 
+    var deptWrapper = document.getElementById("department-wrapper");
+
     function updateCostCenterVisibility() {
-        if (!ccWrapper) return;
-        if (isRequesterSelected()) {
-            ccWrapper.style.display = "block";
-        } else {
-            ccWrapper.style.display = "none";
-            if (ccSelect) ccSelect.value = "";
+        var isReq = isRequesterSelected();
+        if (deptWrapper) {
+            deptWrapper.style.display = isReq ? "block" : "none";
+            if (!isReq && deptSelect) deptSelect.value = "";
+        }
+        if (ccWrapper) {
+            ccWrapper.style.display = isReq ? "block" : "none";
+            if (!isReq && ccSelect) ccSelect.value = "";
         }
     }
 

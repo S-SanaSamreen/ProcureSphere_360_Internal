@@ -71,7 +71,7 @@ def test_user_create_modal_contains_password_and_action_controls(superadmin_clie
 def test_create_user_with_manual_password_and_welcome_email(superadmin_client, sample_roles_and_departments):
     """Verifies creating a user with manual password hashes password, enforces first login flag, and sends email."""
     client, admin = superadmin_client
-    _, role_app, dept_hr, _ = sample_roles_and_departments
+    role_req, role_app, dept_hr, cc_hr = sample_roles_and_departments
     mail.outbox.clear()
 
     manual_password = "SuperSecretPassword123!@#"
@@ -80,8 +80,9 @@ def test_create_user_with_manual_password_and_welcome_email(superadmin_client, s
         {
             "email": "manual.user@example.com",
             "phone_number": "9123456780",
-            "role": str(role_app.pk),
+            "role": str(role_req.pk),
             "department": str(dept_hr.pk),
+            "cost_center": str(cc_hr.pk),
             "password": manual_password,
             "is_active": "on",
         },
@@ -110,7 +111,7 @@ def test_create_user_with_manual_password_and_welcome_email(superadmin_client, s
     assert "manual.user@example.com" in all_content
     assert manual_password in all_content
     assert "Human Resources" in all_content
-    assert "Department Approver" in all_content
+    assert "Requester" in all_content
     assert "change your temporary password" in all_content.lower()
 
 

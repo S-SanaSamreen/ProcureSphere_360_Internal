@@ -28,7 +28,7 @@ def test_superadmin_organizations_page_renders_departments_section(client, super
     # Section 1: Legal Entities
     assert "Legal Entities" in content
     assert "HPE-GLOBAL" in content
-    assert "Add Organization" in content
+    assert "Add Organization" not in content
 
     # Section 2: Departments
     assert "Departments" in content

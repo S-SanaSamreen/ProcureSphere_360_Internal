@@ -1,11 +1,12 @@
 from django import forms
 from django.contrib.auth import password_validation
+from django.db import models
 
 from apps.accounts.models import Role, User
 from apps.accounts.password_utils import generate_secure_password
 from apps.approvals.models import ApprovalPolicy
 from apps.budgets.models import Budget
-from apps.organization.models import CostCenter, Department, Organization
+from apps.organization.models import CostCenter, Department, FiscalPeriod, Organization
 
 
 class UserAdminForm(forms.ModelForm):
@@ -34,20 +35,24 @@ class UserAdminForm(forms.ModelForm):
             "is_active": forms.CheckboxInput(attrs={"class": "form-check-input"}),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, admin_org=None, **kwargs):
+        self.admin_org = admin_org
         super().__init__(*args, **kwargs)
         self.fields["email"].required = True
         self.fields["role"].queryset = Role.objects.all().order_by("name")
         self.fields["role"].empty_label = "-- Select Role --"
-        self.fields["department"].queryset = (
-            Department.objects.select_related("organization").all().order_by("name")
-        )
+
+        dept_qs = Department.objects.select_related("organization").all()
+        if self.admin_org:
+            dept_qs = dept_qs.filter(organization=self.admin_org)
+        self.fields["department"].queryset = dept_qs.order_by("name")
         self.fields["department"].empty_label = "-- Select Department (Optional) --"
         self.fields["department"].required = False
 
-        self.fields["cost_center"].queryset = (
-            CostCenter.objects.select_related("department").all().order_by("name")
-        )
+        cc_qs = CostCenter.objects.select_related("department").all()
+        if self.admin_org:
+            cc_qs = cc_qs.filter(department__organization=self.admin_org)
+        self.fields["cost_center"].queryset = cc_qs.order_by("name")
         self.fields["cost_center"].empty_label = "-- Select Cost Center --"
         self.fields["cost_center"].required = False
 
@@ -55,9 +60,10 @@ class UserAdminForm(forms.ModelForm):
         # On bound POST submission, keep all cost centers in queryset so clean() can catch cross-department
         # and duplicate assignments with descriptive domain error messages.
         if not self.is_bound and self.instance and self.instance.pk and self.instance.department_id:
-            self.fields["cost_center"].queryset = CostCenter.objects.filter(
-                department_id=self.instance.department_id
-            ).order_by("name")
+            cc_scoped = CostCenter.objects.filter(department_id=self.instance.department_id)
+            if self.admin_org:
+                cc_scoped = cc_scoped.filter(department__organization=self.admin_org)
+            self.fields["cost_center"].queryset = cc_scoped.order_by("name")
 
         if not self.instance.pk or getattr(self.instance, "_state", None) and self.instance._state.adding:
             self.initial.setdefault("is_active", True)
@@ -140,7 +146,8 @@ class UserAdminForm(forms.ModelForm):
                         f"Cost Center '{cost_center.code}' already has a designated Requester ({existing_req.first().email}). Each Cost Center can have only one designated Requester.",
                     )
         else:
-            # For non-requester roles, clear cost center to preserve existing role behavior
+            # For non-requester roles, clear department and cost center (they belong to the organization as a whole)
+            cleaned_data["department"] = None
             cleaned_data["cost_center"] = None
 
         return cleaned_data
@@ -149,6 +156,11 @@ class UserAdminForm(forms.ModelForm):
         user = super().save(commit=False)
         if self.cleaned_data.get("email"):
             user.username = self.cleaned_data["email"]
+        if self.admin_org and not user.organization_id:
+            user.organization = self.admin_org
+        if not user.role or getattr(user.role, "code", "") != Role.REQUESTER:
+            user.department = None
+            user.cost_center = None
         password = self.cleaned_data.get("password")
         if password:
             user.set_password(password)
@@ -184,10 +196,25 @@ class DepartmentAdminForm(forms.ModelForm):
             ),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, admin_org=None, **kwargs):
+        self.admin_org = admin_org
         super().__init__(*args, **kwargs)
-        self.fields["organization"].queryset = Organization.objects.filter(is_active=True).order_by("name")
-        self.fields["organization"].empty_label = "-- Select Organization --"
+        if self.admin_org:
+            self.fields["organization"].queryset = Organization.objects.filter(pk=self.admin_org.pk)
+            self.fields["organization"].initial = self.admin_org
+            self.fields["organization"].empty_label = None
+            self.fields["organization"].required = False
+        else:
+            self.fields["organization"].queryset = Organization.objects.filter(is_active=True).order_by("name")
+            self.fields["organization"].empty_label = "-- Select Organization --"
+
+    def clean(self):
+        cleaned_data = super().clean()
+        if self.admin_org:
+            cleaned_data["organization"] = self.admin_org
+            if "organization" in self.errors:
+                del self.errors["organization"]
+        return cleaned_data
 
     def clean_code(self):
         code = self.cleaned_data.get("code", "").strip().upper()
@@ -222,11 +249,13 @@ class CostCenterAdminForm(forms.ModelForm):
             "department": forms.Select(attrs={"class": "form-select"}),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, admin_org=None, **kwargs):
+        self.admin_org = admin_org
         super().__init__(*args, **kwargs)
-        self.fields["department"].queryset = (
-            Department.objects.select_related("organization").all().order_by("name")
-        )
+        dept_qs = Department.objects.select_related("organization").all()
+        if self.admin_org:
+            dept_qs = dept_qs.filter(organization=self.admin_org)
+        self.fields["department"].queryset = dept_qs.order_by("name")
         self.fields["department"].empty_label = "-- Select Department --"
         if self.instance.pk and self.instance.manager_id and not self.is_bound:
             self.initial["manager"] = self.instance.manager.email
@@ -235,7 +264,13 @@ class CostCenterAdminForm(forms.ModelForm):
         raw = (self.cleaned_data.get("manager") or "").strip()
         if not raw:
             return None
-        user = User.objects.filter(email__iexact=raw, is_active=True).first()
+        qs = User.objects.filter(email__iexact=raw, is_active=True)
+        if self.admin_org:
+            qs = qs.filter(
+                models.Q(organization=self.admin_org)
+                | (models.Q(organization__isnull=True) & models.Q(department__organization=self.admin_org))
+            )
+        user = qs.first()
         if user is None:
             raise forms.ValidationError("No active user exists with this email.")
         return user
@@ -271,6 +306,17 @@ class BudgetAdminForm(forms.ModelForm):
             "allow_overspend": forms.CheckboxInput(attrs={"class": "form-check-input"}),
         }
 
+    def __init__(self, *args, admin_org=None, **kwargs):
+        self.admin_org = admin_org
+        super().__init__(*args, **kwargs)
+        if self.admin_org:
+            self.fields["cost_center"].queryset = CostCenter.objects.filter(
+                department__organization=self.admin_org
+            ).order_by("code")
+            self.fields["fiscal_period"].queryset = FiscalPeriod.objects.filter(
+                organization=self.admin_org
+            ).order_by("name")
+
 
 class PolicyAdminForm(forms.ModelForm):
     class Meta:
@@ -284,3 +330,11 @@ class PolicyAdminForm(forms.ModelForm):
             "max_amount": forms.NumberInput(attrs={"class": "form-control", "step": "0.01"}),
             "is_active": forms.CheckboxInput(attrs={"class": "form-check-input"}),
         }
+
+    def __init__(self, *args, admin_org=None, **kwargs):
+        self.admin_org = admin_org
+        super().__init__(*args, **kwargs)
+        if self.admin_org:
+            self.fields["department"].queryset = Department.objects.filter(
+                organization=self.admin_org
+            ).order_by("name")
