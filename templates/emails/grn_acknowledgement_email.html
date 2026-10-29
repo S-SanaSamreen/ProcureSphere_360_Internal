@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>{{ subject }}</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.5; color: #1e293b; background-color: #f8fafc; margin: 0; padding: 20px; }
+        .container { max-width: 650px; margin: 0 auto; background: #ffffff; border-radius: 8px; border: 1px solid #e2e8f0; overflow: hidden; }
+        .header { background: #002B49; color: #ffffff; padding: 24px; text-align: left; }
+        .header h1 { margin: 0 0 6px 0; font-size: 20px; font-weight: 700; }
+        .header p { margin: 0; font-size: 13px; color: #94a3b8; }
+        .badge { display: inline-block; padding: 6px 12px; border-radius: 4px; font-weight: 600; font-size: 13px; margin: 16px 0; }
+        .badge-full { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
+        .badge-partial { background: #ffedd5; color: #9a3412; border: 1px solid #fed7aa; }
+        .badge-rejection { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+        .content { padding: 24px; }
+        .meta-box { background: #f1f5f9; border-radius: 6px; padding: 16px; margin: 16px 0; font-size: 13px; }
+        .meta-grid { display: table; width: 100%; }
+        .meta-row { display: table-row; }
+        .meta-label { display: table-cell; font-weight: 600; color: #475569; padding: 4px 12px 4px 0; width: 35%; }
+        .meta-value { display: table-cell; color: #0f172a; padding: 4px 0; }
+        table.items { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 12px; }
+        table.items th { background: #0f172a; color: #ffffff; text-align: left; padding: 8px; font-weight: 600; }
+        table.items td { padding: 8px; border-bottom: 1px solid #e2e8f0; }
+        table.items tr:nth-child(even) td { background: #f8fafc; }
+        .footer { background: #f1f5f9; padding: 16px 24px; font-size: 11px; color: #64748b; border-top: 1px solid #e2e8f0; }
+        .note-alert { padding: 12px 16px; border-radius: 6px; font-size: 12px; margin: 16px 0; }
+        .note-alert-success { background: #f0fdf4; border-left: 4px solid #16a34a; color: #166534; }
+        .note-alert-warning { background: #fffbeb; border-left: 4px solid #f59e0b; color: #92400e; }
+        .note-alert-danger { background: #fef2f2; border-left: 4px solid #dc2626; color: #991b1b; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>ProcureSphere 360</h1>
+            <p>Goods Receipt Note (GRN) Acknowledgement &bull; Ref: {{ acknowledgement.acknowledgement_number }} (v{{ acknowledgement.version }})</p>
+        </div>
+        <div class="content">
+            <p>Dear <strong>{{ vendor_name }}</strong>,</p>
+            <p>This is an automated notification from the Stores & Quality Receiving Department of <strong>ProcureSphere 360</strong>. Quality inspection has been recorded for the shipment delivered under Goods Receipt Note <strong>{{ receipt.grn_number }}</strong> against Purchase Order <strong>{{ po.po_number }}</strong>.</p>
+
+            {% if acknowledgement.outcome == 'FULL_ACCEPTANCE' %}
+                <div class="badge badge-full">&check; STATUS: FULL ACCEPTANCE — All Items Passed Inspection</div>
+                <div class="note-alert note-alert-success">
+                    All items received in this consignment passed quality verification and have been accepted into inventory for financial 3-way match reconciliation and payment processing.
+                </div>
+            {% elif acknowledgement.outcome == 'PARTIAL_ACCEPTANCE' %}
+                <div class="badge badge-partial">&excl; STATUS: PARTIAL ACCEPTANCE — Some Items Rejected</div>
+                <div class="note-alert note-alert-warning">
+                    Certain quantities in this delivery failed inspection or non-conformance criteria. The accepted quantities have been booked, while rejected items require return or corrective action as detailed below.
+                </div>
+            {% else %}
+                <div class="badge badge-rejection">&cross; STATUS: QUALITY REJECTION — Consignment Rejected</div>
+                <div class="note-alert note-alert-danger">
+                    The received shipment has failed incoming quality verification criteria. Materials cannot be accepted into inventory. Please review the recorded non-conformance reasons below.
+                </div>
+            {% endif %}
+
+            <div class="meta-box">
+                <div class="meta-grid">
+                    <div class="meta-row">
+                        <span class="meta-label">GRN Reference:</span>
+                        <span class="meta-value">{{ receipt.grn_number }}</span>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Purchase Order:</span>
+                        <span class="meta-value">{{ po.po_number }} (Version {{ po.version }})</span>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Delivery Note / Waybill:</span>
+                        <span class="meta-value">{{ receipt.delivery_note_number|default:"N/A" }}</span>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Receipt Date:</span>
+                        <span class="meta-value">{{ receipt.received_date|date:"Y-m-d H:i" }}</span>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Inspected By:</span>
+                        <span class="meta-value">{{ acknowledgement.generated_by.email }}</span>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Total Received:</span>
+                        <span class="meta-value"><strong>{{ acknowledgement.total_received_qty }}</strong> units</span>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Total Accepted:</span>
+                        <span class="meta-value"><strong style="color: #166534;">{{ acknowledgement.total_accepted_qty }}</strong> units</span>
+                    </div>
+                    <div class="meta-row">
+                        <span class="meta-label">Total Rejected:</span>
+                        <span class="meta-value"><strong style="color: #991b1b;">{{ acknowledgement.total_rejected_qty }}</strong> units</span>
+                    </div>
+                </div>
+            </div>
+
+            <h3 style="font-size: 14px; margin-top: 20px; margin-bottom: 8px;">Consignment Line Summary:</h3>
+            <table class="items">
+                <thead>
+                    <tr>
+                        <th>Item Description</th>
+                        <th style="text-align: right;">Ordered</th>
+                        <th style="text-align: right;">Received</th>
+                        <th style="text-align: right;">Accepted</th>
+                        <th style="text-align: right;">Rejected</th>
+                        <th>Outcome</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in line_items %}
+                    <tr>
+                        <td>
+                            <strong>{{ item.description }}</strong>
+                            {% if item.rejection_reason %}
+                            <br/><span style="color: #dc2626; font-size: 11px;">Rejection: {{ item.rejection_reason }}</span>
+                            {% endif %}
+                        </td>
+                        <td style="text-align: right;">{{ item.ordered_qty }}</td>
+                        <td style="text-align: right;">{{ item.received_qty }}</td>
+                        <td style="text-align: right; color: #166534; font-weight: 600;">{{ item.accepted_qty }}</td>
+                        <td style="text-align: right; color: #991b1b; font-weight: 600;">{{ item.rejected_qty }}</td>
+                        <td>
+                            {% if item.rejected_qty > 0 %}
+                            <span style="color: #dc2626; font-weight: 600;">REJECTED</span>
+                            {% else %}
+                            <span style="color: #16a34a; font-weight: 600;">PASSED</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            {% if receipt.remarks %}
+            <p style="font-size: 12px; color: #475569;"><strong>Receipt Remarks:</strong> {{ receipt.remarks }}</p>
+            {% endif %}
+
+            <p style="font-size: 12px; color: #64748b; margin-top: 20px;">
+                An official PDF copy of this GRN Acknowledgement is attached to this email for your records. You may also access this acknowledgement anytime via the ProcureSphere 360 portal.
+            </p>
+        </div>
+        <div class="footer">
+            ProcureSphere 360 Enterprise ERP &bull; Internal Receiving & Quality Inspection Control System<br/>
+            This is an automated system email. Please do not reply directly to this message.
+        </div>
+    </div>
+</body>
+</html>

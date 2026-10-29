@@ -502,6 +502,25 @@ def record_inspection_service(
                     target_url=f"/receipts/{receipt.id}/",
                 )
 
+    # Generate and distribute formal GRN Acknowledgement if inspection is complete
+    try:
+        from apps.receipts.acknowledgement_service import (
+            generate_and_distribute_grn_acknowledgement_service,
+        )
+
+        generate_and_distribute_grn_acknowledgement_service(
+            receipt=receipt,
+            triggered_by=inspected_by,
+        )
+    except Exception as ack_err:
+        import logging
+
+        logging.getLogger(__name__).error(
+            "Error distributing GRN acknowledgement for %s: %s",
+            receipt.grn_number,
+            ack_err,
+        )
+
     return receipt
 
 
@@ -874,5 +893,25 @@ def correct_receipt_line_quantity_service(
             "notes": correction_notes,
         },
     )
+
+    # If this receipt has an existing acknowledgement, update and version it with the corrected quantities
+    if receipt_line.receipt.acknowledgements.exists():
+        try:
+            from apps.receipts.acknowledgement_service import (
+                generate_and_distribute_grn_acknowledgement_service,
+            )
+
+            generate_and_distribute_grn_acknowledgement_service(
+                receipt=receipt_line.receipt,
+                triggered_by=corrected_by,
+            )
+        except Exception as ack_err:
+            import logging
+
+            logging.getLogger(__name__).error(
+                "Error updating GRN acknowledgement after quantity correction for %s: %s",
+                receipt_line.receipt.grn_number,
+                ack_err,
+            )
 
     return receipt_line

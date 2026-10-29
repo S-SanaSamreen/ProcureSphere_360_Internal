@@ -1,7 +1,13 @@
 from django.contrib import admin
 
 from apps.core.admin_site import RoleBasedModelAdmin, register_model
-from apps.receipts.models import GoodsReceipt, InspectionRecord, ReceiptLine, RejectionRecord
+from apps.receipts.models import (
+    GoodsReceipt,
+    GRNAcknowledgement,
+    InspectionRecord,
+    ReceiptLine,
+    RejectionRecord,
+)
 
 
 class ReceiptLineInline(admin.TabularInline):
@@ -45,7 +51,44 @@ class RejectionRecordAdmin(RoleBasedModelAdmin):
         return qs
 
 
+class GRNAcknowledgementAdmin(RoleBasedModelAdmin):
+    list_display = (
+        "acknowledgement_number",
+        "receipt",
+        "version",
+        "outcome",
+        "delivery_status",
+        "generated_by",
+        "generated_at",
+    )
+    list_filter = ("outcome", "delivery_status", "version")
+    search_fields = (
+        "acknowledgement_number",
+        "receipt__grn_number",
+        "receipt__po__po_number",
+        "receipt__po__vendor__legal_name",
+    )
+    readonly_fields = (
+        "acknowledgement_number",
+        "version",
+        "inspection_fingerprint",
+        "idempotency_key",
+        "generated_at",
+        "delivered_at",
+        "recipient_summary",
+    )
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
+            return qs.filter(
+                receipt__po__cost_center__department__organization=request.user.effective_organization
+            )
+        return qs
+
+
 register_model(GoodsReceipt, GoodsReceiptAdmin)
 register_model(ReceiptLine)
 register_model(InspectionRecord, InspectionRecordAdmin)
 register_model(RejectionRecord, RejectionRecordAdmin)
+register_model(GRNAcknowledgement, GRNAcknowledgementAdmin)

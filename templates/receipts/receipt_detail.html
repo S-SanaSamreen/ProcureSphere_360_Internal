@@ -64,7 +64,11 @@
     </div>
 
     <!-- Status-Gated Header Actions -->
-    <div class="d-flex align-items-center flex-wrap gap-2">
+        {% if grn.latest_acknowledgement %}
+            <a href="{% url 'grn_acknowledgement' grn_id=grn.id %}" class="btn btn-primary rounded-pill px-3 fw-bold shadow-sm">
+                <i class="fa-solid fa-file-contract me-1"></i> GRN Acknowledgement (v{{ grn.latest_acknowledgement.version }})
+            </a>
+        {% endif %}
         {% if grn.overall_inspection_status == 'PENDING' %}
             <!-- Stage: Pending Quality Inspection -->
             <a href="{% url 'receipt_inspect' grn_id=grn.id %}" class="btn btn-warning rounded-pill px-4 fw-bold shadow-sm text-dark">
@@ -225,6 +229,156 @@
                 <div class="p-3 bg-light rounded-3 text-dark border">{{ grn.remarks|default:"No receiving remarks provided." }}</div>
             </div>
         </div>
+    </div>
+</div>
+
+<!-- 1B. Quality Inspection Acknowledgement & Vendor Notification Card -->
+<div class="card border-0 shadow-sm rounded-4 mb-4 bg-white">
+    <div class="card-header bg-white border-bottom-0 pt-4 pb-0 px-4 d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div>
+            <h5 class="fw-bold text-dark mb-1">
+                <i class="fa-solid fa-file-contract text-primary me-2"></i> Quality Inspection Acknowledgement &amp; Notifications
+            </h5>
+            <p class="text-muted small mb-0">Traceable GRN acknowledgement certificate issued to supplier and internal stakeholders.</p>
+        </div>
+        {% if grn.latest_acknowledgement %}
+        <div class="d-flex align-items-center gap-2">
+            <a href="{% url 'grn_acknowledgement' grn_id=grn.id %}" class="btn btn-sm btn-outline-primary rounded-pill px-3 fw-semibold">
+                <i class="fa-solid fa-eye me-1"></i> View / Print
+            </a>
+            <a href="{% url 'grn_acknowledgement' grn_id=grn.id %}?format=pdf" class="btn btn-sm btn-primary rounded-pill px-3 fw-bold shadow-sm">
+                <i class="fa-solid fa-file-pdf me-1"></i> Download PDF
+            </a>
+            {% if grn.latest_acknowledgement.delivery_status != 'SENT' %}
+            <form method="post" action="{% url 'grn_acknowledgement_retry' ack_id=grn.latest_acknowledgement.id %}" class="d-inline">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-sm btn-outline-warning rounded-pill px-3 fw-semibold text-dark">
+                    <i class="fa-solid fa-rotate-right me-1"></i> Retry Delivery
+                </button>
+            </form>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+    <div class="card-body p-4">
+        {% if grn.latest_acknowledgement %}
+            {% with ack=grn.latest_acknowledgement %}
+            <div class="row g-3">
+                <div class="col-md-3 col-sm-6">
+                    <small class="text-uppercase text-secondary fw-semibold">Acknowledgement Ref</small>
+                    <div class="font-monospace fw-bold text-primary fs-6">{{ ack.acknowledgement_number }}</div>
+                    <div class="text-muted small">Version {{ ack.version }} &bull; {{ ack.generated_at|date:"M d, Y H:i" }}</div>
+                </div>
+                <div class="col-md-3 col-sm-6">
+                    <small class="text-uppercase text-secondary fw-semibold">Inspection Outcome</small>
+                    <div>
+                        {% if ack.outcome == 'FULL_ACCEPTANCE' %}
+                            <span class="badge bg-success-subtle text-success border border-success px-3 py-2">
+                                <i class="fa-solid fa-circle-check me-1"></i> Full Acceptance
+                            </span>
+                        {% elif ack.outcome == 'PARTIAL_ACCEPTANCE' %}
+                            <span class="badge bg-warning-subtle text-warning-emphasis border border-warning px-3 py-2">
+                                <i class="fa-solid fa-triangle-exclamation me-1"></i> Partial Acceptance
+                            </span>
+                        {% else %}
+                            <span class="badge bg-danger-subtle text-danger border border-danger px-3 py-2">
+                                <i class="fa-solid fa-ban me-1"></i> Quality Rejection
+                            </span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="col-md-3 col-sm-6">
+                    <small class="text-uppercase text-secondary fw-semibold">Consignment Summary</small>
+                    <div class="small fw-semibold mt-1">
+                        Recv: <strong class="text-dark">{{ ack.total_received_qty|floatformat:2 }}</strong> &bull;
+                        Acc: <strong class="text-success">{{ ack.total_accepted_qty|floatformat:2 }}</strong> &bull;
+                        Rej: <strong class="text-danger">{{ ack.total_rejected_qty|floatformat:2 }}</strong>
+                    </div>
+                </div>
+                <div class="col-md-3 col-sm-6">
+                    <small class="text-uppercase text-secondary fw-semibold">Notification &amp; Email Delivery</small>
+                    <div>
+                        {% if ack.delivery_status == 'SENT' %}
+                            <span class="badge bg-success-subtle text-success border border-success">
+                                <i class="fa-solid fa-paper-plane me-1"></i> Email Dispatched
+                            </span>
+                        {% elif ack.delivery_status == 'NO_RECIPIENTS' %}
+                            <span class="badge bg-warning-subtle text-warning-emphasis border border-warning">
+                                <i class="fa-solid fa-triangle-exclamation me-1"></i> Vendor Email Unavailable
+                            </span>
+                        {% elif ack.delivery_status == 'FAILED' %}
+                            <span class="badge bg-danger-subtle text-danger border border-danger">
+                                <i class="fa-solid fa-circle-xmark me-1"></i> Email Failed
+                            </span>
+                        {% elif ack.delivery_status == 'PARTIALLY_SENT' %}
+                            <span class="badge bg-warning-subtle text-warning-emphasis border border-warning">
+                                <i class="fa-solid fa-circle-exclamation me-1"></i> Partially Sent
+                            </span>
+                        {% else %}
+                            <span class="badge bg-secondary-subtle text-secondary border">
+                                <i class="fa-solid fa-clock me-1"></i> Pending Delivery
+                            </span>
+                        {% endif %}
+                        <div class="text-muted small mt-1">
+                            In-app notices: {{ ack.in_app_notified_count }} recipient(s)
+                        </div>
+                    </div>
+                </div>
+
+                {% if ack.delivery_error %}
+                <div class="col-12">
+                    <div class="alert alert-{% if ack.delivery_status == 'NO_RECIPIENTS' %}warning{% else %}danger{% endif %} py-2 px-3 mb-0 rounded-3 small">
+                        <i class="fa-solid fa-info-circle me-1"></i>
+                        {{ ack.delivery_error }}
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Recipient Overview -->
+                <div class="col-12 mt-3 pt-3 border-top">
+                    <div class="row g-2 text-muted small">
+                        <div class="col-md-4">
+                            <strong>Vendor Contact:</strong>
+                            {% if ack.recipient_summary.vendor_email %}
+                                {{ ack.recipient_summary.vendor_contact_name|default:"Primary Contact" }}
+                                (<code>{{ ack.recipient_summary.vendor_email }}</code>)
+                            {% else %}
+                                <span class="text-danger fw-semibold">None configured on supplier master</span>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-4">
+                            <strong>Finance Recipients:</strong>
+                            {% if ack.recipient_summary.finance_recipients %}
+                                {{ ack.recipient_summary.finance_recipients|join:", " }}
+                            {% else %}
+                                <span>Active Finance / AP Team</span>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-4">
+                            <strong>Procurement:</strong>
+                            {% if ack.recipient_summary.procurement_execs or ack.recipient_summary.procurement_managers %}
+                                {{ ack.recipient_summary.procurement_execs|join:", " }}
+                                {% if ack.recipient_summary.procurement_managers %}; Mgr: {{ ack.recipient_summary.procurement_managers|join:", " }}{% endif %}
+                            {% else %}
+                                <span>Procurement Team</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endwith %}
+        {% else %}
+            <div class="text-center py-4 text-muted">
+                <i class="fa-solid fa-clipboard-check fs-2 text-warning mb-2"></i>
+                <h6 class="fw-bold text-dark">Quality Inspection Required Before Acknowledgement</h6>
+                <p class="small mb-3">
+                    A formal GRN Acknowledgement certificate and stakeholder notifications are automatically generated once quality inspection is completed by Stores / Receiver.
+                </p>
+                <a href="{% url 'receipt_inspect' grn_id=grn.id %}" class="btn btn-warning rounded-pill px-4 fw-bold shadow-sm text-dark">
+                    <i class="fa-solid fa-clipboard-check me-1"></i> Perform Quality Inspection Now
+                </a>
+            </div>
+        {% endif %}
     </div>
 </div>
 

@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.db import models
+from django.utils import timezone
 
 from apps.core.models import TimeStampedModel
 
@@ -66,6 +67,10 @@ class GoodsReceipt(TimeStampedModel):
             line for line in self.lines.all() if line.quantity_accepted > Decimal("0.00")
         ]
         return len(accepted_lines) > 0 and self.stock_handoff_status != "HANDED_OFF"
+
+    @property
+    def latest_acknowledgement(self):
+        return self.acknowledgements.order_by("-version").first()
 
 
 class ReceiptLine(TimeStampedModel):
@@ -176,3 +181,93 @@ class StockHandoffRecord(TimeStampedModel):
 
     def __str__(self):
         return f"Stock Handoff: {self.quantity_handed_off} units to {self.storage_location} ({self.receipt_line.receipt.grn_number})"
+
+
+class GRNAcknowledgement(TimeStampedModel):
+    """
+    Traceable Goods Receipt Note (GRN) Acknowledgement generated after quality inspection.
+    Maintains full version history, outcome status (full, partial, rejection), recipient delivery status,
+    and idempotency fingerprint to prevent duplicate events.
+    """
+
+    OUTCOME_FULL = "FULL_ACCEPTANCE"
+    OUTCOME_PARTIAL = "PARTIAL_ACCEPTANCE"
+    OUTCOME_REJECTION = "REJECTION"
+
+    OUTCOME_CHOICES = [
+        (OUTCOME_FULL, "Full Acceptance"),
+        (OUTCOME_PARTIAL, "Partial Acceptance"),
+        (OUTCOME_REJECTION, "Quality Rejection"),
+    ]
+
+    STATUS_PENDING = "PENDING"
+    STATUS_SENT = "SENT"
+    STATUS_PARTIAL = "PARTIALLY_SENT"
+    STATUS_FAILED = "FAILED"
+    STATUS_NO_EMAIL = "NO_RECIPIENTS"
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending Delivery"),
+        (STATUS_SENT, "Sent Successfully"),
+        (STATUS_PARTIAL, "Partially Sent"),
+        (STATUS_FAILED, "Delivery Failed"),
+        (STATUS_NO_EMAIL, "Vendor Email Unavailable"),
+    ]
+
+    receipt = models.ForeignKey(
+        GoodsReceipt, on_delete=models.CASCADE, related_name="acknowledgements"
+    )
+    acknowledgement_number = models.CharField(max_length=60, unique=True, db_index=True)
+    version = models.PositiveIntegerField(default=1)
+    outcome = models.CharField(max_length=30, choices=OUTCOME_CHOICES, db_index=True)
+    inspection_fingerprint = models.CharField(max_length=64, db_index=True)
+    idempotency_key = models.CharField(max_length=255, unique=True, db_index=True)
+
+    generated_by = models.ForeignKey(
+        "accounts.User", on_delete=models.PROTECT, related_name="generated_acknowledgements"
+    )
+    generated_at = models.DateTimeField(default=timezone.now)
+
+    total_received_qty = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal("0.00")
+    )
+    total_accepted_qty = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal("0.00")
+    )
+    total_rejected_qty = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal("0.00")
+    )
+
+    # Tracking delivery
+    delivery_status = models.CharField(
+        max_length=30, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True
+    )
+    delivery_error = models.TextField(blank=True, default="")
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    recipient_summary = models.JSONField(default=dict, blank=True)
+    in_app_notified_count = models.PositiveIntegerField(default=0)
+    email_sent_count = models.PositiveIntegerField(default=0)
+
+    # Document details
+    document_notes = models.TextField(blank=True, default="")
+    pdf_file_path = models.CharField(max_length=500, blank=True, default="")
+
+    prior_acknowledgement = models.ForeignKey(
+        "self", on_delete=models.SET_NULL, null=True, blank=True, related_name="revisions"
+    )
+
+    class Meta:
+        ordering = ["-version", "-created_at"]
+        indexes = [
+            models.Index(fields=["receipt", "-version"], name="grn_ack_receipt_ver_idx"),
+            models.Index(fields=["outcome", "delivery_status"], name="grn_ack_outc_stat_idx"),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.acknowledgement_number} ({self.get_outcome_display()}) - {self.receipt.grn_number}"
+        )
+
+    @property
+    def has_rejections(self) -> bool:
+        return self.total_rejected_qty > Decimal("0.00")

@@ -1,6 +1,8 @@
 from django.urls import path
 
 from .views import (
+    grn_acknowledgement_retry_view,
+    grn_acknowledgement_view,
     receipt_create_view,
     receipt_dashboard_view,
     receipt_delivery_performance_report_view,
@@ -57,6 +59,21 @@ urlpatterns = [
         "receipts/<uuid:grn_id>/handoff/",
         receipt_stock_handoff_view,
         name="receipt_stock_handoff",
+    ),
+    path(
+        "receipts/<uuid:grn_id>/acknowledgement/",
+        grn_acknowledgement_view,
+        name="grn_acknowledgement",
+    ),
+    path(
+        "receipts/<uuid:grn_id>/acknowledgement/view/",
+        grn_acknowledgement_view,
+        name="grn_acknowledgement_view",
+    ),
+    path(
+        "receipts/acknowledgements/<uuid:ack_id>/retry/",
+        grn_acknowledgement_retry_view,
+        name="grn_acknowledgement_retry",
     ),
     path(
         "receipts/rejections/<uuid:rejection_id>/return/",

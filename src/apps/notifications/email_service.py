@@ -254,3 +254,74 @@ def send_user_welcome_email(
         temporary_password=temporary_password,
         login_url=login_url,
     )
+
+
+def send_grn_acknowledgement_email(
+    *,
+    to_emails: list,
+    subject: str,
+    context: dict,
+    pdf_content: Optional[bytes] = None,
+    attachment_filename: Optional[str] = None,
+) -> Tuple[str, Optional[str], list, list]:
+    """
+    Sends the GRN acknowledgement email to the provided recipients.
+    Attaches the generated PDF when provided.
+
+    Returns:
+        Tuple of (status, error_message, sent_recipients, failed_recipients)
+        where status is 'SENT', 'PARTIALLY_SENT', or 'FAILED'.
+    """
+    if not to_emails:
+        return "FAILED", "No recipient email addresses provided.", [], []
+
+    valid_emails = [e.strip() for e in to_emails if e and "@" in e.strip()]
+    if not valid_emails:
+        return "FAILED", "No valid email addresses provided.", [], []
+
+    try:
+        html_content = render_to_string("emails/grn_acknowledgement_email.html", context)
+        text_content = render_to_string("emails/grn_acknowledgement_email.txt", context)
+    except Exception as template_err:
+        logger.error("Failed to render GRN email template: %s", template_err)
+        return "FAILED", f"Email template rendering error: {template_err}", [], valid_emails
+
+    from_email = getattr(
+        settings, "DEFAULT_FROM_EMAIL", "ProcureSphere 360 <noreply@procuresphere.com>"
+    )
+    filename = attachment_filename or "GRN_Acknowledgement.pdf"
+
+    sent_emails = []
+    failed_emails = []
+    last_error = None
+
+    for email in valid_emails:
+        try:
+            msg = EmailMultiAlternatives(
+                subject=subject,
+                body=text_content,
+                from_email=from_email,
+                to=[email],
+            )
+            msg.attach_alternative(html_content, "text/html")
+            if pdf_content:
+                msg.attach(filename, pdf_content, "application/pdf")
+            msg.send(fail_silently=False)
+            sent_emails.append(email)
+            logger.info("GRN acknowledgement email successfully sent to %s", email)
+        except Exception as exc:
+            logger.error("Failed to send GRN acknowledgement email to %s: %s", email, exc)
+            failed_emails.append(email)
+            last_error = str(exc)
+
+    if sent_emails and not failed_emails:
+        return "SENT", None, sent_emails, failed_emails
+    elif sent_emails and failed_emails:
+        return (
+            "PARTIALLY_SENT",
+            f"Failed for: {', '.join(failed_emails)}. Error: {last_error}",
+            sent_emails,
+            failed_emails,
+        )
+    else:
+        return "FAILED", last_error or "All recipient deliveries failed.", sent_emails, failed_emails

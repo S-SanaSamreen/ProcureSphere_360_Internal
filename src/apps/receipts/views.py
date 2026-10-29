@@ -4,14 +4,22 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
 from django.core.paginator import EmptyPage, PageNotAnInteger, Paginator
+from django.db import models
 from django.db.models import Q
+from django.http import HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.dateparse import parse_date
 
 from apps.accounts.models import Role
+from apps.audit.models import AuditLog
 from apps.orders.models import PurchaseOrder
+from apps.receipts.acknowledgement_service import (
+    generate_and_distribute_grn_acknowledgement_service,
+)
+from apps.receipts.documents import generate_grn_acknowledgement_pdf
 from apps.receipts.models import (
     GoodsReceipt,
+    GRNAcknowledgement,
     ReceiptLine,
     RejectionRecord,
 )
@@ -1282,3 +1290,216 @@ def receipt_delivery_performance_report_view(request):
             },
         },
     )
+
+
+@login_required(login_url="/login/")
+def grn_acknowledgement_view(request, grn_id):
+    grn = get_object_or_404(
+        GoodsReceipt.objects.select_related(
+            "po__vendor", "po__cost_center__department__organization", "received_by"
+        ).prefetch_related(
+            "lines__po_line",
+            "lines__inspection__inspected_by",
+            "lines__rejections",
+            "acknowledgements",
+        ),
+        id=grn_id,
+    )
+    user = request.user
+    role_code = getattr(user, "role_code", None) or (
+        user.role.code if hasattr(user, "role") and user.role else None
+    )
+
+    # Vendor isolation: vendor portal users can only access their own PO/GRN
+    if role_code == Role.VENDOR_USER:
+        if not user.vendor or grn.po.vendor_id != user.vendor_id:
+            AuditLog.objects.create(
+                actor=user,
+                action="UNAUTHORIZED_ACCESS_ATTEMPT",
+                target_model="GRNAcknowledgement",
+                target_object_id=str(grn.id),
+                new_state={
+                    "reason": "Vendor tried accessing another vendor's GRN acknowledgement",
+                    "grn_number": grn.grn_number,
+                },
+            )
+            return HttpResponseForbidden(
+                "Access Denied: You cannot view acknowledgements for other vendors."
+            )
+
+    # Authorized internal roles: STORES_RECEIVER, SUPER_ADMIN, FINANCE_AP, PROC_EXEC, PROC_MGR, AUDITOR, REQUESTER (if PR owner)
+    is_internal_authorized = (
+        user.is_superuser
+        or role_code
+        in [
+            Role.STORES_RECEIVER,
+            Role.SUPER_ADMIN,
+            Role.FINANCE_AP,
+            Role.PROC_EXEC,
+            Role.PROC_MGR,
+            Role.AUDITOR,
+            Role.VENDOR_USER,
+        ]
+        or (
+            role_code == Role.REQUESTER
+            and grn.po.requisition
+            and grn.po.requisition.requester_id == user.id
+        )
+    )
+
+    if not is_internal_authorized:
+        messages.error(
+            request,
+            "Permission Denied: You do not have permission to view GRN acknowledgements.",
+        )
+        return redirect("receipt_detail", grn_id=grn.id)
+
+    version_param = request.GET.get("version")
+    if version_param:
+        try:
+            v_int = int(version_param)
+            acknowledgement = grn.acknowledgements.filter(version=v_int).first()
+        except ValueError:
+            acknowledgement = None
+    else:
+        acknowledgement = grn.latest_acknowledgement
+
+    if not acknowledgement:
+        messages.warning(
+            request,
+            f"No final GRN Acknowledgement has been issued for {grn.grn_number}. "
+            "Acknowledgements are generated once quality inspection is completed.",
+        )
+        return redirect("receipt_detail", grn_id=grn.id)
+
+    format_param = request.GET.get("format", "").strip().lower()
+    if format_param == "pdf":
+        AuditLog.objects.create(
+            actor=user,
+            action="EXPORT",
+            target_model="GRNAcknowledgement",
+            target_object_id=str(acknowledgement.id),
+            new_state={
+                "acknowledgement_number": acknowledgement.acknowledgement_number,
+                "version": acknowledgement.version,
+                "format": "PDF",
+                "grn_number": grn.grn_number,
+            },
+        )
+        pdf_bytes = generate_grn_acknowledgement_pdf(acknowledgement)
+        response = HttpResponse(pdf_bytes, content_type="application/pdf")
+        filename = f"{acknowledgement.acknowledgement_number}.pdf"
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+
+    AuditLog.objects.create(
+        actor=user,
+        action="VIEW",
+        target_model="GRNAcknowledgement",
+        target_object_id=str(acknowledgement.id),
+        new_state={
+            "acknowledgement_number": acknowledgement.acknowledgement_number,
+            "version": acknowledgement.version,
+            "format": "HTML",
+            "grn_number": grn.grn_number,
+        },
+    )
+
+    # Build line breakdown
+    lines_breakdown = []
+    for line in (
+        grn.lines.select_related("po_line")
+        .prefetch_related("inspection", "rejections")
+        .order_by("created_at")
+    ):
+        po_line = line.po_line
+        prior_accepted = (
+            ReceiptLine.objects.filter(
+                po_line=po_line, receipt__created_at__lt=grn.created_at
+            ).aggregate(total=models.Sum("quantity_accepted"))["total"]
+            or Decimal("0.00")
+        )
+        pending_qty = max(
+            Decimal("0.00"),
+            po_line.quantity - (po_line.quantity_received or Decimal("0.00")),
+        )
+        insp = getattr(line, "inspection", None)
+        rej = line.latest_rejection
+        lines_breakdown.append(
+            {
+                "line": line,
+                "po_line": po_line,
+                "prior_accepted": prior_accepted,
+                "pending_qty": pending_qty,
+                "inspection": insp,
+                "rejection": rej,
+                "passed": (insp.passed if insp else False)
+                and line.quantity_rejected == Decimal("0.00"),
+            }
+        )
+
+    all_versions = list(grn.acknowledgements.order_by("-version"))
+
+    return render(
+        request,
+        "receipts/acknowledgement_printable.html",
+        {
+            "grn": grn,
+            "po": grn.po,
+            "vendor": grn.po.vendor,
+            "acknowledgement": acknowledgement,
+            "lines_breakdown": lines_breakdown,
+            "all_versions": all_versions,
+            "can_retry": user.is_superuser
+            or role_code in [Role.STORES_RECEIVER, Role.SUPER_ADMIN],
+        },
+    )
+
+
+@login_required(login_url="/login/")
+def grn_acknowledgement_retry_view(request, ack_id):
+    if request.method != "POST":
+        return redirect("receipts_list")
+
+    acknowledgement = get_object_or_404(
+        GRNAcknowledgement.objects.select_related("receipt__po__vendor"),
+        id=ack_id,
+    )
+    user = request.user
+    role_code = getattr(user, "role_code", None) or (
+        user.role.code if hasattr(user, "role") and user.role else None
+    )
+    is_authorized = user.is_superuser or role_code in [
+        Role.STORES_RECEIVER,
+        Role.SUPER_ADMIN,
+    ]
+    if not is_authorized:
+        messages.error(
+            request,
+            "Permission Denied: Only Stores Receiver or Super Admin can retry acknowledgement delivery.",
+        )
+        return redirect("receipt_detail", grn_id=acknowledgement.receipt.id)
+
+    updated_ack = generate_and_distribute_grn_acknowledgement_service(
+        receipt=acknowledgement.receipt,
+        triggered_by=user,
+        force_retry=True,
+    )
+
+    if updated_ack.delivery_status == GRNAcknowledgement.STATUS_SENT:
+        messages.success(
+            request,
+            f"Acknowledgement {updated_ack.acknowledgement_number} delivery retried successfully. Email sent to vendor.",
+        )
+    elif updated_ack.delivery_status == GRNAcknowledgement.STATUS_NO_EMAIL:
+        messages.warning(
+            request,
+            f"Delivery retried for {updated_ack.acknowledgement_number}, but vendor still has no configured contact email address.",
+        )
+    else:
+        messages.error(
+            request,
+            f"Delivery retry failed for {updated_ack.acknowledgement_number}: {updated_ack.delivery_error or 'Provider delivery error.'}",
+        )
+
+    return redirect("receipt_detail", grn_id=acknowledgement.receipt.id)

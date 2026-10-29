@@ -1,0 +1,35 @@
+PROCURESPHERE 360 — GOODS RECEIPT NOTE (GRN) ACKNOWLEDGEMENT
+Ref: {{ acknowledgement.acknowledgement_number }} (Version {{ acknowledgement.version }})
+=============================================================================
+
+Dear {{ vendor_name }},
+
+Quality inspection has been recorded for your shipment delivered under Goods Receipt Note {{ receipt.grn_number }} against Purchase Order {{ po.po_number }}.
+
+STATUS: {{ acknowledgement.get_outcome_display }}
+
+CONSIGNMENT DETAILS:
+- GRN Reference: {{ receipt.grn_number }}
+- Purchase Order: {{ po.po_number }} (Version {{ po.version }})
+- Delivery Note / Waybill: {{ receipt.delivery_note_number|default:"N/A" }}
+- Receipt Date: {{ receipt.received_date|date:"Y-m-d H:i" }}
+- Inspected By: {{ acknowledgement.generated_by.email }}
+- Total Quantity Received: {{ acknowledgement.total_received_qty }} units
+- Total Quantity Accepted: {{ acknowledgement.total_accepted_qty }} units
+- Total Quantity Rejected: {{ acknowledgement.total_rejected_qty }} units
+
+ITEMIZED SUMMARY:
+{% for item in line_items %}
+* {{ item.description }}:
+  Ordered: {{ item.ordered_qty }} | Received: {{ item.received_qty }} | Accepted: {{ item.accepted_qty }} | Rejected: {{ item.rejected_qty }}
+  {% if item.rejection_reason %}Rejection Reason: {{ item.rejection_reason }}{% endif %}
+{% endfor %}
+
+{% if receipt.remarks %}
+Receipt Remarks: {{ receipt.remarks }}
+{% endif %}
+
+An official PDF copy of this GRN Acknowledgement is attached to this email.
+
+ProcureSphere 360 Enterprise ERP
+Internal Receiving & Quality Inspection Control System
