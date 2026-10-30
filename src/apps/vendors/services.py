@@ -596,29 +596,25 @@ def reject_vendor_document_service(
     )
 
 
-@transaction.atomic
-def approve_vendor_service(*, vendor: Vendor, manager: User, notes: str = "") -> Vendor:
-    """
-    Activates a vendor (SUBMITTED / KYC_REVIEW -> ACTIVE). Only Procurement/Admin roles may
-    activate, and only when every KYC gate passes (get_vendor_kyc_summary): documents present,
-    mandatory types present, all current documents verified, none rejected or pending.
-    The vendor row is locked so a replayed or concurrent approval cannot double-transition.
-    """
-    from .permissions import can_operate_governance
-    from .selectors import get_vendor_kyc_summary
+def _record_vendor_transition(*, vendor, actor, previous, new, action, notes="", extra=None):
+    """One audit entry per vendor state transition (approval and activation are separate)."""
+    state = {"status": new, "notes": notes}
+    state.update(extra or {})
+    create_audit_log_service(
+        actor=actor,
+        action=action,
+        target_model="Vendor",
+        target_object_id=vendor.id,
+        previous_state={"status": previous},
+        new_state=state,
+    )
 
-    if not can_operate_governance(manager):
-        raise PermissionDenied("Your role is not authorised to activate vendors.")
-    vendor = Vendor.objects.select_for_update().get(pk=vendor.pk)
-    summary = get_vendor_kyc_summary(vendor)
-    if vendor.status == Vendor.STATUS_ACTIVE:
-        raise ValidationError("Vendor is already active.")
-    if not summary["can_activate"]:
-        raise ValidationError("Cannot activate vendor: " + " ".join(summary["blockers"]))
 
-    previous_status = vendor.status
+def _activate_approved_vendor(*, vendor, actor, notes="", extra=None):
+    """APPROVED -> ACTIVE: makes the vendor operational and eligible for events (own audit entry)."""
+    previous = vendor.status
     vendor.status = Vendor.STATUS_ACTIVE
-    vendor.status_notes = notes
+    vendor.status_notes = notes or vendor.status_notes
     vendor.is_event_eligible = True
     vendor.event_eligibility_status = Vendor.ELIGIBILITY_ELIGIBLE
     vendor.save(
@@ -630,18 +626,14 @@ def approve_vendor_service(*, vendor: Vendor, manager: User, notes: str = "") ->
             "updated_at",
         ]
     )
-
-    create_audit_log_service(
-        actor=manager,
-        action=AuditLog.ACTION_APPROVE,
-        target_model="Vendor",
-        target_object_id=vendor.id,
-        previous_state={"status": previous_status},
-        new_state={
-            "status": vendor.status,
-            "notes": notes,
-            "documents_verified": summary["documents_verified"],
-        },
+    _record_vendor_transition(
+        vendor=vendor,
+        actor=actor,
+        previous=previous,
+        new=Vendor.STATUS_ACTIVE,
+        action=AuditLog.ACTION_UPDATE,
+        notes=notes,
+        extra=extra,
     )
     notify_vendor_users(
         vendor=vendor,
@@ -653,6 +645,221 @@ def approve_vendor_service(*, vendor: Vendor, manager: User, notes: str = "") ->
     return vendor
 
 
+def _assert_not_blacklisted(vendor):
+    if vendor.is_blacklisted:
+        raise ValidationError(
+            f"Vendor '{vendor.legal_name}' is blacklisted ({vendor.blacklist_reason[:120]}). "
+            "The blacklist must be lifted before any approval, activation or reinstatement."
+        )
+
+
+@transaction.atomic
+def approve_vendor_service(
+    *, vendor: Vendor, manager: User, notes: str = "", activate: bool = None
+) -> Vendor:
+    """
+    KYC approval (SUBMITTED / KYC_REVIEW -> APPROVED), PRD lifecycle step "APPROVED". Only
+    Procurement/Admin roles may approve, and only when every KYC gate passes
+    (get_vendor_kyc_summary): documents present, mandatory types present, all current documents
+    verified, none rejected or pending. The vendor row is locked so a replayed or concurrent
+    approval cannot double-transition.
+
+    ``activate`` controls whether the vendor is also activated in the same action
+    (default: settings.VENDOR_AUTO_ACTIVATE_ON_APPROVAL). Either way APPROVED and ACTIVE are
+    separate, individually audited transitions; with activate=False the vendor rests in
+    APPROVED until ``activate_vendor_service`` is called.
+    """
+    from django.conf import settings
+
+    from .permissions import can_operate_governance
+    from .selectors import get_vendor_kyc_summary
+
+    if not can_operate_governance(manager):
+        raise PermissionDenied("Your role is not authorised to activate vendors.")
+    vendor = Vendor.objects.select_for_update().get(pk=vendor.pk)
+    _assert_not_blacklisted(vendor)
+    summary = get_vendor_kyc_summary(vendor)
+    if vendor.status == Vendor.STATUS_ACTIVE:
+        raise ValidationError("Vendor is already active.")
+    if vendor.status == Vendor.STATUS_APPROVED:
+        raise ValidationError("Vendor is already approved and awaiting activation.")
+    if not summary["can_activate"]:
+        raise ValidationError("Cannot activate vendor: " + " ".join(summary["blockers"]))
+
+    previous_status = vendor.status
+    vendor.status = Vendor.STATUS_APPROVED
+    vendor.status_notes = notes
+    vendor.save(update_fields=["status", "status_notes", "updated_at"])
+    _record_vendor_transition(
+        vendor=vendor,
+        actor=manager,
+        previous=previous_status,
+        new=Vendor.STATUS_APPROVED,
+        action=AuditLog.ACTION_APPROVE,
+        notes=notes,
+        extra={"documents_verified": summary["documents_verified"]},
+    )
+
+    if activate is None:
+        activate = getattr(settings, "VENDOR_AUTO_ACTIVATE_ON_APPROVAL", True)
+    if activate:
+        return _activate_approved_vendor(
+            vendor=vendor,
+            actor=manager,
+            notes=notes,
+            extra={"documents_verified": summary["documents_verified"]},
+        )
+
+    notify_vendor_users(
+        vendor=vendor,
+        notification_type=Notification.TYPE_KYC_REQUEST,
+        title="Your vendor KYC has been approved",
+        message=(notes or "KYC approved; activation is pending.")[:500],
+        target_url="/vendor/",
+    )
+    return vendor
+
+
+@transaction.atomic
+def activate_vendor_service(*, vendor: Vendor, manager: User, notes: str = "") -> Vendor:
+    """
+    APPROVED -> ACTIVE. Documents are re-validated (one may have expired or been rejected since
+    approval) and a blacklisted vendor can never be activated.
+    """
+    from .permissions import can_operate_governance
+    from .selectors import get_vendor_kyc_summary
+
+    if not can_operate_governance(manager):
+        raise PermissionDenied("Your role is not authorised to activate vendors.")
+    vendor = Vendor.objects.select_for_update().get(pk=vendor.pk)
+    _assert_not_blacklisted(vendor)
+    if vendor.status == Vendor.STATUS_ACTIVE:
+        raise ValidationError("Vendor is already active.")
+    if vendor.status != Vendor.STATUS_APPROVED:
+        raise ValidationError(
+            f"Only an APPROVED vendor can be activated (current status: {vendor.get_status_display()})."
+        )
+    summary = get_vendor_kyc_summary(vendor)
+    if not summary["can_activate"]:
+        raise ValidationError("Cannot activate vendor: " + " ".join(summary["blockers"]))
+    return _activate_approved_vendor(
+        vendor=vendor,
+        actor=manager,
+        notes=(notes or "").strip(),
+        extra={"documents_verified": summary["documents_verified"]},
+    )
+
+
+@transaction.atomic
+def blacklist_vendor_service(*, vendor: Vendor, actor: User, reason: str) -> Vendor:
+    """
+    Permanent blacklist, distinct from a (reversible) suspension. The vendor is moved to
+    SUSPENDED so every ACTIVE-only gate (invitations, bids, awards, POs, payments) already blocks
+    it, flagged blacklisted, made ineligible for events, and cannot be reinstated until the
+    blacklist is lifted. Open sourcing/PO exposure is recorded in the audit entry.
+    """
+    from .permissions import can_suspend_vendor
+    from .selectors import get_vendor_open_transactions
+
+    if not can_suspend_vendor(actor):
+        raise PermissionDenied("Your role is not authorised to blacklist vendors.")
+    reason = (reason or "").strip()
+    if len(reason) < 10:
+        raise ValidationError("A blacklist reason of at least 10 characters is required.")
+    vendor = Vendor.objects.select_for_update().get(pk=vendor.pk)
+    if vendor.is_blacklisted:
+        raise ValidationError("Vendor is already blacklisted.")
+
+    exposure = get_vendor_open_transactions(vendor)["summary"]
+    previous_status = vendor.status
+    vendor.is_blacklisted = True
+    vendor.blacklisted_at = timezone.now()
+    vendor.blacklisted_by = actor
+    vendor.blacklist_reason = reason
+    vendor.status = Vendor.STATUS_SUSPENDED
+    vendor.status_notes = f"BLACKLISTED: {reason}"
+    vendor.is_event_eligible = False
+    vendor.event_eligibility_status = Vendor.ELIGIBILITY_SUSPENDED
+    vendor.save(
+        update_fields=[
+            "is_blacklisted",
+            "blacklisted_at",
+            "blacklisted_by",
+            "blacklist_reason",
+            "status",
+            "status_notes",
+            "is_event_eligible",
+            "event_eligibility_status",
+            "updated_at",
+        ]
+    )
+    create_audit_log_service(
+        actor=actor,
+        action=AuditLog.ACTION_UPDATE,
+        target_model="Vendor",
+        target_object_id=vendor.id,
+        previous_state={"status": previous_status, "is_blacklisted": False},
+        new_state={
+            "status": vendor.status,
+            "is_blacklisted": True,
+            "reason": reason,
+            "open_transactions_at_change": exposure,
+        },
+    )
+    notify_vendor_users(
+        vendor=vendor,
+        notification_type=Notification.TYPE_KYC_REQUEST,
+        title="Your vendor account has been blacklisted",
+        message=reason[:500],
+        target_url="/vendor/profile/",
+    )
+    return vendor
+
+
+@transaction.atomic
+def lift_vendor_blacklist_service(*, vendor: Vendor, actor: User, reason: str) -> Vendor:
+    """
+    Removes the blacklist flag. The vendor stays SUSPENDED (reinstatement is a separate,
+    ordinary governance step). Lifting is a higher-trust act than imposing: the person who
+    imposed the blacklist cannot lift it themselves (Super Admin excepted).
+    """
+    from .permissions import can_suspend_vendor
+
+    if not can_suspend_vendor(actor):
+        raise PermissionDenied("Your role is not authorised to lift a vendor blacklist.")
+    reason = (reason or "").strip()
+    if len(reason) < 10:
+        raise ValidationError("A reason of at least 10 characters is required to lift a blacklist.")
+    vendor = Vendor.objects.select_for_update().get(pk=vendor.pk)
+    if not vendor.is_blacklisted:
+        raise ValidationError("Vendor is not blacklisted.")
+    if vendor.blacklisted_by_id == actor.id and not getattr(actor, "is_superuser", False):
+        raise ValidationError(
+            "Separation of duties: the user who imposed the blacklist cannot lift it."
+        )
+
+    imposed_reason = vendor.blacklist_reason
+    vendor.is_blacklisted = False
+    vendor.status_notes = f"Blacklist lifted: {reason}"
+    vendor.save(update_fields=["is_blacklisted", "status_notes", "updated_at"])
+    create_audit_log_service(
+        actor=actor,
+        action=AuditLog.ACTION_UPDATE,
+        target_model="Vendor",
+        target_object_id=vendor.id,
+        previous_state={"status": vendor.status, "is_blacklisted": True, "reason": imposed_reason},
+        new_state={"status": vendor.status, "is_blacklisted": False, "reason": reason},
+    )
+    notify_vendor_users(
+        vendor=vendor,
+        notification_type=Notification.TYPE_KYC_REQUEST,
+        title="Your vendor blacklist has been lifted",
+        message="Your account remains suspended until Procurement reinstates it.",
+        target_url="/vendor/profile/",
+    )
+    return vendor
+
+
 # (from_status, to_status) -> capability required. Anything not listed is an invalid transition.
 VENDOR_GOVERNANCE_TRANSITIONS = {
     # Active & On Hold
@@ -660,6 +867,9 @@ VENDOR_GOVERNANCE_TRANSITIONS = {
     (Vendor.STATUS_ON_HOLD, Vendor.STATUS_ACTIVE): "operate",
     (Vendor.STATUS_ACTIVE, Vendor.STATUS_SUSPENDED): "suspend",
     (Vendor.STATUS_ON_HOLD, Vendor.STATUS_SUSPENDED): "suspend",
+    # Approved (KYC passed, awaiting activation)
+    (Vendor.STATUS_APPROVED, Vendor.STATUS_ACTIVE): "operate",
+    (Vendor.STATUS_APPROVED, Vendor.STATUS_SUSPENDED): "suspend",
     # Suspended Transitions
     (Vendor.STATUS_SUSPENDED, Vendor.STATUS_ACTIVE): "suspend",
     (Vendor.STATUS_SUSPENDED, Vendor.STATUS_ON_HOLD): "suspend",
@@ -710,6 +920,13 @@ def set_vendor_status_governance_service(
             vendor.status_notes = notes.strip()
             vendor.save(update_fields=["status_notes", "updated_at"])
         return vendor
+    if vendor.is_blacklisted and new_status != Vendor.STATUS_SUSPENDED:
+        _assert_not_blacklisted(vendor)
+    # SUBMITTED / KYC_REVIEW -> ACTIVE is deliberately NOT available here: it only exists as the
+    # KYC-gated approval (approve_vendor_service). APPROVED -> ACTIVE is the activation step: it
+    # re-checks the KYC gates, sets event eligibility and records the transition.
+    if new_status == Vendor.STATUS_ACTIVE and vendor.status == Vendor.STATUS_APPROVED:
+        return activate_vendor_service(vendor=vendor, manager=actor, notes=notes)
     capability = VENDOR_GOVERNANCE_TRANSITIONS.get((vendor.status, new_status))
     if capability is None:
         raise ValidationError(f"Invalid vendor status transition {vendor.status} -> {new_status}.")
@@ -1217,6 +1434,7 @@ def legal_validate_vendor_credentials_service(
     vendor = dispatch.vendor
     user = dispatch.user
 
+    _assert_not_blacklisted(vendor)
     if vendor.status in CREDENTIAL_ISSUE_BLOCKED or vendor.status in [
         Vendor.STATUS_SUSPENDED,
         Vendor.STATUS_REJECTED,
@@ -1301,6 +1519,27 @@ def legal_validate_vendor_credentials_service(
             "updated_at",
         ]
     )
+    if previous_vendor_status != vendor.status:
+        # Legal's KYC-gated approval passes through the PRD APPROVED stage like any other
+        # route to ACTIVE; both transitions are written to the vendor's audit trail.
+        _record_vendor_transition(
+            vendor=vendor,
+            actor=legal_user,
+            previous=previous_vendor_status,
+            new=Vendor.STATUS_APPROVED,
+            action=AuditLog.ACTION_APPROVE,
+            notes=(notes or "").strip(),
+            extra={"via": "legal credential approval"},
+        )
+        _record_vendor_transition(
+            vendor=vendor,
+            actor=legal_user,
+            previous=Vendor.STATUS_APPROVED,
+            new=Vendor.STATUS_ACTIVE,
+            action=AuditLog.ACTION_UPDATE,
+            notes=(notes or "").strip(),
+            extra={"via": "legal credential approval"},
+        )
 
     # Audit trail
     create_audit_log_service(

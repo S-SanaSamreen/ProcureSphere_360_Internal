@@ -234,6 +234,7 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
             "sourcing_event",
             "sourcing_title",
             "subtotal",
+            "tax_rate",
             "tax_amount",
             "total_amount",
             "terms_and_conditions",
@@ -262,6 +263,7 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
             "status",
             "version",
             "subtotal",
+            "tax_rate",
             "tax_amount",
             "total_amount",
             "acknowledged_at",
@@ -330,7 +332,7 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
                     unit_of_measure=item.get("unit_of_measure", "EA"),
                 )
                 subtotal += line.line_total
-            tax = subtotal * Decimal("0.10")
+            tax = subtotal * po.tax_rate
             po.subtotal = subtotal
             po.tax_amount = tax
             po.total_amount = subtotal + tax
@@ -424,6 +426,42 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         "lines__item_description",
     ]
     ordering_fields = ["created_at", "total_amount", "po_number", "version", "status"]
+
+    def update(self, request, *args, **kwargs):
+        # Once a PO leaves DRAFT, vendor, cost center, terms and lines are frozen. Changes must
+        # use /amend/ so the prior version is preserved and approval is required (PRD 4.1).
+        po = self.get_object()
+        if po.status != PurchaseOrder.STATUS_DRAFT:
+            return Response(
+                {
+                    "error": {
+                        "code": "IMMUTABLE_PURCHASE_ORDER",
+                        "message": (
+                            f"Purchase Order {po.po_number} is {po.status}. Only DRAFT purchase "
+                            "orders can be edited directly; use /amend/ to request a change."
+                        ),
+                    }
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        po = self.get_object()
+        if po.status != PurchaseOrder.STATUS_DRAFT:
+            return Response(
+                {
+                    "error": {
+                        "code": "IMMUTABLE_PURCHASE_ORDER",
+                        "message": (
+                            f"Purchase Order {po.po_number} is {po.status} and cannot be "
+                            "deleted. Cancel it instead."
+                        ),
+                    }
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().destroy(request, *args, **kwargs)
 
     def get_queryset(self):
         user = self.request.user

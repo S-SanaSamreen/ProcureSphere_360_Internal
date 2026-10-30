@@ -187,6 +187,9 @@ def create_sourcing_event_service(
     if requisition:
         from apps.requisitions.models import PurchaseRequisition
 
+        # Re-read under lock: the caller's object may be stale (e.g. another event or a PO has
+        # since moved this requisition to SOURCING / PO_ISSUED).
+        requisition = PurchaseRequisition.objects.select_for_update().get(pk=requisition.pk)
         if requisition.status != PurchaseRequisition.STATUS_APPROVED:
             raise ValidationError(
                 f"Cannot link Purchase Requisition '{requisition.pr_number}' in status '{requisition.status}'. "
@@ -213,6 +216,7 @@ def create_sourcing_event_service(
         is_sealed=True,
         created_by=created_by_user,
     )
+    _refresh_linked_requisition(requisition, created_by_user)
 
     create_audit_log_service(
         actor=created_by_user,
@@ -227,6 +231,14 @@ def create_sourcing_event_service(
     )
 
     return event
+
+
+def _refresh_linked_requisition(requisition, actor=None):
+    """Linking/unlinking/cancelling an event moves its PR between APPROVED and SOURCING."""
+    if requisition is not None:
+        from apps.requisitions.services import refresh_requisition_fulfilment_status
+
+        refresh_requisition_fulfilment_status(requisition, actor=actor)
 
 
 EDITABLE_DRAFT_FIELDS = [
@@ -260,6 +272,7 @@ def update_draft_sourcing_event_service(*, event: SourcingEvent, user: User, dat
         }
 
     previous = _snap(event)
+    previous_requisition = event.requisition
     for field in EDITABLE_DRAFT_FIELDS:
         if field in data:
             setattr(event, field, data[field])
@@ -275,15 +288,26 @@ def update_draft_sourcing_event_service(*, event: SourcingEvent, user: User, dat
         weights=(event.technical_weight, event.commercial_weight),
     )
     event.title = event.title.strip()
-    if event.requisition:
+    requisition_changed = (previous_requisition.pk if previous_requisition else None) != (
+        event.requisition.pk if event.requisition else None
+    )
+    # A requisition already linked to this event is SOURCING because of it; only a newly
+    # linked requisition has to be APPROVED.
+    if event.requisition and requisition_changed:
         from apps.requisitions.models import PurchaseRequisition
 
+        event.requisition = PurchaseRequisition.objects.select_for_update().get(
+            pk=event.requisition.pk
+        )
         if event.requisition.status != PurchaseRequisition.STATUS_APPROVED:
             raise ValidationError(
                 f"Cannot link Purchase Requisition '{event.requisition.pr_number}' in status '{event.requisition.status}'. "
                 "Only APPROVED requisitions may be sourced."
             )
     event.save()
+    if requisition_changed:
+        _refresh_linked_requisition(previous_requisition, user)
+        _refresh_linked_requisition(event.requisition, user)
 
     create_audit_log_service(
         actor=user,
@@ -1419,6 +1443,9 @@ def recommend_award_service(
         recommended_by=recommended_by,
         created_by=recommended_by,
     )
+    # Routed by the SOURCING policy (fail closed); an award to other than the lowest bidder is
+    # raised as an exception and picks up the exception route's extra steps.
+    approval = _award_request(decision, event, maker=recommended_by)
     create_audit_log_service(
         actor=recommended_by,
         action=AuditLog.ACTION_SUBMIT,
@@ -1435,17 +1462,60 @@ def recommend_award_service(
     _transition_event(
         event=event, to_status=SourcingEvent.STATUS_AWARD_APPROVAL, actor=recommended_by
     )
-    notify_role_users(
-        role_codes=[Role.PROC_MGR],
-        notification_type=Notification.TYPE_APPROVAL_REQUIRED,
-        title=f"Award approval required: {event.event_number}",
-        message=(
-            f"Recommended award to {winning_bid.vendor.legal_name} "
-            f"({winning_bid.total_bid_amount}). Reason: {decision.award_reason[:300]}"
-        ),
-        target_url=f"/sourcing-events/{event.id}/",
-    )
+    from apps.approvals import engine
+
+    approvers = engine.step_approvers(approval)
+    if approvers:
+        from apps.notifications.services import notify_users
+
+        notify_users(
+            users=approvers,
+            notification_type=Notification.TYPE_APPROVAL_REQUIRED,
+            title=f"Award approval required: {event.event_number}",
+            message=(
+                f"Recommended award to {winning_bid.vendor.legal_name} "
+                f"({winning_bid.total_bid_amount}). Reason: {decision.award_reason[:300]}"
+            ),
+            target_url=f"/sourcing-events/{event.id}/",
+        )
     return decision
+
+
+def _award_exception_reason(event: SourcingEvent, winning_bid: VendorBid) -> str:
+    """Awarding to anyone but the lowest-priced compliant bidder is an exception."""
+    rivals = event.bids.filter(
+        status__in=[VendorBid.STATUS_SUBMITTED, VendorBid.STATUS_AMENDED]
+    ).exclude(pk=winning_bid.pk)
+    cheapest = rivals.order_by("total_bid_amount").first()
+    if cheapest is not None and winning_bid.total_bid_amount > cheapest.total_bid_amount:
+        return (
+            f"Award to {winning_bid.vendor.legal_name} (${winning_bid.total_bid_amount:,.2f}) "
+            f"rather than the lowest bid {cheapest.vendor.legal_name} "
+            f"(${cheapest.total_bid_amount:,.2f})"
+        )
+    return ""
+
+
+def _award_request(decision: AwardDecision, event: SourcingEvent, *, maker, required=True):
+    """Pending approval request for an award decision (created lazily for legacy decisions)."""
+    from apps.approvals import engine
+    from apps.approvals.models import ApprovalPolicy
+
+    request = engine.get_pending_request(ApprovalPolicy.MODULE_SOURCING, decision)
+    if request is not None:
+        return request
+    requisition = event.requisition
+    return engine.open_approval_request(
+        module=ApprovalPolicy.MODULE_SOURCING,
+        target=decision,
+        amount=decision.winning_bid.total_bid_amount,
+        maker=maker,
+        department=requisition.department if requisition else None,
+        cost_center=requisition.cost_center if requisition else None,
+        exception_reason=_award_exception_reason(event, decision.winning_bid),
+        required=required,
+        record_submission=maker is not None,
+    )
 
 
 def _pending_decision(event: SourcingEvent) -> AwardDecision:
@@ -1471,11 +1541,30 @@ def approve_award_service(
     decision = _pending_decision(event)
     _assert_vendor_awardable(decision.winning_bid.vendor)
 
-    if decision.recommended_by_id and decision.recommended_by_id == approver.id:
-        if not getattr(approver, "is_superuser", False):
-            raise ValidationError(
-                "Separation of duties violation: Award recommender cannot approve their own recommendation."
-            )
+    # Role / limit / separation of duties / multi-step chain: all decided by the approval engine
+    # against the policy version this award was routed under.
+    from apps.approvals import engine
+
+    request = _award_request(decision, event, maker=decision.recommended_by)
+    is_final_step = request.current_step + 1 >= len(request.steps)
+    request = engine.approve_step(
+        request=request,
+        actor=approver,
+        comments=comments,
+        states=("AWARD_APPROVAL", "AWARDED" if is_final_step else "AWARD_APPROVAL"),
+    )
+    if request.status != "APPROVED":
+        step = request.active_step
+        from apps.notifications.services import notify_users
+
+        notify_users(
+            users=engine.step_approvers(request),
+            notification_type=Notification.TYPE_APPROVAL_REQUIRED,
+            title=f"Award approval required: {event.event_number} (Step {step['step_number']})",
+            message=f"Award for {event.event_number} awaits {step['role_name']} approval.",
+            target_url=f"/sourcing-events/{event.id}/",
+        )
+        return decision  # partially approved: the event stays in AWARD_APPROVAL
 
     decision.status = AwardDecision.STATUS_APPROVED
     decision.approved_by = approver
@@ -1527,6 +1616,14 @@ def reject_award_service(*, event: SourcingEvent, approver: User, comments: str)
     if not (comments or "").strip():
         raise ValidationError("A reason is required to reject an award recommendation.")
     decision = _pending_decision(event)
+    from apps.approvals import engine
+
+    engine.reject_request(
+        request=_award_request(decision, event, maker=decision.recommended_by),
+        actor=approver,
+        comments=comments,
+        states=("AWARD_APPROVAL", "COMMERCIAL_REVIEW"),
+    )
     decision.status = AwardDecision.STATUS_REJECTED
     decision.approved_by = approver
     decision.decided_at = timezone.now()
@@ -1630,6 +1727,13 @@ def cancel_sourcing_event_service(
     _lock_and_refresh(event)
     if not (reason or "").strip():
         raise ValidationError("A cancellation reason is required.")
+    from apps.approvals import engine
+    from apps.approvals.models import ApprovalPolicy
+
+    for pending in AwardDecision.objects.filter(event=event, status=AwardDecision.STATUS_PENDING):
+        engine.cancel_pending_request(
+            ApprovalPolicy.MODULE_SOURCING, pending, actor=user, reason="Sourcing event cancelled"
+        )
     AwardDecision.objects.filter(event=event, status=AwardDecision.STATUS_PENDING).update(
         status=AwardDecision.STATUS_REJECTED,
         decided_at=timezone.now(),
@@ -1642,6 +1746,7 @@ def cancel_sourcing_event_service(
         action=AuditLog.ACTION_CANCEL,
         extra={"reason": reason.strip()},
     )
+    _refresh_linked_requisition(event.requisition, user)
     for invite in event.invitations.select_related("vendor"):
         notify_vendor_users(
             vendor=invite.vendor,

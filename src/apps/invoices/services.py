@@ -21,6 +21,22 @@ def _get_user_role_code(user):
     )
 
 
+def _coerce_date(value, label):
+    """Accepts a date, datetime or YYYY-MM-DD string; anything else is a validation error."""
+    import datetime as _dt
+
+    if isinstance(value, _dt.datetime):
+        return value.date()
+    if isinstance(value, _dt.date):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            return _dt.datetime.strptime(value.strip(), "%Y-%m-%d").date()
+        except ValueError:
+            pass
+    raise ValidationError(f"{label} is required and must be a valid date (YYYY-MM-DD).")
+
+
 @transaction.atomic
 def create_supplier_invoice_service(
     *,
@@ -32,7 +48,7 @@ def create_supplier_invoice_service(
     line_items: list,
     notes: str = "",
     created_by_user=None,
-    tax_rate: Decimal = Decimal("0.10"),
+    tax_rate: Decimal = None,
 ) -> SupplierInvoice:
     """
     Creates a new Supplier Invoice in RECEIVED status with line items.
@@ -43,17 +59,27 @@ def create_supplier_invoice_service(
             f"Purchase Order {po.po_number} does not belong to vendor '{vendor.legal_name}'."
         )
 
+    # Invoice tax follows the rate fixed on the PO unless explicitly overridden
+    tax_rate = po.tax_rate if tax_rate is None else Decimal(str(tax_rate))
+
     clean_inv_num = str(invoice_number).strip()
     if SupplierInvoice.objects.filter(vendor=vendor, invoice_number__iexact=clean_inv_num).exists():
         raise ValidationError(
             f"Duplicate invoice detected: Invoice '{clean_inv_num}' already exists for vendor '{vendor.legal_name}'."
         )
 
+    invoice_date = _coerce_date(invoice_date, "Invoice date")
+    due_date = _coerce_date(due_date, "Due date")
+    if invoice_date > timezone.localdate():
+        raise ValidationError("Invoice date cannot be in the future.")
+    if due_date < invoice_date:
+        raise ValidationError("Due date cannot be before the invoice date.")
+
     subtotal = Decimal("0.00")
     invoice = SupplierInvoice.objects.create(
         vendor=vendor,
         po=po,
-        invoice_number=invoice_number,
+        invoice_number=clean_inv_num,
         invoice_date=invoice_date,
         due_date=due_date,
         status=SupplierInvoice.STATUS_RECEIVED,
@@ -195,6 +221,20 @@ def run_3_way_match_service(
     Generates explicit MatchException records if variance exceeds tolerance thresholds.
     """
     from apps.invoices.models import MatchTolerancePolicy
+
+    # Only invoices still in the matching phase may be (re)matched. Re-running the match on a
+    # PAID/REJECTED/approved invoice would silently move it out of its final state.
+    matchable_statuses = (
+        SupplierInvoice.STATUS_RECEIVED,
+        SupplierInvoice.STATUS_VALIDATION,
+        SupplierInvoice.STATUS_MATCHING,
+        SupplierInvoice.STATUS_EXCEPTION,
+    )
+    if invoice.status not in matchable_statuses:
+        raise ValidationError(
+            f"Invoice '{invoice.invoice_number}' is in status '{invoice.status}' and cannot be "
+            "re-matched."
+        )
 
     policy = MatchTolerancePolicy.get_current()
     if price_tolerance_pct is None:
@@ -346,17 +386,50 @@ def resolve_match_exception_service(
     """
     Finance exception resolution workflow for 3-way match variances.
     """
-    role_code = _get_user_role_code(resolved_by_user)
-    if not (
-        getattr(resolved_by_user, "is_superuser", False)
-        or role_code in [Role.FINANCE_AP, Role.SUPER_ADMIN]
-    ):
-        raise ValidationError(
-            "Permission Denied: Only Finance / AP personnel can resolve invoice match exceptions."
-        )
+    from apps.approvals import engine
+    from apps.approvals.models import ApprovalPolicy
 
     if match_exception.status != MatchException.STATUS_OPEN:
         raise ValidationError(f"Match exception is already in status '{match_exception.status}'.")
+    if action not in ("RESOLVE", "REJECT"):
+        raise ValidationError(
+            f"Invalid exception resolution action '{action}'. Must be RESOLVE or REJECT."
+        )
+
+    # Resolution authority is policy driven (variance-amount tiers, cost center / department
+    # scope, multi-step chains, approval limits). The default policy is a single Finance / AP step.
+    request = engine.get_pending_request(ApprovalPolicy.MODULE_INVOICE, match_exception)
+    if request is None:
+        cost_center = match_exception.invoice.po.cost_center if match_exception.invoice.po_id else None
+        request = engine.open_approval_request(
+            module=ApprovalPolicy.MODULE_INVOICE,
+            target=match_exception,
+            amount=abs(match_exception.variance_amount or Decimal("0.00")),
+            maker=None,
+            department=cost_center.department if cost_center else None,
+            cost_center=cost_center,
+            required=True,
+            record_submission=False,
+        )
+
+    if action == "REJECT":
+        engine.reject_request(
+            request=request,
+            actor=resolved_by_user,
+            comments=resolution_notes,
+            states=("OPEN", "REJECTED"),
+        )
+    else:
+        is_final_step = request.current_step + 1 >= len(request.steps)
+        request = engine.approve_step(
+            request=request,
+            actor=resolved_by_user,
+            comments=resolution_notes,
+            states=("OPEN", "RESOLVED" if is_final_step else "OPEN"),
+        )
+        if request.status != "APPROVED":
+            # partially approved: the exception stays OPEN until the last step signs off
+            return match_exception
 
     if action == "RESOLVE":
         match_exception.status = MatchException.STATUS_RESOLVED

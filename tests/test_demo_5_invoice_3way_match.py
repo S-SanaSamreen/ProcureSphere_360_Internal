@@ -89,6 +89,10 @@ def test_demo_5_invoice_3way_match_and_exception_resolution():
         ],
     )
     check_and_reserve_budget_service(requisition=pr, requested_by_user=requester)
+    # This demo is about invoice matching, not PR approval: mark the PR approved so the PO is
+    # raised against an approved requisition (POs against unapproved PRs are now refused).
+    pr.status = pr.STATUS_APPROVED
+    pr.save(update_fields=["status"])
 
     po = generate_purchase_order_service(
         vendor=vendor,

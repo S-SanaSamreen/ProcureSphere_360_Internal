@@ -1,7 +1,8 @@
 from decimal import Decimal
 
-from rest_framework import serializers, viewsets
+from rest_framework import serializers, status, viewsets
 from rest_framework.permissions import SAFE_METHODS, BasePermission, IsAuthenticated
+from rest_framework.response import Response
 from rest_framework.routers import DefaultRouter
 
 from apps.accounts.models import Role
@@ -63,6 +64,17 @@ class BudgetSerializer(serializers.ModelSerializer):
     def validate_allocated_amount(self, value):
         if value is not None and value < Decimal("0.00"):
             raise serializers.ValidationError("Allocated amount must be non-negative.")
+        if value is not None and self.instance is not None:
+            consumed = (
+                self.instance.reserved_amount
+                + self.instance.committed_amount
+                + self.instance.actual_amount
+            )
+            if value < consumed:
+                raise serializers.ValidationError(
+                    f"Allocated amount {value:,.2f} cannot be lower than the amount already "
+                    f"consumed (reserved + committed + actual = {consumed:,.2f})."
+                )
         return value
 
 
@@ -76,6 +88,20 @@ class BudgetViewSet(viewsets.ModelViewSet):
     serializer_class = BudgetSerializer
     permission_classes = [IsAuthenticated, CanManageBudget]
     queryset = Budget.objects.select_related("cost_center", "fiscal_period").order_by("-created_at")
+
+    def destroy(self, request, *args, **kwargs):
+        budget = self.get_object()
+        if budget.ledger_entries.exists() or budget.reservations.exists():
+            return Response(
+                {
+                    "error": {
+                        "code": "BUDGET_HAS_HISTORY",
+                        "message": "A budget with ledger or reservation history cannot be deleted.",
+                    }
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().destroy(request, *args, **kwargs)
 
     def get_queryset(self):
         qs = self.queryset if self.queryset is not None else Budget.objects.select_related("cost_center", "fiscal_period").order_by("-created_at")

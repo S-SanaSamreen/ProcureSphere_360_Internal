@@ -993,11 +993,28 @@ def policy_list_view(request):
             "<div class='alert alert-danger m-3'>Permission Denied: Super Admin access required.</div>",
             status=403,
         )
-    policies = ApprovalPolicy.objects.select_related("department").all()
+    policies = (
+        ApprovalPolicy.objects.select_related("department", "cost_center")
+        .prefetch_related("steps__approver_role")
+        .order_by("module", "is_exception_route", "name", "-version")
+    )
+    show_history = request.GET.get("history") == "1"
+    if not show_history:
+        policies = policies.filter(superseded_by__isnull=True)
     scoped_org = get_user_scoped_org(request.user)
     if scoped_org:
-        policies = policies.filter(department__organization=scoped_org)
-    return render(request, "pages/dashboards/superadmin/policies.html", {"policies": policies})
+        # global policies apply to every organisation, so they stay visible; scoped ones only
+        # when they belong to this organisation
+        policies = policies.filter(
+            Q(department__isnull=True, cost_center__isnull=True)
+            | Q(department__organization=scoped_org)
+            | Q(cost_center__department__organization=scoped_org)
+        )
+    return render(
+        request,
+        "pages/dashboards/superadmin/policies.html",
+        {"policies": policies, "show_history": show_history},
+    )
 
 
 def _get_scoped_audit_logs(request):
@@ -1112,10 +1129,20 @@ def policy_edit_view(request, policy_id):
 
     policy = get_object_or_404(ApprovalPolicy, pk=policy_id)
     scoped_org = get_user_scoped_org(request.user)
-    if scoped_org and policy.department and policy.department.organization_id != scoped_org.id:
+    if scoped_org and (
+        (policy.department and policy.department.organization_id != scoped_org.id)
+        or (policy.cost_center and policy.cost_center.department.organization_id != scoped_org.id)
+    ):
         return HttpResponse(
             "<div class='alert alert-danger m-3'>Permission Denied: You cannot modify policies of other organizations.</div>",
             status=403,
+        )
+
+    if policy.superseded_by_id:
+        return HttpResponse(
+            "<div class='alert alert-warning m-3'>This version has been superseded by a newer "
+            "version. Edit the latest version instead.</div>",
+            status=409,
         )
 
     if request.method == "POST":

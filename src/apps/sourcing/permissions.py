@@ -41,7 +41,13 @@ def can_manage_events(user) -> bool:
 
 
 def can_approve_award(user) -> bool:
-    return _role(user) in AWARD_APPROVE_ROLES
+    """Entry gate: the default approvers, or any role/person named in an active award policy."""
+    if _role(user) in AWARD_APPROVE_ROLES:
+        return True
+    from apps.approvals import engine
+    from apps.approvals.models import ApprovalPolicy
+
+    return engine.user_in_policy_roles(ApprovalPolicy.MODULE_SOURCING, user)
 
 
 def can_read_bids(user) -> bool:

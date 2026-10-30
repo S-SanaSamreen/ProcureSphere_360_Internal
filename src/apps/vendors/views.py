@@ -33,10 +33,13 @@ from .selectors import (
     get_vendor_sourcing_history,
 )
 from .services import (
+    activate_vendor_service,
     allowed_governance_transitions,
     approve_vendor_service,
+    blacklist_vendor_service,
     delete_vendor_service,
     issue_vendor_credentials_service,
+    lift_vendor_blacklist_service,
     record_vendor_risk_assessment_service,
     register_vendor_service,
     reject_vendor_document_service,
@@ -123,7 +126,22 @@ def _run_kyc_action(request, vendor, kyc_action):
     if kyc_action == "approve":
         _require_governance_operate(request.user)
         approve_vendor_service(vendor=vendor, manager=request.user, notes=notes)
+        vendor.refresh_from_db()
+        if vendor.status == Vendor.STATUS_APPROVED:
+            return "Vendor KYC approved. Activate the vendor to make it operational."
         return "Vendor approved and activated."
+    if kyc_action == "activate":
+        _require_governance_operate(request.user)
+        activate_vendor_service(vendor=vendor, manager=request.user, notes=notes)
+        return "Vendor activated."
+    if kyc_action == "blacklist":
+        _require_governance_operate(request.user)
+        blacklist_vendor_service(vendor=vendor, actor=request.user, reason=notes)
+        return "Vendor blacklisted. It is suspended and cannot be reinstated until the blacklist is lifted."
+    if kyc_action == "lift-blacklist":
+        _require_governance_operate(request.user)
+        lift_vendor_blacklist_service(vendor=vendor, actor=request.user, reason=notes)
+        return "Blacklist lifted. The vendor remains suspended until it is reinstated."
     if kyc_action == "request-changes":
         _require_kyc_review(request.user)
         if not notes:
@@ -147,7 +165,15 @@ def _kyc_context(vendor, caps):
         "can_review_docs": caps["can_review_kyc"] and in_review,
         "can_start_kyc_review": caps["can_operate"] and vendor.status == Vendor.STATUS_SUBMITTED,
         "can_activate_vendor": caps["can_operate"] and in_review and kyc["can_activate"],
+        # APPROVED vendors rest here until Procurement activates them (when auto-activation is off)
+        "can_activate_approved": (
+            caps["can_operate"]
+            and vendor.status == Vendor.STATUS_APPROVED
+            and kyc["can_activate"]
+        ),
         "can_request_changes": caps["can_review_kyc"] and in_review,
+        "can_blacklist": caps["can_suspend"] and not vendor.is_blacklisted,
+        "can_lift_blacklist": caps["can_suspend"] and vendor.is_blacklisted,
     }
 
 

@@ -425,7 +425,7 @@ def test_contract_expiry_renewal_and_notification_routing(client, contract_setup
     renew_contract_service(
         contract=contract,
         user=legal_user,
-        new_end_date=today + timezone.timedelta(days=365),
+        new_end_date=contract.end_date + timezone.timedelta(days=365),
         notes="Extended for 1 year",
     )
     contract.refresh_from_db()

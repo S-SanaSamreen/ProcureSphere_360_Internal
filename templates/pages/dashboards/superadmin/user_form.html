@@ -38,6 +38,13 @@
                 {% if form.cost_center.errors %}<div class="text-danger small mt-1">{{ form.cost_center.errors }}</div>{% endif %}
             </div>
 
+            <div class="col-12" id="approval-limit-wrapper">
+                <label class="form-label fw-semibold text-secondary small" for="{{ form.approval_limit.id_for_label }}">Approval limit (optional)</label>
+                {{ form.approval_limit }}
+                <div class="form-text small text-muted">The largest transaction value this user may approve. Leave blank for no personal limit. Applies on top of the role and the approval policy.</div>
+                {% if form.approval_limit.errors %}<div class="text-danger small mt-1">{{ form.approval_limit.errors }}</div>{% endif %}
+            </div>
+
             <!-- Password Field with Show/Hide, Generate, and Copy Buttons -->
             <div class="col-12">
                 <label class="form-label fw-semibold text-secondary small">

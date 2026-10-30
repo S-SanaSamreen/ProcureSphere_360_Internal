@@ -153,15 +153,31 @@ def scan_overdue_approvals_and_escalate_service(
                 new_state={"status": pr.status, "escalated": True, "escalation_hours": escalation_hours},
             )
         else:
-            # Send reminder to current step approvers
+            # Send reminder to the approvers of the request's CURRENT step. The request is bound
+            # to the policy version it was routed under, so this can never disagree with who is
+            # actually able to approve.
+            from apps.approvals import engine as approval_engine
+            from apps.approvals.models import ApprovalPolicy
             from apps.approvals.services import evaluate_approval_chain
 
-            chain = evaluate_approval_chain(
-                module="PR",
-                amount=pr.total_amount,
-                department=pr.department,
+            module = (
+                ApprovalPolicy.MODULE_BUDGET_EXCEPTION
+                if pr.status == PurchaseRequisition.STATUS_BUDGET_REVIEW
+                else ApprovalPolicy.MODULE_PR
             )
+            engine_request = approval_engine.get_pending_request(module, pr)
             approvers = []
+            chain = []
+            if engine_request is not None:
+                approvers = approval_engine.step_approvers(engine_request)
+            else:
+                # legacy requisition with no engine request yet: previous behaviour
+                chain = evaluate_approval_chain(
+                    module="PR",
+                    amount=pr.total_amount,
+                    department=pr.department,
+                    cost_center=pr.cost_center,
+                )
             if chain:
                 approved_count = ApprovalAction.objects.filter(
                     target_object_id=pr.id,

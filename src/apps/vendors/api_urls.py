@@ -15,7 +15,6 @@ from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsProcurementManager
 from apps.audit.models import AuditLog
-from apps.audit.services import create_audit_log_service
 from apps.orders.models import PurchaseOrder
 from apps.vendors.filters import VendorFilter, annotate_governance
 from apps.vendors.models import (
@@ -31,7 +30,11 @@ from apps.vendors.permissions import (
 )
 from apps.vendors.selectors import get_vendor_change_history
 from apps.vendors.services import (
+    activate_vendor_service,
     allowed_governance_transitions,
+    approve_vendor_service,
+    blacklist_vendor_service,
+    lift_vendor_blacklist_service,
     record_vendor_risk_assessment_service,
     set_vendor_status_governance_service,
 )
@@ -156,6 +159,9 @@ class VendorSerializer(serializers.ModelSerializer):
             "status",
             "status_display",
             "status_notes",
+            "is_blacklisted",
+            "blacklisted_at",
+            "blacklist_reason",
             "email",
             "phone",
             "address",
@@ -178,7 +184,13 @@ class VendorSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["status", "vendor_number"]
+        read_only_fields = [
+            "status",
+            "vendor_number",
+            "is_blacklisted",
+            "blacklisted_at",
+            "blacklist_reason",
+        ]
 
     def get_current_risk_level(self, obj):
         records = getattr(obj, "_prefetched_risk_records", None)
@@ -471,6 +483,61 @@ class VendorViewSet(viewsets.ModelViewSet):
             )
         return Response(self.get_serializer(vendor).data, status=status.HTTP_200_OK)
 
+    def _run_lifecycle_action(self, request, service, **kwargs):
+        vendor = self.get_object()
+        try:
+            vendor = service(vendor=vendor, **kwargs)
+        except DjangoValidationError as exc:
+            msg = exc.messages[0] if hasattr(exc, "messages") and exc.messages else str(exc)
+            return Response(
+                {"error": {"code": "INVALID", "message": msg, "details": {}}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(self.get_serializer(vendor).data, status=status.HTTP_200_OK)
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="activate",
+        permission_classes=[IsAuthenticated, GovernanceOperatePermission],
+    )
+    def activate(self, request, pk=None):
+        """APPROVED -> ACTIVE (documents re-validated; a blacklisted vendor is refused)."""
+        return self._run_lifecycle_action(
+            request,
+            activate_vendor_service,
+            manager=request.user,
+            notes=str(request.data.get("notes", "")).strip(),
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="blacklist",
+        permission_classes=[IsAuthenticated, GovernanceOperatePermission],
+    )
+    def blacklist(self, request, pk=None):
+        return self._run_lifecycle_action(
+            request,
+            blacklist_vendor_service,
+            actor=request.user,
+            reason=str(request.data.get("reason", request.data.get("notes", ""))),
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="lift-blacklist",
+        permission_classes=[IsAuthenticated, GovernanceOperatePermission],
+    )
+    def lift_blacklist(self, request, pk=None):
+        return self._run_lifecycle_action(
+            request,
+            lift_vendor_blacklist_service,
+            actor=request.user,
+            reason=str(request.data.get("reason", request.data.get("notes", ""))),
+        )
+
     @action(detail=True, methods=["get"], url_path="allowed-transitions")
     def allowed_transitions(self, request, pk=None):
         vendor = self.get_object()
@@ -738,39 +805,14 @@ class VendorAssessRiskAPIView(APIView):
                 Vendor.STATUS_SUSPENDED,
                 Vendor.STATUS_REJECTED,
             ]:
-                if gov_status_upper == Vendor.STATUS_ACTIVE and vendor.status in [
-                    Vendor.STATUS_DRAFT,
+                # Never a plain field write. ACTIVE from a pre-approval status is the KYC-gated
+                # approval; everything else goes through the governance transition table.
+                if gov_status_upper == Vendor.STATUS_ACTIVE and vendor.status in (
                     Vendor.STATUS_SUBMITTED,
                     Vendor.STATUS_KYC_REVIEW,
-                ]:
-                    previous_status = vendor.status
-                    vendor.status = Vendor.STATUS_ACTIVE
-                    vendor.status_notes = assessment_notes
-                    vendor.save(update_fields=["status", "status_notes", "updated_at"])
-                    create_audit_log_service(
-                        actor=request.user,
-                        action=AuditLog.ACTION_APPROVE,
-                        target_model="Vendor",
-                        target_object_id=str(vendor.id),
-                        previous_state={"status": previous_status},
-                        new_state={"status": vendor.status, "notes": assessment_notes},
-                    )
-                elif gov_status_upper == Vendor.STATUS_REJECTED and vendor.status in [
-                    Vendor.STATUS_DRAFT,
-                    Vendor.STATUS_SUBMITTED,
-                    Vendor.STATUS_KYC_REVIEW,
-                ]:
-                    previous_status = vendor.status
-                    vendor.status = Vendor.STATUS_REJECTED
-                    vendor.status_notes = assessment_notes
-                    vendor.save(update_fields=["status", "status_notes", "updated_at"])
-                    create_audit_log_service(
-                        actor=request.user,
-                        action=AuditLog.ACTION_REJECT,
-                        target_model="Vendor",
-                        target_object_id=str(vendor.id),
-                        previous_state={"status": previous_status},
-                        new_state={"status": vendor.status, "notes": assessment_notes},
+                ):
+                    approve_vendor_service(
+                        vendor=vendor, manager=request.user, notes=assessment_notes, activate=True
                     )
                 else:
                     set_vendor_status_governance_service(
@@ -813,42 +855,17 @@ class VendorGovernanceStatusAPIView(APIView):
             )
 
         try:
-            if new_status == Vendor.STATUS_ACTIVE and vendor.status in [
-                Vendor.STATUS_DRAFT,
+            # Never a plain field write. ACTIVE from a pre-approval status is the KYC-gated
+            # approval; everything else goes through the governance transition table.
+            if new_status == Vendor.STATUS_ACTIVE and vendor.status in (
                 Vendor.STATUS_SUBMITTED,
                 Vendor.STATUS_KYC_REVIEW,
-            ]:
-                previous_status = vendor.status
-                vendor.status = Vendor.STATUS_ACTIVE
-                vendor.status_notes = notes
-                vendor.save(update_fields=["status", "status_notes", "updated_at"])
-                create_audit_log_service(
-                    actor=request.user,
-                    action=AuditLog.ACTION_APPROVE,
-                    target_model="Vendor",
-                    target_object_id=str(vendor.id),
-                    previous_state={"status": previous_status},
-                    new_state={"status": vendor.status, "notes": notes},
-                )
-            elif new_status == Vendor.STATUS_REJECTED and vendor.status in [
-                Vendor.STATUS_DRAFT,
-                Vendor.STATUS_SUBMITTED,
-                Vendor.STATUS_KYC_REVIEW,
-            ]:
-                previous_status = vendor.status
-                vendor.status = Vendor.STATUS_REJECTED
-                vendor.status_notes = notes
-                vendor.save(update_fields=["status", "status_notes", "updated_at"])
-                create_audit_log_service(
-                    actor=request.user,
-                    action=AuditLog.ACTION_REJECT,
-                    target_model="Vendor",
-                    target_object_id=str(vendor.id),
-                    previous_state={"status": previous_status},
-                    new_state={"status": vendor.status, "notes": notes},
+            ):
+                vendor = approve_vendor_service(
+                    vendor=vendor, manager=request.user, notes=notes, activate=True
                 )
             else:
-                set_vendor_status_governance_service(
+                vendor = set_vendor_status_governance_service(
                     vendor=vendor, actor=request.user, new_status=new_status, notes=notes
                 )
 

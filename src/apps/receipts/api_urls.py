@@ -196,6 +196,9 @@ class GoodsReceiptViewSet(viewsets.ModelViewSet):
     )
     serializer_class = GoodsReceiptSerializer
     permission_classes = [GoodsReceiptPermission]
+    # Posted receipts are evidence (delivery performance, 3-way match). Corrections use the
+    # correction/reversal workflow, never an in-place edit or delete.
+    http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
         user = self.request.user

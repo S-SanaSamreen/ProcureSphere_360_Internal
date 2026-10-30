@@ -283,13 +283,8 @@ def po_amend_modal_view(request, pk):
 @login_required(login_url="/login/")
 @require_POST
 def po_approve_amendment_view(request, pk, amendment_id):
-    """Procurement Manager approves a pending PO amendment."""
-    _require_po_execute(request.user)
-    role_code = getattr(request.user, "role_code", None) or (
-        request.user.role.code if hasattr(request.user, "role") and request.user.role else None
-    )
-    if not (request.user.is_superuser or role_code in (Role.PROC_MGR, Role.SUPER_ADMIN)):
-        raise PermissionDenied("Only Procurement Manager or Super Admin can approve amendments.")
+    """Approve (a step of) a pending PO amendment; the approval engine decides who may."""
+    _require_po_decider(request.user, "PO_AMENDMENT")
     from .models import POAmendment
     from .services import approve_po_amendment_service, reject_po_amendment_service
     po = get_object_or_404(PurchaseOrder, pk=pk)
@@ -326,9 +321,110 @@ def po_amendments_partial_view(request, pk):
     )
 
 
+def _parse_po_form_lines(post):
+    """
+    Reads the repeated item_name / quantity / unit_price / unit_of_measure fields into line
+    dicts. Fully blank rows are ignored; a partly filled or invalid row is a validation error
+    that names the row, so nothing is silently dropped or defaulted.
+    """
+    from decimal import Decimal, InvalidOperation
+
+    names = post.getlist("item_name")
+    quantities = post.getlist("quantity")
+    prices = post.getlist("unit_price")
+    uoms = post.getlist("unit_of_measure")
+    lines = []
+    for idx, name in enumerate(names):
+        qty_raw = (quantities[idx] if idx < len(quantities) else "").strip()
+        price_raw = (prices[idx] if idx < len(prices) else "").strip()
+        name = (name or "").strip()
+        if not (name or qty_raw or price_raw):
+            continue  # untouched row
+        row = idx + 1
+        if not name:
+            raise ValidationError(f"Line {row}: item description is required.")
+        try:
+            qty = Decimal(qty_raw)
+            price = Decimal(price_raw)
+        except (InvalidOperation, ValueError):
+            raise ValidationError(f"Line {row} ('{name}'): quantity and unit price must be numbers.")
+        if not qty.is_finite() or not price.is_finite():
+            raise ValidationError(f"Line {row} ('{name}'): quantity and unit price must be numbers.")
+        if qty <= 0:
+            raise ValidationError(f"Line {row} ('{name}'): quantity must be greater than zero.")
+        if price < 0:
+            raise ValidationError(f"Line {row} ('{name}'): unit price cannot be negative.")
+        if qty > Decimal("9999999") or price > Decimal("9999999999.99"):
+            raise ValidationError(f"Line {row} ('{name}'): quantity or unit price is too large.")
+        lines.append(
+            {
+                "item_description": name,
+                "quantity": qty,
+                "unit_price": price,
+                "unit_of_measure": (uoms[idx].strip() if idx < len(uoms) and uoms[idx].strip() else "EA"),
+            }
+        )
+    if not lines:
+        raise ValidationError("Add at least one order line.")
+    return lines
+
+
+def _require_po_decider(user, module):
+    """Entry gate for PO / amendment approval screens: anyone the module's policy may involve."""
+    from apps.approvals import engine as approval_engine
+
+    if user.is_superuser or approval_engine.user_in_policy_roles(module, user):
+        return
+    raise PermissionDenied("You are not an approver for this kind of transaction.")
+
+
+def _po_form_context(user):
+    """Vendors, cost centers and requisitions a procurement user may raise a PO against."""
+    from decimal import Decimal
+
+    from django.conf import settings
+
+    from apps.budgets.services import requisition_po_capacity
+    from apps.organization.models import CostCenter
+    from apps.requisitions.models import PurchaseRequisition
+    from apps.vendors.models import Vendor
+    from apps.vendors.selectors import scope_vendors_queryset
+
+    cost_centers = CostCenter.objects.select_related("department").order_by("code")
+    scoped_org = getattr(user, "effective_organization", None)
+    if scoped_org and not user.is_superuser:
+        cost_centers = cost_centers.filter(department__organization=scoped_org)
+
+    vendors = scope_vendors_queryset(
+        Vendor.objects.filter(status=Vendor.STATUS_ACTIVE).order_by("legal_name"), user
+    )
+
+    requisitions = []
+    candidates = PurchaseRequisition.objects.filter(
+        status__in=[PurchaseRequisition.STATUS_APPROVED, PurchaseRequisition.STATUS_PO_ISSUED]
+    ).select_related("cost_center", "department")
+    if scoped_org and not user.is_superuser:
+        candidates = candidates.filter(department__organization=scoped_org)
+    for pr in candidates.order_by("-created_at"):
+        capacity = requisition_po_capacity(pr)
+        if capacity["remaining"] > Decimal("0.00"):  # a fully covered PR cannot take another PO
+            pr.remaining_amount = capacity["remaining"]
+            requisitions.append(pr)
+
+    default_rate = Decimal(str(getattr(settings, "DEFAULT_PO_TAX_RATE", "0.10"))) * 100
+    return {
+        "vendors": vendors,
+        "cost_centers": cost_centers,
+        "requisitions": requisitions,
+        "default_tax_pct": format(default_rate.quantize(Decimal("0.01")).normalize(), "f"),
+    }
+
+
 @login_required(login_url="/login/")
 def po_create_view(request):
-    """View & modal to issue a purchase order."""
+    """View & modal to issue a purchase order (one or many lines)."""
+    from decimal import Decimal, InvalidOperation
+
     user = request.user
     role_code = getattr(user, "role_code", None) or (
         user.role.code if hasattr(user, "role") and user.role else None
@@ -337,70 +433,57 @@ def po_create_view(request):
         raise PermissionDenied("Only Procurement users can issue purchase orders.")
 
     if request.method == "POST":
-        from decimal import Decimal
-
         from apps.organization.models import CostCenter
         from apps.requisitions.models import PurchaseRequisition
         from apps.vendors.models import Vendor
 
         from .services import generate_purchase_order_service
 
-        vendor_id = request.POST.get("vendor_id")
-        cost_center_id = request.POST.get("cost_center_id")
-        req_id = request.POST.get("requisition_id")
-        item_name = request.POST.get("item_name", "Line Item")
-        qty = request.POST.get("quantity", "1")
-        price = request.POST.get("unit_price", "0")
-        terms = request.POST.get(
-            "terms_and_conditions",
-            "Standard HPE Enterprise Procurement Terms & Conditions",
-        )
+        try:
+            vendor = get_object_or_404(Vendor, pk=request.POST.get("vendor_id"))
+            req_id = request.POST.get("requisition_id")
+            requisition = get_object_or_404(PurchaseRequisition, pk=req_id) if req_id else None
 
-        vendor = get_object_or_404(Vendor, pk=vendor_id)
-        cost_center = get_object_or_404(CostCenter, pk=cost_center_id)
-        requisition = (
-            PurchaseRequisition.objects.filter(pk=req_id).first() if req_id else None
-        )
+            # The cost center follows the requisition: the PO commits against the same budget
+            # the requisition reserved. Only a PO with no requisition picks its own.
+            if requisition:
+                cost_center = requisition.cost_center
+            else:
+                cost_center = get_object_or_404(CostCenter, pk=request.POST.get("cost_center_id"))
 
-        line_items = [
-            {
-                "item_description": item_name,
-                "quantity": Decimal(str(qty)),
-                "unit_price": Decimal(str(price)),
-                "unit_of_measure": "EA",
-            }
-        ]
+            tax_rate = None
+            tax_raw = (request.POST.get("tax_rate_pct") or "").strip()
+            if tax_raw:
+                try:
+                    tax_rate = Decimal(tax_raw) / Decimal("100")
+                except (InvalidOperation, ValueError):
+                    raise ValidationError("Tax rate must be a number between 0 and 100.")
 
-        po = generate_purchase_order_service(
-            vendor=vendor,
-            cost_center=cost_center,
-            line_items=line_items,
-            created_by_user=user,
-            requisition=requisition,
-            terms_and_conditions=terms,
+            po = generate_purchase_order_service(
+                vendor=vendor,
+                cost_center=cost_center,
+                line_items=_parse_po_form_lines(request.POST),
+                created_by_user=user,
+                requisition=requisition,
+                terms_and_conditions=request.POST.get(
+                    "terms_and_conditions",
+                    "Standard HPE Enterprise Procurement Terms & Conditions",
+                ),
+                tax_rate=tax_rate,
+            )
+        except ValidationError as exc:
+            messages.error(
+                request,
+                "Purchase order not issued: "
+                + (" ".join(exc.messages) if hasattr(exc, "messages") else str(exc)),
+            )
+            return redirect("orders_list")
+        messages.success(
+            request, f"Purchase Order {po.po_number} issued with {po.lines.count()} line(s)."
         )
-        messages.success(request, f"Purchase Order {po.po_number} issued successfully.")
         return redirect("order_detail", pk=po.pk)
 
-    from apps.organization.models import CostCenter
-    from apps.requisitions.models import PurchaseRequisition
-    from apps.vendors.models import Vendor
-
-    vendors = Vendor.objects.filter(status=Vendor.STATUS_ACTIVE).order_by("legal_name")
-    cost_centers = CostCenter.objects.all().order_by("code")
-    requisitions = PurchaseRequisition.objects.filter(
-        status=PurchaseRequisition.STATUS_APPROVED
-    ).order_by("-created_at")
-
-    return render(
-        request,
-        "orders/partials/po_create_modal.html",
-        {
-            "vendors": vendors,
-            "cost_centers": cost_centers,
-            "requisitions": requisitions,
-        },
-    )
+    return render(request, "orders/partials/po_create_modal.html", _po_form_context(user))
 
 
 @login_required(login_url="/login/")
@@ -409,12 +492,10 @@ def po_approve_action_view(request, pk):
     """Procurement Manager or Super Admin approval of a PO in APPROVAL or DRAFT status."""
     user = request.user
     role_code = getattr(user, "role_code", None) or (
-        user.role.code if hasattr(user, "role") and user.role else Role.SUPER_ADMIN
+        user.role.code if hasattr(user, "role") and user.role else None
     )
     if role_code not in [Role.SUPER_ADMIN, Role.PROC_MGR] and not user.is_superuser:
-        raise PermissionDenied(
-            "Only Procurement Managers or Super Admin can approve purchase orders."
-        )
+        _require_po_decider(user, "PO")  # the PO policy may name other roles
 
     po = get_object_or_404(PurchaseOrder, pk=pk)
     comments = request.POST.get("comments", "Approved").strip()
@@ -456,8 +537,8 @@ def po_submit_approval_action_view(request, pk):
 
 @login_required(login_url="/login/")
 def po_amendment_approve_view(request, pk, amendment_id):
-    """Procurement Manager action to approve a pending PO amendment."""
-    _require_po_execute(request.user)
+    """Action to approve (a step of) a pending PO amendment; the approval engine decides who may."""
+    _require_po_decider(request.user, "PO_AMENDMENT")
     po = get_object_or_404(PurchaseOrder, pk=pk)
     amendment = get_object_or_404(POAmendment, pk=amendment_id, po=po)
 
@@ -504,8 +585,8 @@ def po_amendment_approve_view(request, pk, amendment_id):
 
 @login_required(login_url="/login/")
 def po_amendment_reject_view(request, pk, amendment_id):
-    """Procurement Manager action to reject a pending PO amendment."""
-    _require_po_execute(request.user)
+    """Action to reject a pending PO amendment; the approval engine decides who may."""
+    _require_po_decider(request.user, "PO_AMENDMENT")
     po = get_object_or_404(PurchaseOrder, pk=pk)
     amendment = get_object_or_404(POAmendment, pk=amendment_id, po=po)
 

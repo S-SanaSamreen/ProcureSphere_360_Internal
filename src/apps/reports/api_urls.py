@@ -91,7 +91,13 @@ class ExportJobSerializer(serializers.ModelSerializer):
     class Meta:
         model = ExportJob
         fields = "__all__"
-        read_only_fields = ["requested_by", "status", "result_file", "error_message"]
+        read_only_fields = [
+            "requested_by",
+            "status",
+            "result_file",
+            "file_hash",
+            "error_message",
+        ]
 
     def validate_report_type(self, value):
         val = str(value).strip().lower()
@@ -106,6 +112,8 @@ class ExportJobViewSet(viewsets.ModelViewSet):
     queryset = ExportJob.objects.select_related("requested_by").order_by("-created_at")
     serializer_class = ExportJobSerializer
     permission_classes = [IsAuthenticated, CanCreateExportJob]
+    # Export jobs are evidence of what was extracted and by whom: create/read only.
+    http_method_names = ["get", "post", "head", "options"]
 
     def perform_create(self, serializer):
         job = serializer.save(requested_by=self.request.user)

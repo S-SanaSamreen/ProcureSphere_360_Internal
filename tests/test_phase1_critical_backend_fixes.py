@@ -239,9 +239,9 @@ def test_contract_role_authorization_on_actions(rbac_users, base_org_data):
     assert contract.status == Contract.STATUS_BUSINESS_APPROVAL
 
     # 2. Non-business-approver cannot perform business approval
-    with pytest.raises(ValidationError, match="Only Procurement Managers, Department Approvers, or Super Admins"):
+    with pytest.raises(ValidationError, match="not authorized to approve step 1"):
         approve_business_service(contract=contract, user=rbac_users["requester"])
-    with pytest.raises(ValidationError, match="Only Procurement Managers, Department Approvers, or Super Admins"):
+    with pytest.raises(ValidationError, match="not authorized to approve step 1"):
         approve_business_service(contract=contract, user=rbac_users["legal_mgr"])
 
     # Procurement Manager approves business -> moves to ACTIVE
@@ -437,7 +437,7 @@ def test_invoice_exception_resolution_restricted_to_finance(rbac_users, base_org
     )
 
     # Non-finance user cannot resolve in service
-    with pytest.raises(ValidationError, match="Only Finance / AP personnel"):
+    with pytest.raises(ValidationError, match="not authorized to approve step 1"):
         resolve_match_exception_service(
             match_exception=exception,
             resolved_by_user=rbac_users["requester"],

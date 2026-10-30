@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.core.exceptions import ValidationError
 from django.db import models
 
 from apps.core.models import TimeStampedModel
@@ -54,13 +55,42 @@ class BudgetReservation(TimeStampedModel):
         related_name="budget_reservations",
     )
     amount = models.DecimalField(max_digits=14, decimal_places=2)
+    converted_amount = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        help_text="Portion already converted into PO commitments (reservation is consumed, not double counted).",
+    )
     status = models.CharField(max_length=30, choices=STATUS_CHOICES, default=STATUS_RESERVED)
+
+    @property
+    def open_amount(self):
+        return self.amount - self.converted_amount
 
     def __str__(self):
         return f"Reservation: ${self.amount} for PR {self.requisition.pr_number} [{self.status}]"
 
 
+class SpendLedgerQuerySet(models.QuerySet):
+    """The ledger is append-only: corrections are new (signed) entries, never edits."""
+
+    def update(self, **kwargs):
+        raise ValidationError("Spend ledger entries are immutable and cannot be updated.")
+
+    def delete(self):
+        raise ValidationError("Spend ledger entries are immutable and cannot be deleted.")
+
+
 class SpendLedger(TimeStampedModel):
+    """
+    Append-only record of every budget movement. Amounts are SIGNED per entry type:
+    reserved = sum(RESERVATION), committed = sum(COMMITMENT), actual = sum(ACTUAL).
+    The counters on Budget are a cached projection maintained only by
+    budgets.services.post_ledger_entry_service and verifiable with reconcile_budget().
+    """
+
+    objects = SpendLedgerQuerySet.as_manager()
+
     ENTRY_RESERVATION = "RESERVATION"
     ENTRY_COMMITMENT = "COMMITMENT"
     ENTRY_ACTUAL = "ACTUAL"
@@ -76,6 +106,14 @@ class SpendLedger(TimeStampedModel):
     amount = models.DecimalField(max_digits=14, decimal_places=2)
     reference_number = models.CharField(max_length=100)
     description = models.CharField(max_length=255)
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError("Spend ledger entries are immutable and cannot be modified.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Spend ledger entries are immutable and cannot be deleted.")
 
     def __str__(self):
         return f"{self.entry_type}: ${self.amount} ({self.reference_number})"

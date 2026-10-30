@@ -1,7 +1,9 @@
-from decimal import Decimal
 import os
+from decimal import Decimal
+
 import pytest
 from django.conf import settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Role, User
@@ -36,7 +38,8 @@ def remediation_setup(db, tmp_path, monkeypatch):
 
     fiscal_period = FiscalPeriod.objects.create(
         organization=org, year=2026, period_number=1, name="Q1-2026",
-        start_date="2026-01-01", end_date="2026-03-31"
+        start_date=timezone.localdate() - timezone.timedelta(days=30),
+        end_date=timezone.localdate() + timezone.timedelta(days=300),
     )
 
     budget_it = Budget.objects.create(

@@ -5,6 +5,12 @@ from django.db import models
 from apps.core.models import TimeStampedModel
 
 
+def default_po_tax_rate():
+    from django.conf import settings
+
+    return Decimal(str(getattr(settings, "DEFAULT_PO_TAX_RATE", "0.10")))
+
+
 class PurchaseOrder(TimeStampedModel):
     STATUS_DRAFT = "DRAFT"
     STATUS_APPROVAL = "APPROVAL"
@@ -57,6 +63,12 @@ class PurchaseOrder(TimeStampedModel):
     )
     subtotal = models.DecimalField(
         max_digits=14, decimal_places=2, default=Decimal("0.00")
+    )
+    tax_rate = models.DecimalField(
+        max_digits=6,
+        decimal_places=4,
+        default=default_po_tax_rate,
+        help_text="Tax rate applied to this PO (fraction, 0.10 = 10%). Fixed at creation.",
     )
     tax_amount = models.DecimalField(
         max_digits=14, decimal_places=2, default=Decimal("0.00")

@@ -1,6 +1,7 @@
 from decimal import Decimal
 
-from django.db import models, transaction
+from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.utils import timezone
 
 from apps.accounts.models import Role, User
@@ -17,9 +18,13 @@ def create_approval_policy_service(
     min_amount: Decimal = Decimal("0.00"),
     max_amount=None,
     department=None,
+    cost_center=None,
+    is_exception_route: bool = False,
+    created_by=None,
 ) -> ApprovalPolicy:
     """
-    Creates an Approval Policy configuration.
+    Creates version 1 of an Approval Policy (steps are added with add_approval_step_service,
+    or use engine.create_policy_with_steps to create both at once).
     """
     policy = ApprovalPolicy.objects.create(
         name=name,
@@ -27,6 +32,9 @@ def create_approval_policy_service(
         min_amount=min_amount,
         max_amount=max_amount,
         department=department,
+        cost_center=cost_center,
+        is_exception_route=is_exception_route,
+        created_by=created_by,
     )
     return policy
 
@@ -76,87 +84,24 @@ def evaluate_approval_chain(
     *, module: str, amount: Decimal, department=None, cost_center=None
 ):
     """
-    Evaluates server-side approval routing policies for a module & amount threshold.
-    Supports cost-center routing, department routing, and global fallback policies.
-    Returns list of tuples: [(step, target_approver_role, effective_approver_user)]
+    Evaluates server-side approval routing for a module & amount: most specific policy wins
+    (cost center, then department, then global), highest matching amount tier, latest active
+    version. Returns [{step_number, policy_step, approver_role, specific_approver,
+    effective_approver, description}] (empty when no policy matches).
 
+    This is a read-only preview. Requests that are actually submitted are bound to a policy
+    version by engine.open_approval_request and no longer consult this function.
     """
-    policies = ApprovalPolicy.objects.filter(
-        models.Q(max_amount__isnull=True) | models.Q(max_amount__gte=amount),
-        module=module,
-        is_active=True,
-        min_amount__lte=amount,
-    ).order_by("-min_amount")
+    from .engine import _ensure_default_steps, select_policy
 
-    selected_policy = None
-    if cost_center:
-        selected_policy = policies.filter(cost_center=cost_center).first()
-
-
-    if not selected_policy and department:
-        selected_policy = policies.filter(
-            department=department, cost_center__isnull=True
-        ).first()
-
-    if not selected_policy:
-        selected_policy = policies.filter(
-            department__isnull=True, cost_center__isnull=True
-        ).first()
-
-
-    if not selected_policy:
+    policy = select_policy(module, amount, department, cost_center)
+    if not policy:
         return []
-
-    steps = list(
-        selected_policy.steps.select_related("approver_role", "specific_approver").order_by(
-            "step_number"
-        )
-    )
-    if not steps:
-        from apps.accounts.models import Role
-        from apps.approvals.models import ApprovalStep
-
-        dept_role = Role.objects.filter(code=Role.DEPT_APPROVER).first()
-        proc_role = Role.objects.filter(code=Role.PROC_MGR).first()
-
-        if selected_policy.module == ApprovalPolicy.MODULE_PR:
-            if dept_role:
-                ApprovalStep.objects.get_or_create(
-                    policy=selected_policy,
-                    step_number=1,
-                    defaults={
-                        "approver_role": dept_role,
-                        "description": "Department Manager Approval",
-                    },
-                )
-            if proc_role:
-                ApprovalStep.objects.get_or_create(
-                    policy=selected_policy,
-                    step_number=2,
-                    defaults={
-                        "approver_role": proc_role,
-                        "description": "Procurement Manager Approval",
-                    },
-                )
-        elif selected_policy.module == ApprovalPolicy.MODULE_PO_AMENDMENT and proc_role:
-            ApprovalStep.objects.get_or_create(
-                policy=selected_policy,
-                step_number=1,
-                defaults={
-                    "approver_role": proc_role,
-                    "description": "Procurement Manager Approval",
-                },
-            )
-
-        steps = list(
-            selected_policy.steps.select_related("approver_role", "specific_approver").order_by(
-                "step_number"
-            )
-        )
-
+    _ensure_default_steps(policy)
     chain = []
-
-    for step in steps:
+    for step in policy.steps.select_related("approver_role", "specific_approver").order_by(
+        "step_number"
+    ):
         effective_user = None
         if step.specific_approver:
             effective_user = resolve_active_delegate(step.specific_approver)
@@ -184,11 +129,13 @@ def record_approval_action_service(
     new_state: str,
     policy_step: ApprovalStep = None,
     comments: str = "",
+    approval_request=None,
 ) -> ApprovalAction:
     """
     Records an append-only ApprovalAction and corresponding AuditLog entry inside a transaction.
     """
     approval_action = ApprovalAction.objects.create(
+        approval_request=approval_request,
         policy_step=policy_step,
         target_object_id=target_object_id,
         target_model_name=target_model_name,
@@ -226,76 +173,211 @@ def set_approval_delegate_service(
     *, approver: User, delegate: User, start_date, end_date, reason: str = ""
 ) -> ApprovalDelegate:
     """
-    Sets up a temporary delegate for an approver.
+    Sets up a temporary delegate for an approver (approver unavailability, PRD 4.2). The delegate
+    acts with the approver's authority - role, department and approval limit - for the period.
     """
+    from django.core.exceptions import ValidationError
+    from django.utils.dateparse import parse_date
+
+    start = parse_date(str(start_date)) if not hasattr(start_date, "year") else start_date
+    end = parse_date(str(end_date)) if not hasattr(end_date, "year") else end_date
+    if not start or not end:
+        raise ValidationError("Valid start and end dates (YYYY-MM-DD) are required.")
+    if end < start:
+        raise ValidationError("The delegation end date cannot be before its start date.")
+    if end < timezone.localdate():
+        raise ValidationError("The delegation period is already over.")
+    if delegate.pk == approver.pk:
+        raise ValidationError("You cannot delegate to yourself.")
+    if not delegate.is_active or getattr(delegate, "vendor_id", None) or not delegate.role_id:
+        raise ValidationError("The delegate must be an active internal user with a role.")
+    if ApprovalDelegate.objects.filter(
+        approver=approver,
+        delegate=delegate,
+        is_active=True,
+        start_date__lte=end,
+        end_date__gte=start,
+    ).exists():
+        raise ValidationError("An overlapping delegation to this user already exists.")
+
     delegate_record = ApprovalDelegate.objects.create(
         approver=approver,
         delegate=delegate,
-        start_date=start_date,
-        end_date=end_date,
+        start_date=start,
+        end_date=end,
         is_active=True,
         reason=reason,
+    )
+    AuditLog.objects.create(
+        actor=approver,
+        action=AuditLog.ACTION_CREATE,
+        target_model="ApprovalDelegate",
+        target_object_id=str(delegate_record.id),
+        new_state={
+            "approver": approver.email,
+            "delegate": delegate.email,
+            "start_date": str(start),
+            "end_date": str(end),
+            "reason": reason,
+        },
     )
     return delegate_record
 
 
 @transaction.atomic
+def revoke_approval_delegate_service(*, delegation: ApprovalDelegate, actor: User) -> ApprovalDelegate:
+    """Ends a delegation early. Only the approver who granted it (or a Super Admin) may."""
+    from django.core.exceptions import ValidationError
+
+    if delegation.approver_id != actor.id and not actor.is_superuser:
+        raise ValidationError("Only the approver who granted a delegation can revoke it.")
+    if not delegation.is_active:
+        return delegation
+    delegation.is_active = False
+    delegation.save(update_fields=["is_active", "updated_at"])
+    AuditLog.objects.create(
+        actor=actor,
+        action=AuditLog.ACTION_UPDATE,
+        target_model="ApprovalDelegate",
+        target_object_id=str(delegation.id),
+        previous_state={"is_active": True},
+        new_state={"is_active": False, "revoked_by": actor.email},
+    )
+    return delegation
+
+
+class DecisionHandler:
+    """How to approve / reject one kind of target through its own (engine-backed) service."""
+
+    def __init__(self, model, approve, reject):
+        self.model = model
+        self.approve = approve
+        self.reject = reject
+
+
+def decision_handlers() -> dict:
+    """
+    The ONLY transaction types that can be decided through the generic approval entry points
+    (inbox, API). Each handler calls the owning module's service, which enforces the approval
+    engine (role / delegation / limits / separation of duties). Anything not listed here cannot
+    be approved generically - there is deliberately no "just set the status" fallback.
+    """
+    from apps.contracts.models import Contract
+    from apps.contracts.services import approve_business_service, reject_business_service
+    from apps.invoices.models import MatchException
+    from apps.invoices.services import resolve_match_exception_service
+    from apps.orders import services as order_services
+    from apps.orders.models import POAmendment, PurchaseOrder
+    from apps.requisitions import services as pr_services
+    from apps.requisitions.models import PurchaseRequisition
+    from apps.sourcing import services as sourcing_services
+    from apps.sourcing.models import AwardDecision
+
+    from . import engine
+
+    def pr_approve(t, actor, c, module=None):
+        pr_services.approve_purchase_requisition_service(requisition=t, approver=actor, comments=c)
+
+    def pr_reject(t, actor, c, module=None):
+        pr_services.reject_purchase_requisition_service(requisition=t, approver=actor, comments=c)
+
+    def po_approve(t, actor, c, module=None):
+        if module == ApprovalPolicy.MODULE_BUDGET_EXCEPTION or (
+            module is None
+            and engine.get_pending_request(ApprovalPolicy.MODULE_BUDGET_EXCEPTION, t)
+            and not engine.get_pending_request(ApprovalPolicy.MODULE_PO, t)
+        ):
+            order_services.decide_po_budget_exception_service(
+                po=t, actor=actor, approve=True, comments=c
+            )
+        else:
+            order_services.approve_purchase_order_service(po=t, approver=actor, comments=c)
+
+    def po_reject(t, actor, c, module=None):
+        if module == ApprovalPolicy.MODULE_BUDGET_EXCEPTION or (
+            module is None
+            and engine.get_pending_request(ApprovalPolicy.MODULE_BUDGET_EXCEPTION, t)
+            and not engine.get_pending_request(ApprovalPolicy.MODULE_PO, t)
+        ):
+            order_services.decide_po_budget_exception_service(
+                po=t, actor=actor, approve=False, comments=c
+            )
+        else:
+            order_services.reject_purchase_order_service(po=t, approver=actor, reason=c)
+
+    return {
+        "PurchaseRequisition": DecisionHandler(PurchaseRequisition, pr_approve, pr_reject),
+        "PurchaseOrder": DecisionHandler(PurchaseOrder, po_approve, po_reject),
+        "POAmendment": DecisionHandler(
+            POAmendment,
+            lambda t, a, c, module=None: order_services.approve_po_amendment_service(
+                amendment=t, approver=a, comments=c
+            ),
+            lambda t, a, c, module=None: order_services.reject_po_amendment_service(
+                amendment=t, rejector=a, reason=c
+            ),
+        ),
+        "AwardDecision": DecisionHandler(
+            AwardDecision,
+            lambda t, a, c, module=None: sourcing_services.approve_award_service(
+                event=t.event, approver=a, comments=c
+            ),
+            lambda t, a, c, module=None: sourcing_services.reject_award_service(
+                event=t.event, approver=a, comments=c
+            ),
+        ),
+        "Contract": DecisionHandler(
+            Contract,
+            lambda t, a, c, module=None: approve_business_service(contract=t, user=a, notes=c),
+            lambda t, a, c, module=None: reject_business_service(contract=t, user=a, reason=c),
+        ),
+        "MatchException": DecisionHandler(
+            MatchException,
+            lambda t, a, c, module=None: resolve_match_exception_service(
+                match_exception=t, resolved_by_user=a, resolution_notes=c or "Approved", action="RESOLVE"
+            ),
+            lambda t, a, c, module=None: resolve_match_exception_service(
+                match_exception=t, resolved_by_user=a, resolution_notes=c, action="REJECT"
+            ),
+        ),
+    }
+
+
+def get_decision_target(model_name: str, object_id):
+    """The target object for a decidable type, or None if the type/object is unknown."""
+    handler = decision_handlers().get(model_name)
+    if handler is None:
+        return None
+    return handler.model.objects.filter(pk=object_id).first()
+
+
+@transaction.atomic
 def process_approval_action_service(
-    *, target_object, actor: User, action: str, comments: str = ""
+    *, target_object, actor: User, action: str, comments: str = "", module=None
 ):
     """
-    Processes an approval action (APPROVE or REJECT) on a target object (e.g. PurchaseRequisition).
-    Always returns the persisted ApprovalAction record.
+    Approve or reject a target through its owning module's service. The approval engine - not
+    this function - decides whether ``actor`` may act, so there is no way to approve something
+    by pointing this at it. Unknown target types are refused outright.
+    Always returns the latest persisted ApprovalAction for the target.
     """
-    from apps.requisitions.models import PurchaseRequisition
-    from apps.requisitions.services import (
-        approve_purchase_requisition_service,
-        reject_purchase_requisition_service,
-    )
+    name = target_object.__class__.__name__
+    handler = decision_handlers().get(name)
+    if handler is None:
+        raise ValidationError(f"{name} records cannot be approved through the generic approval endpoint.")
 
     act_str = str(action).upper()
-    if isinstance(target_object, PurchaseRequisition):
-        if act_str in ["APPROVE", "APPROVED"]:
-            approve_purchase_requisition_service(
-                requisition=target_object, approver=actor, comments=comments
-            )
-            return (
-                ApprovalAction.objects.filter(
-                    target_object_id=str(target_object.id),
-                    target_model_name="PurchaseRequisition",
-                )
-                .order_by("-created_at")
-                .first()
-            )
-        elif act_str in ["REJECT", "REJECTED"]:
-            reject_purchase_requisition_service(
-                requisition=target_object, approver=actor, comments=comments
-            )
-            return (
-                ApprovalAction.objects.filter(
-                    target_object_id=str(target_object.id),
-                    target_model_name="PurchaseRequisition",
-                )
-                .order_by("-created_at")
-                .first()
-            )
+    if act_str in ("APPROVE", "APPROVED"):
+        handler.approve(target_object, actor, comments, module=module)
+    elif act_str in ("REJECT", "REJECTED"):
+        handler.reject(target_object, actor, comments, module=module)
+    else:
+        raise ValidationError(f"Unknown approval action '{action}'. Use APPROVE or REJECT.")
 
-    previous_state = getattr(target_object, "status", "UNKNOWN")
-    new_state = "APPROVED" if act_str in ["APPROVE", "APPROVED"] else "REJECTED"
-    if hasattr(target_object, "status"):
-        target_object.status = new_state
-        target_object.save()
-
-    return record_approval_action_service(
-        target_object_id=target_object.id,
-        target_model_name=target_object.__class__.__name__,
-        actor=actor,
-        action=(
-            ApprovalAction.ACTION_APPROVE
-            if act_str in ["APPROVE", "APPROVED"]
-            else ApprovalAction.ACTION_REJECT
-        ),
-        previous_state=previous_state,
-        new_state=new_state,
-        comments=comments,
+    return (
+        ApprovalAction.objects.filter(
+            target_object_id=str(target_object.id), target_model_name=name
+        )
+        .order_by("-created_at")
+        .first()
     )

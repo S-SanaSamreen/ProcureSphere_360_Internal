@@ -1,15 +1,23 @@
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
 from django.db.models import Q
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
+from django.views.decorators.http import require_POST
 
 from apps.accounts.models import Role, User
 from apps.requisitions.models import PurchaseRequisition
 
-from .models import ApprovalDelegate
-from .services import process_approval_action_service, set_approval_delegate_service
+from . import engine
+from .models import ApprovalDelegate, ApprovalPolicy, ApprovalRequest
+from .services import (
+    get_decision_target,
+    process_approval_action_service,
+    revoke_approval_delegate_service,
+    set_approval_delegate_service,
+)
 
 
 def _get_approval_querysets(user, role_code):
@@ -80,6 +88,95 @@ def _handle_approval_post(request, role_code):
         return None
 
 
+def _target_link(req, target):
+    """(label, url) for an approval request's target, for the generic inbox."""
+    name = req.target_model_name
+    if target is None:
+        return (f"{name} (no longer available)", "")
+    if name == "PurchaseOrder":
+        return (
+            f"PO {target.po_number} - {target.vendor.legal_name}",
+            f"/purchase-orders/{target.pk}/",
+        )
+    if name == "POAmendment":
+        return (
+            f"PO {target.po.po_number} amendment #{target.amendment_number}",
+            f"/purchase-orders/{target.po_id}/",
+        )
+    if name == "AwardDecision":
+        return (
+            f"Award {target.event.event_number} - {target.winning_bid.vendor.legal_name}",
+            f"/sourcing-events/{target.event_id}/",
+        )
+    if name == "Contract":
+        return (f"Contract {target.contract_number} - {target.title}", f"/contracts/{target.pk}/")
+    if name == "MatchException":
+        return (
+            f"Invoice {target.invoice.invoice_number} - {target.get_exception_type_display()}",
+            f"/invoices/exceptions/{target.pk}/",
+        )
+    if name == "PurchaseRequisition":
+        return (f"PR {target.pr_number} - {target.title}", f"/requisitions/{target.pk}/")
+    return (name, "")
+
+
+def _other_pending_requests(user):
+    """
+    Pending approval work for this user outside the requisition inbox (the requisition screen
+    has its own richer workflow): POs, PO amendments, awards, contracts, invoice exceptions and
+    budget exceptions raised on a PO.
+    """
+    rows = []
+    for req in engine.pending_requests_for_user(user):
+        if req.module == ApprovalPolicy.MODULE_PR or req.target_model_name == "PurchaseRequisition":
+            continue
+        target = get_decision_target(req.target_model_name, req.target_object_id)
+        label, url = _target_link(req, target)
+        rows.append({"request": req, "label": label, "url": url, "step": req.active_step})
+    return rows
+
+
+@login_required(login_url="/login/")
+@require_POST
+def approval_request_decide_view(request, request_id):
+    """Approve or reject the active step of any pending approval request (the engine decides)."""
+    approval = get_object_or_404(ApprovalRequest, pk=request_id)
+    target = get_decision_target(approval.target_model_name, approval.target_object_id)
+    if target is None or approval.status != ApprovalRequest.STATUS_PENDING:
+        messages.error(request, "This approval request is no longer pending.")
+        return redirect("approvals_inbox")
+    action = (request.POST.get("action") or "").upper()
+    comments = (request.POST.get("comments") or "").strip()
+    if action == "REJECT" and not comments:
+        messages.error(request, "A reason is required to reject.")
+        return redirect("approvals_inbox")
+    try:
+        process_approval_action_service(
+            target_object=target,
+            actor=request.user,
+            action=action,
+            comments=comments,
+            module=approval.module,
+        )
+        verb = "rejected" if action == "REJECT" else "approved"
+        messages.success(request, f"Request {verb}.")
+    except ValidationError as exc:
+        messages.error(request, " ".join(exc.messages) if hasattr(exc, "messages") else str(exc))
+    return redirect("approvals_inbox")
+
+
+@login_required(login_url="/login/")
+@require_POST
+def delegation_revoke_view(request, delegation_id):
+    delegation = get_object_or_404(ApprovalDelegate, pk=delegation_id)
+    try:
+        revoke_approval_delegate_service(delegation=delegation, actor=request.user)
+        messages.success(request, "Delegation revoked.")
+    except ValidationError as exc:
+        messages.error(request, " ".join(exc.messages))
+    return redirect("approvals_delegation")
+
+
 @login_required(login_url="/login/")
 def approvals_inbox_view(request):
     """
@@ -89,9 +186,14 @@ def approvals_inbox_view(request):
     role_code = getattr(user, "role_code", None) or (
         user.role.code if hasattr(user, "role") and user.role else Role.SUPER_ADMIN
     )
-    if not user.is_superuser and (getattr(user, "is_vendor", False) or role_code in [Role.VENDOR_USER, "VENDOR_USER"]):
+    if not user.is_superuser and (
+        getattr(user, "is_vendor", False) or role_code in [Role.VENDOR_USER, "VENDOR_USER"]
+    ):
         from django.core.exceptions import PermissionDenied
-        raise PermissionDenied("External vendors are not authorized to view the internal approval inbox.")
+
+        raise PermissionDenied(
+            "External vendors are not authorized to view the internal approval inbox."
+        )
 
     if request.method == "POST":
         res = _handle_approval_post(request, role_code)
@@ -166,6 +268,7 @@ def approvals_inbox_view(request):
         "search_q": search_q,
         "status_filter": status_filter,
         "has_budget_overrun": has_budget_overrun,
+        "other_requests": _other_pending_requests(user),
     }
     return render(request, "pages/approvals/inbox.html", context)
 
@@ -210,14 +313,20 @@ def delegation_view(request):
         approver=user, is_active=True, end_date__gte=timezone.now().date()
     ).order_by("-start_date")
 
-    eligible_delegates = User.objects.filter(
-        role__code__in=[Role.DEPT_APPROVER, Role.PROC_MGR, Role.PROC_EXEC]
-    ).exclude(pk=user.pk).select_related("role")
+    eligible_delegates = (
+        User.objects.filter(role__code__in=[Role.DEPT_APPROVER, Role.PROC_MGR, Role.PROC_EXEC])
+        .exclude(pk=user.pk)
+        .select_related("role")
+    )
 
     base_layout = _get_base_layout(role_code)
-    return render(request, "pages/approvals/delegation.html", {
-        "active_delegates": active_delegates,
-        "eligible_delegates": eligible_delegates,
-        "base_layout": base_layout,
-        "role_code": role_code,
-    })
+    return render(
+        request,
+        "pages/approvals/delegation.html",
+        {
+            "active_delegates": active_delegates,
+            "eligible_delegates": eligible_delegates,
+            "base_layout": base_layout,
+            "role_code": role_code,
+        },
+    )

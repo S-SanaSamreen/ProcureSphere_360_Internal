@@ -750,6 +750,19 @@ def cancel_view(request, pk):
                 pr.status = PurchaseRequisition.STATUS_CANCELLED
                 pr.save(update_fields=["status", "updated_at"])
 
+                # A cancelled PR must not keep budget reserved or sit in an approver's inbox.
+                from apps.approvals import engine as approval_engine
+                from apps.approvals.models import ApprovalPolicy
+                from apps.budgets.services import release_budget_reservation_service
+
+                release_budget_reservation_service(
+                    requisition=pr, user=request.user, reason="PR cancelled by requester"
+                )
+                for module in (ApprovalPolicy.MODULE_PR, ApprovalPolicy.MODULE_BUDGET_EXCEPTION):
+                    approval_engine.cancel_pending_request(
+                        module, pr, actor=request.user, reason="Requisition cancelled"
+                    )
+
                 from apps.audit.models import AuditLog
 
                 AuditLog.objects.create(

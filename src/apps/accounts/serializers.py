@@ -28,6 +28,7 @@ class UserSerializer(serializers.ModelSerializer):
             "department",
             "department_name",
             "vendor",
+            "approval_limit",
             "is_active",
             "date_joined",
         ]

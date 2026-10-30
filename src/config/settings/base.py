@@ -269,6 +269,20 @@ SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
 
+# Procurement financial policy (override per environment)
+# Default tax rate stamped onto each new PO (stored per PO, so later rate changes never rewrite
+# existing orders). 0.10 == 10%.
+DEFAULT_PO_TAX_RATE = env("DEFAULT_PO_TAX_RATE", default="0.10")
+# Total pre-tax value of all non-cancelled POs raised against one requisition may exceed the
+# requisition estimate by at most this percentage (quotes legitimately differ from estimates).
+PO_OVER_REQUISITION_TOLERANCE_PCT = env("PO_OVER_REQUISITION_TOLERANCE_PCT", default="10")
+
+# Vendor lifecycle (PRD 4: ... KYC REVIEW -> APPROVED -> ACTIVE). Approval and activation are two
+# audited transitions. True: approving a vendor also activates it in the same action (both
+# transitions are recorded). False: an approved vendor rests in APPROVED until Procurement
+# explicitly activates it. Open decision ASSUMP-016.
+VENDOR_AUTO_ACTIVATE_ON_APPROVAL = env.bool("VENDOR_AUTO_ACTIVATE_ON_APPROVAL", default=True)
+
 # Email Configuration (loaded from environment variables, never hardcoded)
 EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
 EMAIL_HOST = env("EMAIL_HOST", default="smtp-relay.brevo.com")

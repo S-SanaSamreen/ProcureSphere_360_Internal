@@ -7,7 +7,7 @@
     <div class="col-12 d-flex justify-content-between align-items-center">
         <div>
             <h3 class="fw-bold text-dark mb-1"><i class="fa-solid fa-code-branch text-success me-2"></i> Approval Policy Engine</h3>
-            <p class="text-muted mb-0">Configure multi-level routing, amount thresholds, and policy rules.</p>
+            <p class="text-muted mb-0">Configure multi-level routing by transaction type, amount, department and cost center. Policies are versioned: editing creates a new version and never re-routes work already in flight.</p>
         </div>
         <button hx-get="/superadmin/policies/create/" hx-target="#modal-content-body" data-bs-toggle="modal" data-bs-target="#modal-container" class="btn btn-success text-white fw-bold rounded-pill px-4 shadow-sm">
             <i class="fa-solid fa-plus me-2"></i> Add Policy
@@ -15,11 +15,12 @@
     </div>
 </div>
 
-<div class="alert alert-warning border-0 shadow-sm rounded-4 d-flex align-items-start gap-3 mb-4" role="alert">
-    <i class="fa-solid fa-triangle-exclamation fs-5 mt-1"></i>
+<div class="alert alert-info border-0 shadow-sm rounded-4 d-flex align-items-start gap-3 mb-4" role="alert">
+    <i class="fa-solid fa-circle-info fs-5 mt-1"></i>
     <div>
-        <div class="fw-bold mb-1">Budget routing</div>
-        <p class="mb-0">If the request amount is lower than the permitted budget, it goes to the Department Approver. If the amount is higher than the permitted budget, it goes to Finance / AP.</p>
+        <div class="fw-bold mb-1">How routing works</div>
+        <p class="mb-0">For each transaction the most specific active policy applies: cost center, then department, then global; within a scope, the amount band that contains the value. Each step must be approved by a different person, and every approver is also bound by their personal approval limit. <strong>Exception route</strong> policies add their steps for requests raised as exceptions (budget overrun, PO above estimate, award to other than the lowest bidder).</p>
+        <a class="small" href="?{% if not show_history %}history=1{% endif %}">{% if show_history %}Hide superseded versions{% else %}Show superseded versions{% endif %}</a>
     </div>
 </div>
 
@@ -31,8 +32,9 @@
                     <tr>
                         <th class="ps-4">Policy Name</th>
                         <th>Transaction Type</th>
-                        <th>Scope (Department)</th>
-                        <th>Thresholds (Min / Max)</th>
+                        <th>Scope</th>
+                        <th>Amount band</th>
+                        <th>Approval chain</th>
                         <th class="text-center">Status</th>
                         <th></th>
                     </tr>
@@ -40,27 +42,31 @@
                 <tbody>
                     {% for p in policies %}
                     <tr>
-                        <td class="ps-4 fw-bold text-dark">{{ p.name }}</td>
-                        <td><span class="badge bg-light text-dark border">{{ p.module }}</span></td>
+                        <td class="ps-4 fw-bold text-dark">{{ p.name }} <span class="badge bg-secondary-subtle text-secondary border">v{{ p.version }}</span>{% if p.change_note %}<div class="small fw-normal text-muted">{{ p.change_note }}</div>{% endif %}</td>
+                        <td><span class="badge bg-light text-dark border">{{ p.get_module_display }}</span>{% if p.is_exception_route %} <span class="badge bg-warning text-dark">Exception route</span>{% endif %}</td>
                         <td>
-                            {% if p.department %}Dept: {{ p.department.name }}{% endif %}
-                            {% if not p.department %}<span class="text-muted fst-italic">Global Scope</span>{% endif %}
+                            {% if p.cost_center %}Cost center: {{ p.cost_center.code }}
+                            {% elif p.department %}Dept: {{ p.department.name }}
+                            {% else %}<span class="text-muted fst-italic">Global Scope</span>{% endif %}
                         </td>
-                        <td>${{ p.min_amount|floatformat:2 }} - {% if p.max_amount %}${{ p.max_amount|floatformat:2 }}{% else %}Unlimited{% endif %}</td>
+                        <td>${{ p.min_amount|floatformat:"2g" }} - {% if p.max_amount %}${{ p.max_amount|floatformat:"2g" }}{% else %}Unlimited{% endif %}</td>
+                        <td class="small">{% for st in p.steps.all %}<span class="badge bg-light text-dark border">{{ st.step_number }}. {{ st.approver_role.name }}{% if st.specific_approver_id %} (named){% endif %}</span> {% endfor %}</td>
                         <td class="text-center">
-                            {% if p.is_active %}
+                            {% if p.superseded_by_id %}
+                            <span class="badge bg-secondary bg-opacity-10 text-secondary border">Superseded</span>
+                            {% elif p.is_active %}
                             <span class="badge bg-success bg-opacity-10 text-success border border-success">Active</span>
                             {% else %}
                             <span class="badge bg-danger bg-opacity-10 text-danger border border-danger">Inactive</span>
                             {% endif %}
                         </td>
                         <td class="pe-4 text-end">
-                            <button hx-get="/superadmin/policies/{{ p.pk }}/edit/" hx-target="#modal-content-body" data-bs-toggle="modal" data-bs-target="#modal-container" class="btn btn-sm btn-outline-secondary rounded-pill px-3">Edit</button>
+                            {% if not p.superseded_by_id %}<button hx-get="/superadmin/policies/{{ p.pk }}/edit/" hx-target="#modal-content-body" data-bs-toggle="modal" data-bs-target="#modal-container" class="btn btn-sm btn-outline-secondary rounded-pill px-3">Revise</button>{% endif %}
                         </td>
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="6" class="text-center py-5 text-muted">No approval policies configured.</td>
+                        <td colspan="7" class="text-center py-5 text-muted">No approval policies configured.</td>
                     </tr>
                     {% endfor %}
                 </tbody>

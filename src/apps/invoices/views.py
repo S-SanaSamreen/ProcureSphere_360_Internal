@@ -202,8 +202,13 @@ def exception_detail_view(request, exception_id):
 
 @login_required(login_url="/login/")
 def resolve_exception_view(request, exception_id):
+    from apps.approvals import engine as approval_engine
+
     _enforce_internal_invoice_access(
-        request, allowed_roles=[Role.FINANCE_AP, Role.SUPER_ADMIN, "FINANCE_AP", "SUPER_ADMIN"]
+        request,
+        allowed_roles=None
+        if approval_engine.user_in_policy_roles("INVOICE", request.user)
+        else [Role.FINANCE_AP, Role.SUPER_ADMIN, "FINANCE_AP", "SUPER_ADMIN"],
     )
 
     if request.method == "POST":

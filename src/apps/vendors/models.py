@@ -40,7 +40,7 @@ class Vendor(TimeStampedModel):
         (STATUS_REJECTED, "Rejected"),
         (STATUS_ACTIVE, "Active"),
         (STATUS_ON_HOLD, "On Hold"),
-        (STATUS_SUSPENDED, "Suspended / Blacklisted"),
+        (STATUS_SUSPENDED, "Suspended"),
     ]
 
     legal_name = models.CharField(max_length=255)
@@ -80,6 +80,20 @@ class Vendor(TimeStampedModel):
 
     # Hold/Suspend notes
     status_notes = models.TextField(blank=True)
+
+    # Blacklist: a distinct, permanent control layered on SUSPENDED (so every ACTIVE-only gate
+    # already blocks the vendor). Unlike a suspension it cannot be undone by an ordinary
+    # reinstatement: the blacklist must first be lifted, with a recorded reason.
+    is_blacklisted = models.BooleanField(default=False, db_index=True)
+    blacklisted_at = models.DateTimeField(null=True, blank=True)
+    blacklisted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="blacklisted_vendors",
+    )
+    blacklist_reason = models.TextField(blank=True)
 
     # Event Eligibility & Legal Governance
     ELIGIBILITY_PENDING = "PENDING"

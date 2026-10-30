@@ -14,6 +14,7 @@
         <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
             <code class="h5 mb-0">{{ vendor.vendor_number }}</code>
             {% include 'partials/vendor_status_badge.html' with status=vendor.status label=vendor.get_status_display %}
+            {% if vendor.is_blacklisted %}<span class="badge bg-dark"><i class="fa-solid fa-ban me-1"></i>Blacklisted</span>{% endif %}
             {% if latest_risk %}
                 <span class="badge {% if latest_risk.risk_level == 'HIGH' %}bg-danger{% elif latest_risk.risk_level == 'MEDIUM' %}bg-warning text-dark{% else %}bg-success{% endif %}">{{ latest_risk.get_risk_level_display }}</span>
             {% endif %}
@@ -132,7 +133,7 @@ This cannot be undone. Only DRAFT and REJECTED vendors with no linked transactio
                     <ul class="mb-2 ps-3 text-muted">{% for b in kyc.blockers %}<li>{{ b }}</li>{% endfor %}</ul>
                 {% endif %}
 
-                {% if can_start_kyc_review or can_activate_vendor or can_request_changes %}
+                {% if can_start_kyc_review or can_activate_vendor or can_activate_approved or can_request_changes %}
                 <div class="d-flex flex-wrap gap-2 border-top pt-2">
                     {% if can_start_kyc_review %}
                     <form method="post" action="{% url 'vendor_kyc_action' vendor.id 'start-review' %}">{% csrf_token %}
@@ -145,6 +146,12 @@ This cannot be undone. Only DRAFT and REJECTED vendors with no linked transactio
                         <button class="btn btn-sm btn-success text-nowrap">Approve &amp; activate</button>
                     </form>
                     {% endif %}
+                    {% if can_activate_approved %}
+                    <form method="post" action="{% url 'vendor_kyc_action' vendor.id 'activate' %}" class="d-flex gap-2">{% csrf_token %}
+                        <input name="notes" class="form-control form-control-sm" placeholder="Activation note" aria-label="Activation note">
+                        <button class="btn btn-sm btn-success text-nowrap"><i class="fa-solid fa-power-off me-1"></i>Activate vendor</button>
+                    </form>
+                    {% endif %}
                     {% if can_request_changes %}
                     <form method="post" action="{% url 'vendor_kyc_action' vendor.id 'request-changes' %}" class="d-flex gap-2 w-100">{% csrf_token %}
                         <input name="notes" class="form-control form-control-sm" placeholder="Specify corrections / changes required..." required aria-label="Change request instructions">
@@ -154,6 +161,26 @@ This cannot be undone. Only DRAFT and REJECTED vendors with no linked transactio
                 </div>
                 {% endif %}
             </div>
+
+            {% if vendor.is_blacklisted %}
+                <div class="alert alert-dark small mb-3" role="alert">
+                    <div class="fw-semibold"><i class="fa-solid fa-ban me-1"></i>Blacklisted{% if vendor.blacklisted_at %} on {{ vendor.blacklisted_at|date:'d M Y' }}{% endif %}{% if vendor.blacklisted_by %} by {{ vendor.blacklisted_by.email }}{% endif %}</div>
+                    <div>{{ vendor.blacklist_reason }}</div>
+                    <div class="text-muted mt-1">This vendor cannot be approved, activated or reinstated until the blacklist is lifted.</div>
+                </div>
+            {% endif %}
+            {% if can_lift_blacklist %}
+                <form method="post" action="{% url 'vendor_kyc_action' vendor.id 'lift-blacklist' %}" class="d-flex gap-2 mb-3">{% csrf_token %}
+                    <input name="notes" class="form-control form-control-sm" placeholder="Reason for lifting the blacklist (min. 10 characters)" required minlength="10" aria-label="Reason for lifting the blacklist">
+                    <button class="btn btn-sm btn-outline-dark text-nowrap">Lift blacklist</button>
+                </form>
+            {% endif %}
+            {% if can_blacklist %}
+                <form method="post" action="{% url 'vendor_kyc_action' vendor.id 'blacklist' %}" class="d-flex gap-2 mb-3" onsubmit="return confirm('Blacklist {{ vendor.legal_name|escapejs }}? The vendor is suspended and cannot be reinstated until the blacklist is lifted.');">{% csrf_token %}
+                    <input name="notes" class="form-control form-control-sm" placeholder="Blacklist reason (min. 10 characters)" required minlength="10" aria-label="Blacklist reason">
+                    <button class="btn btn-sm btn-outline-danger text-nowrap"><i class="fa-solid fa-ban me-1"></i>Blacklist</button>
+                </form>
+            {% endif %}
 
             {% if transitions %}
                 <form method="post" action="{% url 'vendor_status_change' vendor.id %}" class="small">

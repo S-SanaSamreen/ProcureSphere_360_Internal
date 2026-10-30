@@ -5,13 +5,86 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.accounts.models import Role, User
+from apps.approvals import engine as approval_engine
+from apps.approvals.models import ApprovalPolicy, ApprovalRequest
 from apps.audit.models import AuditLog
-from apps.budgets.models import Budget, SpendLedger
+from apps.budgets.models import SpendLedger
+from apps.budgets.services import (
+    budget_headroom,
+    commit_po_budget_service,
+    get_po_budget,
+    po_budget_shortfall,
+    po_net_commitment,
+    post_ledger_entry_service,
+)
 from apps.notifications.models import Notification
 from apps.organization.models import CostCenter
 from apps.vendors.models import Vendor
 
 from .models import POAmendment, POLine, PurchaseOrder
+
+
+def _po_exception_reason(po: PurchaseOrder) -> str:
+    """A PO priced above its requisition estimate is an exception and gets the extra route."""
+    if po.requisition_id and po.subtotal > po.requisition.total_amount:
+        return (
+            f"PO value ${po.subtotal:,.2f} exceeds requisition estimate "
+            f"${po.requisition.total_amount:,.2f}"
+        )
+    return ""
+
+
+def _open_po_request(po: PurchaseOrder, maker, *, required=False):
+    return approval_engine.open_approval_request(
+        module=ApprovalPolicy.MODULE_PO,
+        target=po,
+        amount=po.total_amount,
+        maker=maker,
+        department=po.cost_center.department if po.cost_center_id else None,
+        cost_center=po.cost_center,
+        exception_reason=_po_exception_reason(po),
+        required=required,
+    )
+
+
+def _notify_request_approvers(request, *, notification_type, title, message, target_url):
+    """Tell whoever can decide the active step; if nobody can, make a Super Admin aware."""
+    from apps.notifications.services import notify_role_users, notify_users
+
+    approvers = approval_engine.step_approvers(request)
+    if approvers:
+        notify_users(
+            users=approvers,
+            notification_type=notification_type,
+            title=title,
+            message=message,
+            target_url=target_url,
+        )
+    else:
+        notify_role_users(
+            role_codes=[Role.SUPER_ADMIN],
+            notification_type=notification_type,
+            title=f"No eligible approver: {title}",
+            message=message + " No user currently holds the authority (role / limit) for this step.",
+            target_url=target_url,
+        )
+
+
+def _assert_legacy_po_approver(user: User):
+    """No PO policy requires approval: the historical rule (Procurement Manager / Super Admin)."""
+    role_code = getattr(user, "role_code", None) or (user.role.code if getattr(user, "role", None) else None)
+    if not (getattr(user, "is_superuser", False) or role_code in (Role.PROC_MGR, Role.SUPER_ADMIN)):
+        raise ValidationError(
+            "Permission Denied: Only Procurement Managers or Super Admin can approve purchase orders."
+        )
+
+
+def _refresh_requisition_status(po: PurchaseOrder, actor=None):
+    """Moves the PO's requisition to PO_ISSUED / back to SOURCING / APPROVED as appropriate."""
+    if po.requisition_id:
+        from apps.requisitions.services import refresh_requisition_fulfilment_status
+
+        refresh_requisition_fulfilment_status(po.requisition, actor=actor)
 
 
 @transaction.atomic
@@ -24,13 +97,27 @@ def generate_purchase_order_service(
     requisition=None,
     sourcing_event=None,
     terms_and_conditions: str = "Standard HPE Enterprise Procurement Terms & Conditions",
-    tax_rate: Decimal = Decimal("0.10"),
-    initial_status: str = PurchaseOrder.STATUS_ISSUED,
+    tax_rate: Decimal = None,
+    initial_status: str = None,
 ) -> PurchaseOrder:
     """
     Generates a new Purchase Order from requisition/award.
-    Moves BudgetReservation to SpendLedger COMMITMENT when in ISSUED status.
+
+    ``initial_status=None`` (default) lets the approval engine decide: if an active PO policy
+    matches (amount / department / cost center) the PO is created in APPROVAL with a pending
+    approval request; if no policy requires approval it is issued immediately. An explicit
+    status (e.g. DRAFT) is honoured.
+
+    When ISSUED, the requisition's reservation is converted into this PO's commitment and the
+    commitment is refused if it would overspend the budget (see commit_po_budget_service).
+    ``tax_rate`` defaults to settings.DEFAULT_PO_TAX_RATE and is stored on the PO.
     """
+    from apps.orders.models import default_po_tax_rate
+
+    tax_rate = default_po_tax_rate() if tax_rate is None else Decimal(str(tax_rate))
+    if tax_rate < Decimal("0") or tax_rate > Decimal("1"):
+        raise ValidationError("Tax rate must be a fraction between 0 and 1 (e.g. 0.10 for 10%).")
+
     from apps.core.services import generate_document_number
 
     if vendor.status != Vendor.STATUS_ACTIVE:
@@ -47,7 +134,9 @@ def generate_purchase_order_service(
         requisition=requisition,
         sourcing_event=sourcing_event,
         cost_center=cost_center,
-        status=initial_status,
+        status=PurchaseOrder.STATUS_DRAFT if initial_status is None else initial_status,
+        created_by=created_by_user,
+        tax_rate=tax_rate,
         terms_and_conditions=terms_and_conditions,
         subtotal=Decimal("0.00"),
         tax_amount=Decimal("0.00"),
@@ -72,7 +161,8 @@ def generate_purchase_order_service(
         )
         subtotal += line.line_total
 
-    tax = subtotal * tax_rate
+    subtotal = subtotal.quantize(Decimal("0.01"))
+    tax = (subtotal * tax_rate).quantize(Decimal("0.01"))
     total = subtotal + tax
 
     po.subtotal = subtotal
@@ -80,24 +170,29 @@ def generate_purchase_order_service(
     po.total_amount = total
     po.save(update_fields=["subtotal", "tax_amount", "total_amount", "updated_at"])
 
-    # Move BudgetReservation to SpendLedger COMMITMENT only if PO is in ISSUED status
-    if initial_status == PurchaseOrder.STATUS_ISSUED:
-        budget = (
-            Budget.objects.filter(cost_center=cost_center)
-            .order_by("-created_at")
-            .first()
+    pending_approval = None
+    if initial_status is None:
+        pending_approval = _open_po_request(po, created_by_user, required=False)
+        initial_status = (
+            PurchaseOrder.STATUS_APPROVAL if pending_approval else PurchaseOrder.STATUS_ISSUED
         )
-        if budget:
-            budget.committed_amount += total
-            budget.save(update_fields=["committed_amount", "updated_at"])
-
-            SpendLedger.objects.create(
-                budget=budget,
-                entry_type=SpendLedger.ENTRY_COMMITMENT,
-                amount=total,
-                reference_number=po.po_number,
-                description=f"PO Commitment for {vendor.legal_name}",
+        po.status = initial_status
+        po.save(update_fields=["status", "updated_at"])
+        if pending_approval:
+            _notify_request_approvers(
+                pending_approval,
+                notification_type=Notification.TYPE_APPROVAL_REQUIRED,
+                title=f"PO Approval Required: {po.po_number}",
+                message=(
+                    f"Purchase Order {po.po_number} (${po.total_amount:,.2f}) for "
+                    f"{vendor.legal_name} requires your approval."
+                ),
+                target_url=f"/orders/{po.id}/",
             )
+
+    # Commit funds (converting the requisition reservation) only if the PO is issued now
+    if initial_status == PurchaseOrder.STATUS_ISSUED:
+        commit_po_budget_service(po=po, user=created_by_user)
 
         # Notify active vendor users
         for v_user in User.objects.filter(vendor=vendor, is_active=True):
@@ -132,6 +227,7 @@ def generate_purchase_order_service(
     )
 
     if initial_status == PurchaseOrder.STATUS_ISSUED:
+        _refresh_requisition_status(po, created_by_user)
         from apps.notifications.services import notify_vendor_users
 
         notify_vendor_users(
@@ -209,6 +305,18 @@ def acknowledge_purchase_order_service(
     return po
 
 
+def _assert_amendment_fits_budget(po: PurchaseOrder, delta: Decimal):
+    budget = get_po_budget(po)
+    headroom = budget_headroom(budget)
+    if delta > headroom and not budget.allow_overspend:
+        raise ValidationError(
+            f"Insufficient budget for cost center {po.cost_center.code}. "
+            f"Additional commitment required: ${delta:,.2f}, "
+            f"Available: ${max(headroom, Decimal('0.00')):,.2f}."
+        )
+    return budget
+
+
 @transaction.atomic
 def request_po_amendment_service(
     *,
@@ -216,7 +324,7 @@ def request_po_amendment_service(
     reason: str,
     updated_line_items: list,
     requested_by_user: User,
-    tax_rate: Decimal = Decimal("0.10"),
+    tax_rate: Decimal = None,
 ) -> POAmendment:
     """
     Initiates a formal Purchase Order Change Order / Amendment request.
@@ -229,6 +337,8 @@ def request_po_amendment_service(
     """
     if not reason or not str(reason).strip():
         raise ValidationError("Amendment justification reason is required.")
+
+    tax_rate = po.tax_rate if tax_rate is None else Decimal(str(tax_rate))
 
     if po.status in (PurchaseOrder.STATUS_CANCELLED, PurchaseOrder.STATUS_DRAFT, PurchaseOrder.STATUS_COMPLETED):
         raise ValidationError(
@@ -364,25 +474,15 @@ def request_po_amendment_service(
                     f"Cannot delete line '{line.item_description}' referenced by goods receipts."
                 )
 
-    tax = subtotal * tax_rate
+    subtotal = subtotal.quantize(Decimal("0.01"))
+    tax = (subtotal * tax_rate).quantize(Decimal("0.01"))
     proposed_total = subtotal + tax
     old_total = Decimal(str(snapshot["total_amount"]))
     delta = proposed_total - old_total
 
-    # Verify Budget availability if delta > 0
+    # Verify Budget availability if delta > 0 (re-checked again at approval time)
     if delta > Decimal("0.00"):
-        budget = (
-            Budget.objects.filter(cost_center=po.cost_center)
-            .order_by("-created_at")
-            .first()
-        )
-        if budget:
-            available = budget.available_amount
-            if available < delta:
-                raise ValidationError(
-                    f"Insufficient budget for cost center {po.cost_center.code}. "
-                    f"Additional commitment required: ${delta:,.2f}, Available: ${available:,.2f}."
-                )
+        _assert_amendment_fits_budget(po, delta)
 
     amendment_count = po.amendments.count() + 1
     amendment = POAmendment.objects.create(
@@ -399,6 +499,18 @@ def request_po_amendment_service(
             "tax_amount": str(tax),
             "total_amount": str(proposed_total),
         },
+    )
+
+    # Routed by policy (cost center > department > global, amount tiers); fail closed - an
+    # amendment that no policy covers is refused and nothing above is persisted.
+    approval = approval_engine.open_approval_request(
+        module=ApprovalPolicy.MODULE_PO_AMENDMENT,
+        target=amendment,
+        amount=abs(delta),
+        maker=requested_by_user,
+        department=po.cost_center.department if po.cost_center_id else None,
+        cost_center=po.cost_center,
+        required=True,
     )
 
     po.status = PurchaseOrder.STATUS_AMENDMENT_PENDING
@@ -421,10 +533,8 @@ def request_po_amendment_service(
         },
     )
 
-    from apps.notifications.services import notify_role_users
-
-    notify_role_users(
-        role_codes=[Role.PROC_MGR, Role.SUPER_ADMIN],
+    _notify_request_approvers(
+        approval,
         notification_type=Notification.TYPE_PO_AMENDMENT,
         title=f"PO Amendment #{amendment.amendment_number} Pending Approval: {po.po_number}",
         message=(
@@ -459,24 +569,37 @@ def approve_po_amendment_service(
             f"Amendment #{amendment.amendment_number} is in '{amendment.status}' state and cannot be approved."
         )
 
-    role_code = getattr(approver, "role_code", None) or (
-        approver.role.code if getattr(approver, "role", None) else None
+    # Authorisation, separation of duties, approval limits and multi-step chains are all enforced
+    # by the approval engine, against the policy version the amendment was routed under.
+    request = approval_engine.get_pending_request(ApprovalPolicy.MODULE_PO_AMENDMENT, amendment)
+    if request is None:  # amendment requested before the engine existed
+        request = approval_engine.open_approval_request(
+            module=ApprovalPolicy.MODULE_PO_AMENDMENT,
+            target=amendment,
+            amount=abs(amendment.delta_amount),
+            maker=amendment.requested_by,
+            department=amendment.po.cost_center.department,
+            cost_center=amendment.po.cost_center,
+            required=True,
+            record_submission=False,
+        )
+    is_final_step = request.current_step + 1 >= len(request.steps)
+    request = approval_engine.approve_step(
+        request=request,
+        actor=approver,
+        comments=comments,
+        states=("AMENDMENT_PENDING", "AMENDMENT_APPROVED" if is_final_step else "AMENDMENT_PENDING"),
     )
-    if not (
-        getattr(approver, "is_superuser", False)
-        or role_code in (Role.PROC_MGR, Role.SUPER_ADMIN)
-    ):
-        raise ValidationError(
-            "Permission Denied: Only Procurement Managers or Super Admin can approve PO amendments."
+    if request.status != ApprovalRequest.STATUS_APPROVED:
+        step = request.active_step
+        _notify_request_approvers(
+            request,
+            notification_type=Notification.TYPE_PO_AMENDMENT,
+            title=f"PO Amendment #{amendment.amendment_number} needs your approval (Step {step['step_number']})",
+            message=f"PO {amendment.po.po_number} amendment #{amendment.amendment_number} awaits {step['role_name']} approval.",
+            target_url=f"/orders/{amendment.po_id}/",
         )
-
-    # Enforce strict Separation of Duties
-    if amendment.requested_by_id == approver.id and not getattr(
-        approver, "is_superuser", False
-    ):
-        raise ValidationError(
-            "Separation of duties violation: PO amendment requester cannot approve their own amendment."
-        )
+        return amendment.po  # partially approved: nothing is applied until the last step
 
     po = amendment.po
     proposed_changes = amendment.proposed_changes or {}
@@ -553,7 +676,7 @@ def approve_po_amendment_service(
 
     subtotal_val = Decimal(str(proposed_changes.get("subtotal", subtotal)))
     tax_val = Decimal(
-        str(proposed_changes.get("tax_amount", subtotal * Decimal("0.10")))
+        str(proposed_changes.get("tax_amount", subtotal * po.tax_rate))
     )
     total_val = Decimal(
         str(proposed_changes.get("total_amount", subtotal_val + tax_val))
@@ -583,26 +706,21 @@ def approve_po_amendment_service(
         ]
     )
 
-    # Adjust Budget commitment with delta difference
+    # Adjust Budget commitment with delta difference (re-validated now: the budget may have
+    # been consumed since the amendment was requested)
     if diff != Decimal("0.00"):
         budget = (
-            Budget.objects.filter(cost_center=po.cost_center)
-            .order_by("-created_at")
-            .first()
+            _assert_amendment_fits_budget(po, diff)
+            if diff > Decimal("0.00")
+            else get_po_budget(po)
         )
-        if budget:
-            budget.committed_amount = max(
-                Decimal("0.00"), budget.committed_amount + diff
-            )
-            budget.save(update_fields=["committed_amount", "updated_at"])
-
-            SpendLedger.objects.create(
-                budget=budget,
-                entry_type=SpendLedger.ENTRY_COMMITMENT,
-                amount=diff,
-                reference_number=f"{po.po_number}-AMD{amendment.amendment_number}",
-                description=f"PO Amendment #{amendment.amendment_number} adjustment for {po.vendor.legal_name}",
-            )
+        post_ledger_entry_service(
+            budget=budget,
+            entry_type=SpendLedger.ENTRY_COMMITMENT,
+            amount=diff,
+            reference_number=f"{po.po_number}-AMD{amendment.amendment_number}",
+            description=f"PO Amendment #{amendment.amendment_number} adjustment for {po.vendor.legal_name}",
+        )
 
     # Mark amendment as approved
     amendment.status = POAmendment.STATUS_APPROVED
@@ -699,16 +817,24 @@ def reject_po_amendment_service(
     if not reason or not str(reason).strip():
         raise ValidationError("Rejection justification reason is mandatory.")
 
-    role_code = getattr(rejector, "role_code", None) or (
-        rejector.role.code if getattr(rejector, "role", None) else None
-    )
-    if not (
-        getattr(rejector, "is_superuser", False)
-        or role_code in (Role.PROC_MGR, Role.SUPER_ADMIN)
-    ):
-        raise ValidationError(
-            "Permission Denied: Only Procurement Managers or Super Admin can reject PO amendments."
+    request = approval_engine.get_pending_request(ApprovalPolicy.MODULE_PO_AMENDMENT, amendment)
+    if request is None:  # amendment requested before the engine existed
+        request = approval_engine.open_approval_request(
+            module=ApprovalPolicy.MODULE_PO_AMENDMENT,
+            target=amendment,
+            amount=abs(amendment.delta_amount),
+            maker=amendment.requested_by,
+            department=amendment.po.cost_center.department,
+            cost_center=amendment.po.cost_center,
+            required=True,
+            record_submission=False,
         )
+    approval_engine.reject_request(
+        request=request,
+        actor=rejector,
+        comments=reason,
+        states=("AMENDMENT_PENDING", "AMENDMENT_REJECTED"),
+    )
 
     po = amendment.po
     prev_status = amendment.previous_version_snapshot.get(
@@ -771,7 +897,7 @@ def amend_purchase_order_service(
     reason: str,
     updated_line_items: list,
     requested_by_user: User,
-    tax_rate: Decimal = Decimal("0.10"),
+    tax_rate: Decimal = None,
     auto_approve: bool = True,
     approver: User = None,
 ) -> POAmendment:
@@ -839,6 +965,21 @@ def cancel_purchase_order_governance_service(
     previous_status = po.status
     po.status = PurchaseOrder.STATUS_CANCELLED
     po.save(update_fields=["status", "updated_at"])
+    _refresh_requisition_status(po, actor)
+
+    # A cancelled PO must leave nothing waiting for approval (itself, a pending amendment, or a
+    # budget exception for it).
+    approval_engine.cancel_pending_request(ApprovalPolicy.MODULE_PO, po, actor=actor, reason="PO cancelled")
+    approval_engine.cancel_pending_request(
+        ApprovalPolicy.MODULE_BUDGET_EXCEPTION, po, actor=actor, reason="PO cancelled"
+    )
+    for pending in po.amendments.filter(status=POAmendment.STATUS_PENDING):
+        approval_engine.cancel_pending_request(
+            ApprovalPolicy.MODULE_PO_AMENDMENT, pending, actor=actor, reason="PO cancelled"
+        )
+        pending.status = POAmendment.STATUS_REJECTED
+        pending.rejection_reason = "Purchase order was cancelled."
+        pending.save(update_fields=["status", "rejection_reason", "updated_at"])
 
     # Calculate unfulfilled commitment amount to release
     total_received_value = Decimal("0.00")
@@ -850,25 +991,19 @@ def cancel_purchase_order_governance_service(
         Decimal("0.00"), po.total_amount - total_received_value
     )
 
-    if unfulfilled_commitment > Decimal("0.00"):
-        budget = (
-            Budget.objects.filter(cost_center=po.cost_center)
-            .order_by("-created_at")
-            .first()
+    # Only release what this PO actually committed (a never-issued DRAFT/APPROVAL PO has none)
+    budget = get_po_budget(po, required=False)
+    if budget and unfulfilled_commitment > Decimal("0.00"):
+        unfulfilled_commitment = min(unfulfilled_commitment, po_net_commitment(po))
+        post_ledger_entry_service(
+            budget=budget,
+            entry_type=SpendLedger.ENTRY_COMMITMENT,
+            amount=-unfulfilled_commitment,
+            reference_number=f"{po.po_number}-CANCEL",
+            description=f"Commitment release on PO Cancellation: {po.po_number} ({reason})",
         )
-        if budget:
-            budget.committed_amount = max(
-                Decimal("0.00"), budget.committed_amount - unfulfilled_commitment
-            )
-            budget.save(update_fields=["committed_amount", "updated_at"])
-
-            SpendLedger.objects.create(
-                budget=budget,
-                entry_type=SpendLedger.ENTRY_COMMITMENT,
-                amount=-unfulfilled_commitment,
-                reference_number=f"{po.po_number}-CANCEL",
-                description=f"Commitment release on PO Cancellation: {po.po_number} ({reason})",
-            )
+    elif not budget:
+        unfulfilled_commitment = Decimal("0.00")
 
     AuditLog.objects.create(
         actor=actor,
@@ -905,6 +1040,15 @@ def submit_purchase_order_for_approval_service(
     previous_status = po.status
     po.status = PurchaseOrder.STATUS_APPROVAL
     po.save(update_fields=["status", "updated_at"])
+    pending_approval = _open_po_request(po, actor, required=False)
+    if pending_approval:
+        _notify_request_approvers(
+            pending_approval,
+            notification_type=Notification.TYPE_APPROVAL_REQUIRED,
+            title=f"PO Approval Required: {po.po_number}",
+            message=f"Purchase Order {po.po_number} (${po.total_amount:,.2f}) requires your approval.",
+            target_url=f"/orders/{po.id}/",
+        )
 
     AuditLog.objects.create(
         actor=actor,
@@ -935,27 +1079,44 @@ def approve_purchase_order_service(
             f"Vendor '{po.vendor.legal_name}' is suspended and cannot be issued POs."
         )
 
+    # Routed by the approval engine when a PO policy applies (a PO approved straight from DRAFT
+    # is routed now); otherwise the historical rule applies (Procurement Manager / Super Admin).
+    request = approval_engine.get_pending_request(ApprovalPolicy.MODULE_PO, po)
+    if request is None:
+        request = _open_po_request(po, po.created_by, required=False)
+    if request is not None:
+        is_final_step = request.current_step + 1 >= len(request.steps)
+        request = approval_engine.approve_step(
+            request=request,
+            actor=approver,
+            comments=comments,
+            states=(po.status, PurchaseOrder.STATUS_ISSUED if is_final_step else PurchaseOrder.STATUS_APPROVAL),
+        )
+        if request.status != ApprovalRequest.STATUS_APPROVED:
+            if po.status != PurchaseOrder.STATUS_APPROVAL:
+                po.status = PurchaseOrder.STATUS_APPROVAL
+                po.save(update_fields=["status", "updated_at"])
+            step = request.active_step
+            _notify_request_approvers(
+                request,
+                notification_type=Notification.TYPE_APPROVAL_REQUIRED,
+                title=f"PO Approval Required: {po.po_number} (Step {step['step_number']})",
+                message=f"Purchase Order {po.po_number} awaits {step['role_name']} approval.",
+                target_url=f"/orders/{po.id}/",
+            )
+            return po  # partially approved: the PO is issued only after the last step
+    else:
+        _assert_legacy_po_approver(approver)
+
+    # Commit funds first: converts the requisition reservation and refuses an overspend (unless
+    # an approved budget exception covers it), in which case the whole approval rolls back and
+    # the PO stays unapproved.
+    commit_po_budget_service(po=po, user=approver)
+
     previous_status = po.status
     po.status = PurchaseOrder.STATUS_ISSUED
     po.save(update_fields=["status", "updated_at"])
-
-    # Commit funds in SpendLedger if not already committed
-    budget = (
-        Budget.objects.filter(cost_center=po.cost_center)
-        .order_by("-created_at")
-        .first()
-    )
-    if budget:
-        budget.committed_amount += po.total_amount
-        budget.save(update_fields=["committed_amount", "updated_at"])
-
-        SpendLedger.objects.create(
-            budget=budget,
-            entry_type=SpendLedger.ENTRY_COMMITMENT,
-            amount=po.total_amount,
-            reference_number=po.po_number,
-            description=f"PO Commitment on Approval for {po.vendor.legal_name} ({comments or 'Approved'})",
-        )
+    _refresh_requisition_status(po, approver)
 
     AuditLog.objects.create(
         actor=approver,
@@ -983,6 +1144,14 @@ def reject_purchase_order_service(
             f"Cannot reject PO in status '{po.status}'. Must be APPROVAL."
         )
 
+    request = approval_engine.get_pending_request(ApprovalPolicy.MODULE_PO, po)
+    if request is not None:
+        approval_engine.reject_request(
+            request=request, actor=approver, comments=reason, states=(po.status, PurchaseOrder.STATUS_DRAFT)
+        )
+    else:
+        _assert_legacy_po_approver(approver)
+
     previous_status = po.status
     po.status = PurchaseOrder.STATUS_DRAFT
     po.save(update_fields=["status", "updated_at"])
@@ -996,3 +1165,65 @@ def reject_purchase_order_service(
         new_state={"status": po.status, "rejection_reason": reason},
     )
     return po
+
+
+@transaction.atomic
+def request_po_budget_exception_service(
+    *, po: PurchaseOrder, requested_by: User, reason: str
+) -> ApprovalRequest:
+    """
+    Asks for permission to commit a PO that would overspend its budget. The request is routed
+    through the BUDGET_EXCEPTION policy (amount = the shortfall). Once approved it is a one-time
+    permission, consumed when the PO's commitment is posted (approve / issue the PO afterwards).
+    """
+    reason = (reason or "").strip()
+    if len(reason) < 10:
+        raise ValidationError("A justification of at least 10 characters is required.")
+    if po.status not in (PurchaseOrder.STATUS_DRAFT, PurchaseOrder.STATUS_APPROVAL):
+        raise ValidationError(
+            f"A budget exception can only be requested for a PO that has not been issued (status {po.status})."
+        )
+    shortfall = po_budget_shortfall(po)
+    if shortfall <= Decimal("0.00"):
+        raise ValidationError("This PO fits within its budget; no exception is needed.")
+    request = approval_engine.open_approval_request(
+        module=ApprovalPolicy.MODULE_BUDGET_EXCEPTION,
+        target=po,
+        amount=shortfall,
+        maker=requested_by,
+        department=po.cost_center.department,
+        cost_center=po.cost_center,
+        exception_reason=reason,
+        required=True,
+    )
+    _notify_request_approvers(
+        request,
+        notification_type=Notification.TYPE_APPROVAL_REQUIRED,
+        title=f"Budget Exception Requested: {po.po_number}",
+        message=f"PO {po.po_number} exceeds its budget by ${shortfall:,.2f}. Reason: {reason}",
+        target_url=f"/orders/{po.id}/",
+    )
+    return request
+
+
+@transaction.atomic
+def decide_po_budget_exception_service(
+    *, po: PurchaseOrder, actor: User, approve: bool, comments: str = ""
+) -> ApprovalRequest:
+    """Approve (next step of) or reject the pending budget exception for a PO."""
+    request = approval_engine.get_pending_request(ApprovalPolicy.MODULE_BUDGET_EXCEPTION, po)
+    if request is None:
+        raise ValidationError(f"There is no pending budget exception for PO {po.po_number}.")
+    if not approve:
+        return approval_engine.reject_request(request=request, actor=actor, comments=comments)
+    request = approval_engine.approve_step(request=request, actor=actor, comments=comments)
+    if request.status != ApprovalRequest.STATUS_APPROVED:
+        step = request.active_step
+        _notify_request_approvers(
+            request,
+            notification_type=Notification.TYPE_APPROVAL_REQUIRED,
+            title=f"Budget Exception Approval Required: {po.po_number} (Step {step['step_number']})",
+            message=f"PO {po.po_number} budget exception awaits {step['role_name']} approval.",
+            target_url=f"/orders/{po.id}/",
+        )
+    return request

@@ -368,7 +368,7 @@
                 <div class="mb-3">
                     <label class="form-label small fw-bold text-dark">Governance Action <span class="text-danger">*</span></label>
                     <select id="dashGovActionSelect" class="form-select" onchange="onDashGovActionChanged()">
-                        <option value="SUSPENDED" selected>Suspend / Blacklist (Sanctions &amp; Material Regulatory Breach)</option>
+                        <option value="SUSPENDED" selected>Suspend (Sanctions &amp; Material Regulatory Breach)</option>
                         <option value="ON_HOLD">Place On Hold (Restricted Bidding &amp; POs)</option>
                         <option value="ACTIVE">Release / Reinstate to Active</option>
                     </select>
@@ -533,7 +533,7 @@
                     `;
                 } else {
                     actionBtn = `
-                        <button onclick="openDashboardGovModal('${v.id}', 'SUSPENDED')" class="btn btn-sm btn-outline-danger rounded-pill px-2 py-1" title="Suspend / Blacklist Supplier">
+                        <button onclick="openDashboardGovModal('${v.id}', 'SUSPENDED')" class="btn btn-sm btn-outline-danger rounded-pill px-2 py-1" title="Suspend Supplier">
                             <i class="fa-solid fa-ban me-1"></i> Suspend
                         </button>
                     `;
@@ -679,11 +679,11 @@
             } else if (vendor.status === 'ON_HOLD') {
                 actionSelect.innerHTML = `
                     <option value="ACTIVE" selected>Release Hold (Set to Active)</option>
-                    <option value="SUSPENDED">Suspend / Blacklist (Sanctions &amp; Material Regulatory Breach)</option>
+                    <option value="SUSPENDED">Suspend (Sanctions &amp; Material Regulatory Breach)</option>
                 `;
             } else {
                 actionSelect.innerHTML = `
-                    <option value="SUSPENDED" selected>Suspend / Blacklist (Sanctions &amp; Material Regulatory Breach)</option>
+                    <option value="SUSPENDED" selected>Suspend (Sanctions &amp; Material Regulatory Breach)</option>
                     <option value="ON_HOLD">Place On Hold (Restricted Bidding &amp; POs)</option>
                 `;
             }

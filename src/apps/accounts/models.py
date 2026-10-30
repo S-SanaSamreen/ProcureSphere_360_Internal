@@ -181,6 +181,17 @@ class User(AbstractUser):
 
     )
 
+    approval_limit = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text=(
+            "Largest transaction value this user may approve. Blank means no personal limit "
+            "(the approval policy still decides which roles may approve)."
+        ),
+    )
+
     vendor = models.ForeignKey(
 
         "vendors.Vendor",

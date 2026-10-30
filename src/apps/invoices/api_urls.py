@@ -49,10 +49,14 @@ class CanManageSupplierInvoice(BasePermission):
             user_role = getattr(request.user, "role_code", None) or (
                 request.user.role.code if getattr(request.user, "role", None) else None
             )
-            return request.user.is_superuser or user_role in [
-                Role.SUPER_ADMIN,
-                Role.FINANCE_AP,
-            ]
+            if request.user.is_superuser or user_role in [Role.SUPER_ADMIN, Role.FINANCE_AP]:
+                return True
+            # other roles named by the INVOICE (match exception) approval policy
+            if view.action in ["resolve_exception", "resolve"]:
+                from apps.approvals import engine
+
+                return engine.user_in_policy_roles("INVOICE", request.user)
+            return False
 
         if is_vendor:
             return request.method in SAFE_METHODS or view.action in ["create"]
@@ -182,6 +186,9 @@ class SupplierInvoiceViewSet(viewsets.ModelViewSet):
     )
     serializer_class = SupplierInvoiceSerializer
     permission_classes = [IsAuthenticated, CanManageSupplierInvoice]
+    # Invoices are financial records: no generic PUT/PATCH/DELETE. Changes go through the
+    # named workflow actions (create-invoice, run-match, resolve, pay).
+    http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
         user = self.request.user
@@ -325,6 +332,7 @@ class MatchExceptionViewSet(viewsets.ModelViewSet):
     queryset = MatchException.objects.select_related("invoice", "resolved_by").all()
     serializer_class = MatchExceptionSerializer
     permission_classes = [IsAuthenticated, CanManageSupplierInvoice]
+    http_method_names = ["get", "post", "head", "options"]
 
     @action(detail=True, methods=["post"], url_path="resolve")
     def resolve_exception(self, request, pk=None):

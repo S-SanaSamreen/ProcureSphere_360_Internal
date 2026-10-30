@@ -1,5 +1,6 @@
 # ruff: noqa: E402
 import sys
+from decimal import Decimal
 from pathlib import Path
 
 # Ensure src/ is on Python path
@@ -103,6 +104,26 @@ def procurement_world(db, db_roles, settings, tmp_path):
     org = Organization.objects.create(name="HPE Test Org", code="HPE-T")
     dept = Department.objects.create(name="Procurement", code="PROC-T", organization=org)
     cost_center = CostCenter.objects.create(name="IT", code="CC-T-01", department=dept)
+    # POs commit against an open fiscal-period budget; without one they are (correctly) refused.
+    import datetime as _dt
+
+    from django.utils import timezone as _tz
+
+    from apps.budgets.models import Budget as _Budget
+    from apps.organization.models import FiscalPeriod as _FiscalPeriod
+
+    _today = _tz.localdate()
+    _period = _FiscalPeriod.objects.create(
+        organization=org,
+        year=_today.year,
+        period_number=1,
+        name="FY-TEST",
+        start_date=_today - _dt.timedelta(days=30),
+        end_date=_today + _dt.timedelta(days=300),
+    )
+    _Budget.objects.create(
+        cost_center=cost_center, fiscal_period=_period, allocated_amount=Decimal("10000000.00")
+    )
     hardware = VendorCategory.objects.create(name="Hardware", code="CAT-HW")
     services_cat = VendorCategory.objects.create(name="Services", code="CAT-SVC")
 

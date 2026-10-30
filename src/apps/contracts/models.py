@@ -146,6 +146,21 @@ class ContractAlert(TimeStampedModel):
     message = models.TextField()
     triggered_at = models.DateTimeField(auto_now_add=True)
     is_processed = models.BooleanField(default=False)
+    # What this alert is about, so the scheduled scan can de-duplicate precisely:
+    #  * RENEWAL / EXPIRATION: the contract end date the alert was raised for (a renewed
+    #    contract has a new end date, hence a new cycle and a new alert);
+    #  * MILESTONE / OBLIGATION: the item and the due date it was raised for.
+    target_date = models.DateField(null=True, blank=True)
+    milestone = models.ForeignKey(
+        "ContractMilestone", null=True, blank=True, on_delete=models.SET_NULL, related_name="alerts"
+    )
+    obligation = models.ForeignKey(
+        "ContractObligation",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="alerts",
+    )
 
     def __str__(self):
         return f"{self.get_alert_type_display()} for {self.contract.contract_number}"

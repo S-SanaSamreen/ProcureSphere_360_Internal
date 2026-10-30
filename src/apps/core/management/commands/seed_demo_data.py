@@ -62,6 +62,9 @@ class Command(BaseCommand):
             verify_vendor_document_service(document=kyc_doc, verifier=legal_user)
         if vendor.status not in (Vendor.STATUS_ACTIVE,):
             approve_vendor_service(vendor=vendor, manager=proc_mgr, notes="Verified & Approved")
+        # approve_vendor_service transitions its own locked copy; refresh the caller's instance
+        # so later steps (e.g. PO issuance requires an ACTIVE vendor) see the real status.
+        vendor.refresh_from_db()
 
     def handle(self, *args, **options):
         self.stdout.write(self.style.SUCCESS("Starting ProcureSphere 360 idempotent seed..."))
@@ -114,6 +117,11 @@ class Command(BaseCommand):
         org.save(update_fields=["admin_user"])
         admin_hpe.organization = org
         admin_hpe.save(update_fields=["organization"])
+
+        for internal in User.objects.exclude(role__code=Role.VENDOR_USER):
+            if internal.organization_id != org.id:
+                internal.organization = org
+                internal.save(update_fields=["organization"])
 
         dept_it, _ = Department.objects.get_or_create(organization=org, code="IT-OPS", defaults={"name": "IT Infrastructure Operations"})
         dept_ops, _ = Department.objects.get_or_create(organization=org, code="OPS", defaults={"name": "Global Operations"})
@@ -227,6 +235,22 @@ class Command(BaseCommand):
                 ],
             )
             submit_purchase_requisition_service(requisition=pr, user=requester)
+
+        # A PO can only be raised against an APPROVED requisition: walk the real two-step chain
+        # (department approver, then procurement manager).
+        from apps.requisitions.services import approve_purchase_requisition_service
+
+        pr.refresh_from_db()
+        for approving_user in (approver, proc_mgr):
+            if pr.status in (
+                pr.STATUS_SUBMITTED,
+                pr.STATUS_MANAGER_REVIEW,
+                pr.STATUS_BUDGET_REVIEW,
+            ):
+                approve_purchase_requisition_service(
+                    requisition=pr, approver=approving_user, comments="Approved (demo seed)"
+                )
+                pr.refresh_from_db()
 
         # ── 9. RFQ with 3 Bids ────────────────────────────────────────────────
         rfq = SourcingEvent.objects.filter(title="RFQ — Core Network Infrastructure Upgrade").first()

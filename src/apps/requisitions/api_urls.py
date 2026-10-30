@@ -66,6 +66,93 @@ class PRAttachmentSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+MAX_LINE_QUANTITY = Decimal("9999999.00")
+MAX_LINE_UNIT_PRICE = Decimal("9999999999.99")  # fits PRLine.estimated_unit_price (12, 2)
+MAX_LINE_TOTAL = Decimal("999999999999.99")  # fits PRLine.estimated_total (14, 2)
+MAX_REQUISITION_TOTAL = Decimal("999999999999.99")  # fits PurchaseRequisition.total_amount (14, 2)
+
+
+def _parse_line_items(lines_data):
+    """
+    Validates raw PR line payloads (the create/update paths read ``initial_data`` directly, so
+    PRLineSerializer never runs on them) and returns normalised rows plus the requisition total.
+    Raises a 400-style ValidationError instead of letting bad numbers reach the database.
+    """
+    if lines_data is None:
+        return None, Decimal("0.00")
+    if not isinstance(lines_data, (list, tuple)):
+        raise serializers.ValidationError({"line_items": "line_items must be a list."})
+
+    rows = []
+    total = Decimal("0.00")
+    for idx, item in enumerate(lines_data, start=1):
+        if not isinstance(item, dict):
+            raise serializers.ValidationError({"line_items": f"Line {idx} must be an object."})
+        label = (item.get("item_description") or "Line Item")
+        try:
+            qty = Decimal(str(item.get("quantity", 1)))
+            raw_price = item.get("estimated_unit_price")
+            if raw_price is None:
+                raw_price = item.get("unit_price", 0)
+            price = Decimal(str(raw_price))
+        except Exception:
+            raise serializers.ValidationError(
+                {"line_items": f"Line {idx} ('{label}'): quantity and price must be valid numbers."}
+            )
+        if not qty.is_finite() or not price.is_finite():
+            raise serializers.ValidationError(
+                {"line_items": f"Line {idx} ('{label}'): quantity and price must be finite numbers."}
+            )
+        if qty <= Decimal("0.00"):
+            raise serializers.ValidationError({"quantity": "Quantity must be greater than zero."})
+        if qty % 1 != 0:
+            raise serializers.ValidationError(
+                {"quantity": "Quantity must be a whole number (no decimal points allowed)."}
+            )
+        if price < Decimal("0.00"):
+            raise serializers.ValidationError(
+                {"estimated_unit_price": f"Line {idx} ('{label}'): unit price cannot be negative."}
+            )
+        if qty > MAX_LINE_QUANTITY:
+            raise serializers.ValidationError(
+                {"quantity": f"Line {idx} ('{label}'): quantity cannot exceed {MAX_LINE_QUANTITY:,.0f}."}
+            )
+        if price > MAX_LINE_UNIT_PRICE:
+            raise serializers.ValidationError(
+                {"estimated_unit_price": f"Line {idx} ('{label}'): unit price is too large."}
+            )
+        line_total = (qty * price).quantize(Decimal("0.01"))
+        if line_total > MAX_LINE_TOTAL:
+            raise serializers.ValidationError(
+                {"line_items": f"Line {idx} ('{label}'): line total exceeds the maximum allowed amount."}
+            )
+        total += line_total
+        rows.append(
+            {
+                "item_description": item.get("item_description", "Line Item"),
+                "quantity": qty,
+                "unit_of_measure": item.get("unit_of_measure", "EA"),
+                "estimated_unit_price": price,
+                "estimated_total": line_total,
+                "specifications": item.get("specifications", ""),
+            }
+        )
+    if total > MAX_REQUISITION_TOTAL:
+        raise serializers.ValidationError(
+            {"line_items": "Requisition total exceeds the maximum allowed amount."}
+        )
+    return rows, total
+
+
+def _withdraw_approval_requests(requisition, user):
+    """A cancelled PR must not leave approval work sitting in anyone's inbox."""
+    from apps.approvals import engine
+    from apps.approvals.models import ApprovalPolicy
+
+    for module in (ApprovalPolicy.MODULE_PR, ApprovalPolicy.MODULE_BUDGET_EXCEPTION):
+        engine.cancel_pending_request(module, requisition, actor=user, reason="Requisition cancelled")
+
+
 class PurchaseRequisitionSerializer(serializers.ModelSerializer):
     lines = PRLineSerializer(many=True, required=False)
     attachments = PRAttachmentSerializer(many=True, read_only=True)
@@ -105,9 +192,25 @@ class PurchaseRequisitionSerializer(serializers.ModelSerializer):
                     )
         return value
 
+    def validate(self, attrs):
+        department = attrs.get("department", getattr(self.instance, "department", None))
+        cost_center = attrs.get("cost_center", getattr(self.instance, "cost_center", None))
+        if department and cost_center and cost_center.department_id != department.id:
+            raise serializers.ValidationError(
+                {
+                    "cost_center": (
+                        f"Cost center '{cost_center.code}' does not belong to department "
+                        f"'{department.name}'."
+                    )
+                }
+            )
+        return attrs
+
     def create(self, validated_data):
         lines_data = self.initial_data.get("line_items", self.initial_data.get("lines", []))
         validated_data.pop("lines", None)
+        # Validate every line before anything is written so a bad line cannot leave an orphan PR.
+        rows, total = _parse_line_items(lines_data)
 
         if not validated_data.get("pr_number"):
             from apps.core.services import generate_document_number
@@ -118,35 +221,8 @@ class PurchaseRequisitionSerializer(serializers.ModelSerializer):
 
         pr = super().create(validated_data)
 
-        total = Decimal("0.00")
-        for item in lines_data:
-            qty = Decimal(str(item.get("quantity", 1)))
-            if qty <= Decimal("0.00"):
-                raise serializers.ValidationError(
-                    {"quantity": "Quantity must be greater than zero."}
-                )
-            if qty % 1 != 0:
-                raise serializers.ValidationError(
-                    {"quantity": "Quantity must be a whole number (no decimal points allowed)."}
-                )
-            price = Decimal(
-                str(
-                    item.get("estimated_unit_price")
-                    if item.get("estimated_unit_price") is not None
-                    else item.get("unit_price", 0)
-                )
-            )
-            line_tot = qty * price
-            total += line_tot
-            PRLine.objects.create(
-                requisition=pr,
-                item_description=item.get("item_description", "Line Item"),
-                quantity=qty,
-                unit_of_measure=item.get("unit_of_measure", "EA"),
-                estimated_unit_price=price,
-                estimated_total=line_tot,
-                specifications=item.get("specifications", ""),
-            )
+        for row in rows or []:
+            PRLine.objects.create(requisition=pr, **row)
 
         if total > Decimal("0.00"):
             pr.total_amount = total
@@ -174,44 +250,29 @@ class PurchaseRequisitionSerializer(serializers.ModelSerializer):
         return pr
 
     def update(self, instance, validated_data):
+        # Approval routing and the budget reservation are computed at submission. Editing a
+        # submitted requisition would let approvers sign off a different amount than was routed.
+        if instance.status != PurchaseRequisition.STATUS_DRAFT:
+            raise serializers.ValidationError(
+                {
+                    "status": (
+                        f"Requisition {instance.pr_number} is in '{instance.status}' status. "
+                        "Only DRAFT requisitions can be edited."
+                    )
+                }
+            )
         lines_data = self.initial_data.get("line_items", self.initial_data.get("lines", None))
         validated_data.pop("lines", None)
+        rows, total = _parse_line_items(lines_data)
 
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
 
-        if lines_data is not None:
+        if rows is not None:
             instance.lines.all().delete()
-            total = Decimal("0.00")
-            for item in lines_data:
-                qty = Decimal(str(item.get("quantity", 1)))
-                if qty <= Decimal("0.00"):
-                    raise serializers.ValidationError(
-                        {"quantity": "Quantity must be greater than zero."}
-                    )
-                if qty % 1 != 0:
-                    raise serializers.ValidationError(
-                        {"quantity": "Quantity must be a whole number (no decimal points allowed)."}
-                    )
-                price = Decimal(
-                    str(
-                        item.get("estimated_unit_price")
-                        if item.get("estimated_unit_price") is not None
-                        else item.get("unit_price", 0)
-                    )
-                )
-                line_tot = qty * price
-                total += line_tot
-                PRLine.objects.create(
-                    requisition=instance,
-                    item_description=item.get("item_description", "Line Item"),
-                    quantity=qty,
-                    unit_of_measure=item.get("unit_of_measure", "EA"),
-                    estimated_unit_price=price,
-                    estimated_total=line_tot,
-                    specifications=item.get("specifications", ""),
-                )
+            for row in rows:
+                PRLine.objects.create(requisition=instance, **row)
             if total > Decimal("0.00"):
                 instance.total_amount = total
                 instance.save(update_fields=["total_amount"])
@@ -424,6 +485,7 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
         pr.status = PurchaseRequisition.STATUS_CANCELLED
         pr.save(update_fields=["status", "updated_at"])
         release_budget_reservation_service(requisition=pr, user=user, reason="PR cancelled by user")
+        _withdraw_approval_requests(pr, user)
 
         from apps.audit.models import AuditLog
 
@@ -454,6 +516,7 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
         previous_status = pr.status
         pr.status = PurchaseRequisition.STATUS_CANCELLED
         pr.save(update_fields=["status", "updated_at"])
+        _withdraw_approval_requests(pr, user)
 
         from apps.audit.models import AuditLog
 

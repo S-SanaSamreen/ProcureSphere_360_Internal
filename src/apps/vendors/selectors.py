@@ -468,6 +468,9 @@ def get_vendor_onboarding_progress(vendor):
 
 
 PRE_ACTIVATION_STATUSES = (Vendor.STATUS_SUBMITTED, Vendor.STATUS_KYC_REVIEW)
+# Statuses from which activation can proceed: awaiting approval, or approved and awaiting
+# activation (documents are re-validated at that second step too).
+ACTIVATABLE_STATUSES = PRE_ACTIVATION_STATUSES + (Vendor.STATUS_APPROVED,)
 
 
 def get_current_kyc_documents(vendor):
@@ -521,7 +524,7 @@ def get_vendor_kyc_summary(vendor) -> dict:
         legal = "Pending"
 
     blockers = []
-    if status not in PRE_ACTIVATION_STATUSES:
+    if status not in ACTIVATABLE_STATUSES:
         if status == Vendor.STATUS_ACTIVE:
             blockers.append("Vendor is already active.")
         elif status == Vendor.STATUS_DRAFT:
@@ -544,8 +547,18 @@ def get_vendor_kyc_summary(vendor) -> dict:
         blockers.append("Mandatory documents are not verified.")
 
     can_activate = not blockers
+    if getattr(vendor, "is_blacklisted", False):
+        blockers.append("Vendor is blacklisted; the blacklist must be lifted first.")
+        can_activate = False
     if status == Vendor.STATUS_ACTIVE:
         activation, next_action = "Active", "No action required."
+    elif status == Vendor.STATUS_APPROVED:
+        activation = "Approved"
+        next_action = (
+            "Ready for activation by Procurement."
+            if not blockers
+            else "Approved, but activation is blocked: " + blockers[0]
+        )
     elif status in (Vendor.STATUS_ON_HOLD, Vendor.STATUS_SUSPENDED, Vendor.STATUS_REJECTED):
         activation, next_action = "Not active", f"Vendor is {vendor.get_status_display()}."
     elif not submitted:

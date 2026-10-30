@@ -46,8 +46,19 @@ class UserAdminForm(forms.ModelForm):
 
     class Meta:
         model = User
-        fields = ["email", "phone_number", "role", "department", "cost_center", "is_active"]
+        fields = [
+            "email",
+            "phone_number",
+            "role",
+            "department",
+            "cost_center",
+            "approval_limit",
+            "is_active",
+        ]
         widgets = {
+            "approval_limit": forms.NumberInput(
+                attrs={"class": "form-control", "step": "0.01", "min": "0", "placeholder": "No personal limit"}
+            ),
             "email": forms.EmailInput(attrs={"class": "form-control", "placeholder": "user@example.com"}),
             "phone_number": forms.TextInput(attrs={"class": "form-control", "placeholder": "Phone number"}),
             "role": forms.Select(attrs={"class": "form-select", "id": "id_role"}),
@@ -97,6 +108,12 @@ class UserAdminForm(forms.ModelForm):
         else:
             self.initial.setdefault("send_welcome_email", True)
             self.fields["password"].help_text = "Leave blank to keep existing password."
+
+    def clean_approval_limit(self):
+        limit = self.cleaned_data.get("approval_limit")
+        if limit is not None and limit < 0:
+            raise forms.ValidationError("The approval limit cannot be negative.")
+        return limit
 
     def clean_email(self):
         email = self.cleaned_data.get("email", "").strip().lower()
@@ -436,15 +453,43 @@ class BudgetAdminForm(forms.ModelForm):
 
 
 class PolicyAdminForm(forms.ModelForm):
+    """
+    Create or revise an approval policy. A policy is never edited in place: saving an existing
+    policy creates its next version (the old one is superseded), so requests already routed
+    under it are unaffected. The chain is configured with up to STEP_SLOTS ordered steps.
+    """
+
+    STEP_SLOTS = 5
+
+    change_note = forms.CharField(
+        required=False,
+        max_length=255,
+        label="Reason for change",
+        widget=forms.TextInput(
+            attrs={"class": "form-control", "placeholder": "Why is this policy changing?"}
+        ),
+    )
+
     class Meta:
         model = ApprovalPolicy
-        fields = ["name", "module", "department", "min_amount", "max_amount", "is_active"]
+        fields = [
+            "name",
+            "module",
+            "department",
+            "cost_center",
+            "min_amount",
+            "max_amount",
+            "is_exception_route",
+            "is_active",
+        ]
         widgets = {
             "name": forms.TextInput(attrs={"class": "form-control"}),
             "module": forms.Select(attrs={"class": "form-select"}),
             "department": forms.Select(attrs={"class": "form-select"}),
+            "cost_center": forms.Select(attrs={"class": "form-select"}),
             "min_amount": forms.NumberInput(attrs={"class": "form-control", "step": "0.01"}),
             "max_amount": forms.NumberInput(attrs={"class": "form-control", "step": "0.01"}),
+            "is_exception_route": forms.CheckboxInput(attrs={"class": "form-check-input"}),
             "is_active": forms.CheckboxInput(attrs={"class": "form-check-input"}),
         }
 
@@ -453,50 +498,117 @@ class PolicyAdminForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         scoped_org = _get_form_scoped_org(request)
         dept_qs = Department.objects.all().order_by("name")
+        cc_qs = CostCenter.objects.select_related("department").all().order_by("code")
         if scoped_org:
             dept_qs = dept_qs.filter(organization=scoped_org)
+            cc_qs = cc_qs.filter(department__organization=scoped_org)
         self.fields["department"].queryset = dept_qs
+        self.fields["cost_center"].queryset = cc_qs
+        self.fields["department"].required = False
+        self.fields["cost_center"].required = False
+
+        role_qs = Role.objects.exclude(code=Role.VENDOR_USER).order_by("name")
+        user_qs = (
+            User.objects.filter(is_active=True, vendor__isnull=True)
+            .select_related("role")
+            .order_by("email")
+        )
+        for i in range(1, self.STEP_SLOTS + 1):
+            self.fields[f"step_role_{i}"] = forms.ModelChoiceField(
+                queryset=role_qs,
+                required=False,
+                empty_label="-- no step --",
+                widget=forms.Select(attrs={"class": "form-select form-select-sm"}),
+            )
+            self.fields[f"step_approver_{i}"] = forms.ModelChoiceField(
+                queryset=user_qs,
+                required=False,
+                empty_label="Anyone with the role",
+                widget=forms.Select(attrs={"class": "form-select form-select-sm"}),
+            )
+            self.fields[f"step_description_{i}"] = forms.CharField(
+                required=False,
+                max_length=255,
+                widget=forms.TextInput(
+                    attrs={"class": "form-control form-control-sm", "placeholder": "Description"}
+                ),
+            )
+
+        if not self.instance._state.adding:  # UUID pks exist before saving
+            self.fields["module"].disabled = True  # the transaction type never changes
+            for step in self.instance.steps.select_related("approver_role").order_by("step_number"):
+                if step.step_number <= self.STEP_SLOTS:
+                    self.initial[f"step_role_{step.step_number}"] = step.approver_role_id
+                    self.initial[f"step_approver_{step.step_number}"] = step.specific_approver_id
+                    self.initial[f"step_description_{step.step_number}"] = step.description
+
+    @property
+    def step_rows(self):
+        return [
+            {
+                "number": i,
+                "role": self[f"step_role_{i}"],
+                "approver": self[f"step_approver_{i}"],
+                "description": self[f"step_description_{i}"],
+            }
+            for i in range(1, self.STEP_SLOTS + 1)
+        ]
+
+    def clean(self):
+        cleaned = super().clean()
+        steps = []
+        for i in range(1, self.STEP_SLOTS + 1):
+            role = cleaned.get(f"step_role_{i}")
+            approver = cleaned.get(f"step_approver_{i}")
+            description = cleaned.get(f"step_description_{i}") or ""
+            if role:
+                steps.append(
+                    {"approver_role": role, "specific_approver": approver, "description": description}
+                )
+            elif approver or description:
+                self.add_error(f"step_role_{i}", "Choose the approver role for this step.")
+        if not steps and not self.errors:
+            raise forms.ValidationError("An approval policy needs at least one approval step.")
+        min_amount, max_amount = cleaned.get("min_amount"), cleaned.get("max_amount")
+        if min_amount is not None and max_amount is not None and min_amount > max_amount:
+            self.add_error("min_amount", "Minimum amount cannot be greater than maximum amount.")
+        department, cost_center = cleaned.get("department"), cleaned.get("cost_center")
+        if department and cost_center and cost_center.department_id != department.id:
+            self.add_error("cost_center", "This cost center does not belong to the chosen department.")
+        self._steps = steps
+        return cleaned
 
     def save(self, commit=True):
-        instance = super().save(commit=commit)
-        if commit:
-            self._ensure_policy_steps(instance)
-        return instance
+        from apps.approvals import engine
 
-    def _ensure_policy_steps(self, policy):
-        if policy.steps.exists():
-            return
-        from apps.accounts.models import Role
-        from apps.approvals.models import ApprovalStep
-
-        dept_role = Role.objects.filter(code=Role.DEPT_APPROVER).first()
-        proc_role = Role.objects.filter(code=Role.PROC_MGR).first()
-
-        if policy.module == ApprovalPolicy.MODULE_PR:
-            if dept_role:
-                ApprovalStep.objects.get_or_create(
-                    policy=policy,
-                    step_number=1,
-                    defaults={
-                        "approver_role": dept_role,
-                        "description": "Department Manager Approval",
-                    },
-                )
-            if proc_role:
-                ApprovalStep.objects.get_or_create(
-                    policy=policy,
-                    step_number=2,
-                    defaults={
-                        "approver_role": proc_role,
-                        "description": "Procurement Manager Approval",
-                    },
-                )
-        elif policy.module == ApprovalPolicy.MODULE_PO_AMENDMENT and proc_role:
-            ApprovalStep.objects.get_or_create(
-                policy=policy,
-                step_number=1,
-                defaults={
-                    "approver_role": proc_role,
-                    "description": "Procurement Manager Approval",
-                },
+        data = self.cleaned_data
+        actor = self.request.user if self.request else None
+        if not self.instance._state.adding:  # UUID pks exist before saving
+            self.instance = engine.revise_approval_policy(
+                policy=self.instance,
+                actor=actor,
+                name=data["name"],
+                min_amount=data.get("min_amount") or 0,
+                max_amount=data.get("max_amount"),
+                department=data.get("department"),
+                cost_center=data.get("cost_center"),
+                is_exception_route=data.get("is_exception_route", False),
+                is_active=data.get("is_active", False),
+                steps=self._steps,
+                change_note=data.get("change_note", ""),
             )
+        else:
+            self.instance = engine.create_policy_with_steps(
+                name=data["name"],
+                module=data["module"],
+                steps=self._steps,
+                min_amount=data.get("min_amount") or 0,
+                max_amount=data.get("max_amount"),
+                department=data.get("department"),
+                cost_center=data.get("cost_center"),
+                is_exception_route=data.get("is_exception_route", False),
+                is_active=data.get("is_active", True),
+                actor=actor,
+                change_note=data.get("change_note", ""),
+            )
+        return self.instance

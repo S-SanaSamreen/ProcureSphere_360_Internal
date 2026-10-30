@@ -38,6 +38,7 @@ from .services import (
     create_contract_service,
     create_contract_version_service,
     fulfill_contract_obligation_service,
+    reject_business_service,
     reject_legal_review_service,
     renew_contract_service,
     submit_for_legal_review_service,
@@ -49,6 +50,43 @@ from .services import (
 class ContractViewSet(viewsets.ModelViewSet):
     serializer_class = ContractSerializer
     permission_classes = [IsAuthenticated, CanManageContract, CanViewContract]
+
+    def update(self, request, *args, **kwargs):
+        # Only DRAFT contracts may be edited in place. Once past DRAFT, price/SLA/term changes
+        # must go through /amend/ so the prior version is preserved (PRD 4.2).
+        contract = self.get_object()
+        if contract.status != Contract.STATUS_DRAFT:
+            return Response(
+                {
+                    "error": {
+                        "code": "IMMUTABLE_CONTRACT",
+                        "message": (
+                            f"Contract {contract.contract_number} is {contract.status}. "
+                            "Only DRAFT contracts can be edited directly; use /amend/ to change "
+                            "an active contract."
+                        ),
+                    }
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        contract = self.get_object()
+        if contract.status != Contract.STATUS_DRAFT:
+            return Response(
+                {
+                    "error": {
+                        "code": "IMMUTABLE_CONTRACT",
+                        "message": (
+                            f"Contract {contract.contract_number} is {contract.status} and cannot "
+                            "be deleted. Terminate it instead so its history is preserved."
+                        ),
+                    }
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().destroy(request, *args, **kwargs)
 
     def get_queryset(self):
         status_param = self.request.query_params.get("status", "").strip().upper()
@@ -160,6 +198,29 @@ class ContractViewSet(viewsets.ModelViewSet):
         notes = request.data.get("notes", "")
         try:
             contract = approve_business_service(contract=contract, user=request.user, notes=notes)
+            return Response(ContractSerializer(contract).data, status=status.HTTP_200_OK)
+        except ValidationError as e:
+            return Response(
+                {"error": {"code": "INVALID_TRANSITION", "message": str(e)}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="business-reject",
+        permission_classes=[IsAuthenticated, CanBusinessApproveContract],
+    )
+    def business_reject(self, request, pk=None):
+        contract = self.get_object()
+        reason = request.data.get("reason", "")
+        if not reason:
+            return Response(
+                {"error": {"code": "MISSING_PARAM", "message": "Rejection reason required"}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            contract = reject_business_service(contract=contract, user=request.user, reason=reason)
             return Response(ContractSerializer(contract).data, status=status.HTTP_200_OK)
         except ValidationError as e:
             return Response(

@@ -162,6 +162,9 @@ def approve_legal_review_service(*, contract: Contract, user: User, notes: str =
     previous_status = contract.status
     contract.status = Contract.STATUS_BUSINESS_APPROVAL
     contract.save(update_fields=["status", "updated_at"])
+    # Business approval is routed by the CONTRACT policy (fail closed): value tiers, optional
+    # purchase-order cost center / department scope, multi-step chains, approval limits.
+    business_request = _open_business_request(contract, maker=user)
 
     AuditLog.objects.create(
         actor=user,
@@ -172,13 +175,17 @@ def approve_legal_review_service(*, contract: Contract, user: User, notes: str =
         new_state={"status": contract.status, "legal_approval_notes": notes},
     )
 
-    notify_role_users(
-        role_codes=[Role.PROC_MGR],
-        notification_type=Notification.TYPE_APPROVAL_REQUIRED,
-        title=f"Legal Review Approved: {contract.contract_number}",
-        message=f"Contract '{contract.contract_number}' passed legal review and requires business approval.",
-        target_url=f"/contracts/{contract.id}/",
-    )
+    from apps.approvals import engine
+
+    approvers = engine.step_approvers(business_request)
+    if approvers:
+        notify_users(
+            users=approvers,
+            notification_type=Notification.TYPE_APPROVAL_REQUIRED,
+            title=f"Legal Review Approved: {contract.contract_number}",
+            message=f"Contract '{contract.contract_number}' passed legal review and requires business approval.",
+            target_url=f"/contracts/{contract.id}/",
+        )
     notify_users(
         users=[contract.contract_owner],
         notification_type=Notification.TYPE_APPROVAL_REQUIRED,
@@ -232,29 +239,64 @@ def reject_legal_review_service(*, contract: Contract, user: User, reason: str) 
     return contract
 
 
+def _open_business_request(contract: Contract, *, maker):
+    from apps.approvals import engine
+    from apps.approvals.models import ApprovalPolicy
+
+    cost_center = contract.po.cost_center if contract.po_id else None
+    return engine.open_approval_request(
+        module=ApprovalPolicy.MODULE_CONTRACT,
+        target=contract,
+        amount=contract.contract_value,
+        maker=maker,
+        department=cost_center.department if cost_center else None,
+        cost_center=cost_center,
+        required=True,
+        record_submission=maker is not None,
+    )
+
+
 @transaction.atomic
 def approve_business_service(*, contract: Contract, user: User, notes: str = "") -> Contract:
     """
-    Business owner approves contract, moving status from BUSINESS_APPROVAL to ACTIVE.
+    Business approval of a contract (BUSINESS_APPROVAL -> ACTIVE once the last step of the
+    CONTRACT approval chain is approved). Authorisation, separation of duties, approval limits
+    and multi-step chains are enforced by the approval engine.
     """
+    from apps.approvals import engine
+
     if contract.vendor.status == Vendor.STATUS_SUSPENDED:
         raise ValidationError(
             f"Cannot activate contract: Vendor '{contract.vendor.legal_name}' is suspended."
-        )
-
-    role_code = _get_user_role_code(user)
-    if not (
-        getattr(user, "is_superuser", False)
-        or role_code in [Role.PROC_MGR, Role.DEPT_APPROVER, Role.SUPER_ADMIN]
-    ):
-        raise ValidationError(
-            "Permission Denied: Only Procurement Managers, Department Approvers, or Super Admins can perform business approval."
         )
 
     if contract.status != Contract.STATUS_BUSINESS_APPROVAL:
         raise ValidationError(
             f"Cannot perform business approval on contract in status '{contract.status}'. Mandatory legal review must be completed first."
         )
+
+    request = engine.get_pending_request("CONTRACT", contract) or _open_business_request(
+        contract, maker=None
+    )
+    is_final_step = request.current_step + 1 >= len(request.steps)
+    request = engine.approve_step(
+        request=request,
+        actor=user,
+        comments=notes,
+        states=("BUSINESS_APPROVAL", "ACTIVE" if is_final_step else "BUSINESS_APPROVAL"),
+    )
+    if request.status != "APPROVED":
+        step = request.active_step
+        approvers = engine.step_approvers(request)
+        if approvers:
+            notify_users(
+                users=approvers,
+                notification_type=Notification.TYPE_APPROVAL_REQUIRED,
+                title=f"Contract approval required: {contract.contract_number} (Step {step['step_number']})",
+                message=f"Contract '{contract.contract_number}' awaits {step['role_name']} approval.",
+                target_url=f"/contracts/{contract.id}/",
+            )
+        return contract  # partially approved: still BUSINESS_APPROVAL
 
     previous_status = contract.status
     contract.status = Contract.STATUS_ACTIVE
@@ -277,6 +319,47 @@ def approve_business_service(*, contract: Contract, user: User, notes: str = "")
         target_url=f"/contracts/{contract.id}/",
     )
 
+    return contract
+
+
+@transaction.atomic
+def reject_business_service(*, contract: Contract, user: User, reason: str) -> Contract:
+    """Business approver rejects the contract, returning it to DRAFT for rework."""
+    from apps.approvals import engine
+
+    if not reason or not str(reason).strip():
+        raise ValidationError("Rejection reason is required.")
+    if contract.status != Contract.STATUS_BUSINESS_APPROVAL:
+        raise ValidationError(
+            f"Cannot reject business approval for contract in status '{contract.status}'."
+        )
+    request = engine.get_pending_request("CONTRACT", contract) or _open_business_request(
+        contract, maker=None
+    )
+    engine.reject_request(
+        request=request,
+        actor=user,
+        comments=reason,
+        states=("BUSINESS_APPROVAL", "DRAFT"),
+    )
+    previous_status = contract.status
+    contract.status = Contract.STATUS_DRAFT
+    contract.save(update_fields=["status", "updated_at"])
+    AuditLog.objects.create(
+        actor=user,
+        action=AuditLog.ACTION_REJECT,
+        target_model="Contract",
+        target_object_id=str(contract.id),
+        previous_state={"status": previous_status},
+        new_state={"status": contract.status, "rejection_reason": reason.strip()},
+    )
+    notify_users(
+        users=[contract.contract_owner],
+        notification_type=Notification.TYPE_APPROVAL_REQUIRED,
+        title=f"Business Approval Rejected: {contract.contract_number}",
+        message=f"Contract '{contract.contract_number}' was rejected at business approval. Reason: {reason.strip()}",
+        target_url=f"/contracts/{contract.id}/",
+    )
     return contract
 
 
@@ -615,6 +698,14 @@ def renew_contract_service(
 
     if new_end_date and contract.start_date and new_end_date <= contract.start_date:
         raise ValidationError("Renewal end date must be after contract start date.")
+    if new_end_date:
+        if new_end_date <= timezone.localdate():
+            raise ValidationError("Renewal end date must be in the future.")
+        if contract.end_date and new_end_date <= contract.end_date:
+            raise ValidationError(
+                "Renewal end date must be later than the current contract end date "
+                f"({contract.end_date})."
+            )
     if new_value is not None:
         try:
             new_value = Decimal(str(new_value))
@@ -707,6 +798,31 @@ def terminate_contract_service(*, contract: Contract, user: User, reason: str) -
 
 
 @transaction.atomic
+def _set_contract_status_by_scheduler(contract: Contract, new_status: str, reason: str):
+    """
+    Status change made by the scheduled scan (no human actor). It is written to the audit log
+    like any other contract transition, tagged as a system action, so lifecycle changes driven
+    by Celery Beat are as traceable as manual ones.
+    """
+    previous = contract.status
+    contract.status = new_status
+    contract.save(update_fields=["status", "updated_at"])
+    AuditLog.objects.create(
+        actor=None,
+        action=AuditLog.ACTION_UPDATE,
+        target_model="Contract",
+        target_object_id=str(contract.id),
+        previous_state={"status": previous},
+        new_state={
+            "status": new_status,
+            "reason": reason,
+            "end_date": str(contract.end_date),
+            "source": "scheduled scan_contract_expirations_and_milestones",
+        },
+        user_agent="celery-beat/scan_contract_expirations_and_milestones",
+    )
+
+
 def scan_contract_expirations_and_milestones_service() -> int:
     """
     Scans active contracts for upcoming expirations, milestones, and legal obligations.
@@ -714,10 +830,11 @@ def scan_contract_expirations_and_milestones_service() -> int:
     and dispatches in-app Notifications to Legal / Contract Managers & Procurement Managers.
     Returns count of generated alerts.
     """
-    today = timezone.now().date()
+    today = timezone.localdate()
     alerts_created = 0
 
-    # 1. Expiration notice scan
+    # 1. Expiration notice scan. One alert per contract *cycle* (end date): a renewed contract
+    #    gets a fresh renewal alert when its new notice window opens.
     active_contracts = Contract.objects.filter(
         status__in=[Contract.STATUS_ACTIVE, Contract.STATUS_RENEWED]
     )
@@ -726,7 +843,9 @@ def scan_contract_expirations_and_milestones_service() -> int:
         if (
             today >= notice_date
             and not ContractAlert.objects.filter(
-                contract=contract, alert_type=ContractAlert.ALERT_RENEWAL
+                contract=contract,
+                alert_type=ContractAlert.ALERT_RENEWAL,
+                target_date=contract.end_date,
             ).exists()
         ):
             msg = f"Contract '{contract.contract_number}' is reaching renewal notice period (End date: {contract.end_date})."
@@ -734,9 +853,11 @@ def scan_contract_expirations_and_milestones_service() -> int:
                 contract=contract,
                 alert_type=ContractAlert.ALERT_RENEWAL,
                 message=msg,
+                target_date=contract.end_date,
             )
-            contract.status = Contract.STATUS_RENEWAL_DUE
-            contract.save(update_fields=["status", "updated_at"])
+            _set_contract_status_by_scheduler(
+                contract, Contract.STATUS_RENEWAL_DUE, "renewal notice window reached"
+            )
             alerts_created += 1
 
             notify_role_users(
@@ -753,15 +874,17 @@ def scan_contract_expirations_and_milestones_service() -> int:
     )
     for milestone in pending_milestones:
         if not ContractAlert.objects.filter(
-            contract=milestone.contract,
             alert_type=ContractAlert.ALERT_MILESTONE,
-            message__contains=milestone.title,
+            milestone=milestone,
+            target_date=milestone.due_date,
         ).exists():
             msg = f"Milestone '{milestone.title}' for contract '{milestone.contract.contract_number}' is due on {milestone.due_date}."
             ContractAlert.objects.create(
                 contract=milestone.contract,
                 alert_type=ContractAlert.ALERT_MILESTONE,
                 message=msg,
+                milestone=milestone,
+                target_date=milestone.due_date,
             )
             alerts_created += 1
 
@@ -779,15 +902,17 @@ def scan_contract_expirations_and_milestones_service() -> int:
     )
     for obligation in pending_obligations:
         if not ContractAlert.objects.filter(
-            contract=obligation.contract,
             alert_type=ContractAlert.ALERT_OBLIGATION,
-            message__contains=obligation.title,
+            obligation=obligation,
+            target_date=obligation.due_date,
         ).exists():
             msg = f"Legal Obligation '{obligation.title}' ({obligation.responsible_party}) for contract '{obligation.contract.contract_number}' is due on {obligation.due_date}."
             ContractAlert.objects.create(
                 contract=obligation.contract,
                 alert_type=ContractAlert.ALERT_OBLIGATION,
                 message=msg,
+                obligation=obligation,
+                target_date=obligation.due_date,
             )
             alerts_created += 1
 
@@ -806,16 +931,20 @@ def scan_contract_expirations_and_milestones_service() -> int:
     )
     for contract in expired_contracts:
         if not ContractAlert.objects.filter(
-            contract=contract, alert_type=ContractAlert.ALERT_EXPIRATION
+            contract=contract,
+            alert_type=ContractAlert.ALERT_EXPIRATION,
+            target_date=contract.end_date,
         ).exists():
             msg = f"Contract '{contract.contract_number}' has expired as of {contract.end_date}."
             ContractAlert.objects.create(
                 contract=contract,
                 alert_type=ContractAlert.ALERT_EXPIRATION,
                 message=msg,
+                target_date=contract.end_date,
             )
-            contract.status = Contract.STATUS_EXPIRED
-            contract.save(update_fields=["status", "updated_at"])
+            _set_contract_status_by_scheduler(
+                contract, Contract.STATUS_EXPIRED, "end date passed"
+            )
             alerts_created += 1
 
             notify_role_users(

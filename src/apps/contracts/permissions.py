@@ -88,7 +88,12 @@ class CanBusinessApproveContract(permissions.BasePermission):
         role_code = getattr(request.user, "role_code", None) or (
             request.user.role.code if getattr(request.user, "role", None) else None
         )
-        return role_code in [Role.PROC_MGR, Role.DEPT_APPROVER, Role.SUPER_ADMIN]
+        if role_code in [Role.PROC_MGR, Role.DEPT_APPROVER, Role.SUPER_ADMIN]:
+            return True
+        # any other role / person the CONTRACT approval policy names (the engine decides per request)
+        from apps.approvals import engine
+
+        return engine.user_in_policy_roles("CONTRACT", request.user)
 
     def has_object_permission(self, request, view, obj):
         return self.has_permission(request, view)
