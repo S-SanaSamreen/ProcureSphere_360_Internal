@@ -256,6 +256,13 @@ def _request_org_id(request):
     return None
 
 
+def _is_cost_center_manager(principal, request) -> bool:
+    """The manager of the request's cost center may act for it even from another department."""
+    if not request.cost_center_id:
+        return False
+    return request.cost_center.manager_id == principal.pk
+
+
 def _principal_matches(principal, step, request):
     """True when this principal may take the step. Raises only for the department mismatch."""
     request_org = _request_org_id(request)
@@ -270,6 +277,7 @@ def _principal_matches(principal, step, request):
         and request.department_id
         and principal.department_id
         and principal.department_id != request.department_id
+        and not _is_cost_center_manager(principal, request)
     ):
         raise ValidationError(
             "Department Approver can only approve requisitions for their own department."
@@ -380,6 +388,9 @@ def step_approvers(request):
     if step["role_code"] == Role.DEPT_APPROVER and request.department_id:
         dept = candidates.filter(department_id=request.department_id)
         candidates = dept if dept.exists() else candidates
+        manager_id = request.cost_center.manager_id if request.cost_center_id else None
+        if manager_id:
+            candidates = candidates | qs.filter(pk=manager_id, role_id=step["role_id"])
     return [u for u in candidates if can_act(request, u)]
 
 
