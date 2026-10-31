@@ -1,0 +1,25 @@
+{% extends base_layout|default:'layouts/finance_base.html' %}
+
+{% block title %}Vendor Change Requests — ProcureSphere 360{% endblock %}
+
+{% block content %}
+<h2 class="fw-bold mb-3">Vendor bank / tax change requests</h2>
+{% include 'partials/messages.html' %}
+<div class="card shadow-sm border-0"><div class="table-responsive">
+<table class="table table-sm mb-0">
+    <thead><tr><th>Vendor</th><th>Changes</th><th>Requested by</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+    {% for r in change_requests %}
+        <tr><td>{{ r.vendor.legal_name }}</td>
+            <td>{% for field, d in r.changes.items %}<div class="small">{{ field }}: {{ d.old }} &rarr; {{ d.new }}</div>{% endfor %}</td>
+            <td>{{ r.requested_by.get_full_name|default:r.requested_by.email }}</td><td>{{ r.get_status_display }}</td>
+            <td>{% if r.status == 'PENDING' %}
+                <form method="post" class="d-flex gap-1">{% csrf_token %}<input type="hidden" name="request_id" value="{{ r.id }}">
+                    <input name="comments" class="form-control form-control-sm" placeholder="Comments">
+                    <button name="decision" value="approve" class="btn btn-sm btn-success">Approve</button>
+                    <button name="decision" value="reject" class="btn btn-sm btn-outline-danger">Reject</button>
+                </form>{% endif %}</td></tr>
+    {% empty %}<tr><td colspan="5" class="text-center text-muted py-3">No change requests.</td></tr>{% endfor %}
+    </tbody>
+</table></div></div>
+{% endblock %}

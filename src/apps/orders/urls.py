@@ -16,6 +16,11 @@ urlpatterns = [
     ),
     path("purchase-orders/<uuid:pk>/", views.detail_view, name="order_detail"),
     path(
+        "purchase-orders/<uuid:pk>/service-entries/",
+        views.service_entries_view,
+        name="order_service_entries",
+    ),
+    path(
         "purchase-orders/<uuid:pk>/htmx/amend/",
         views.po_amend_modal_view,
         name="orders_amend_modal",

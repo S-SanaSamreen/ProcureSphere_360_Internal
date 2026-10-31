@@ -79,10 +79,7 @@ def resolve_active_delegate(approver: User) -> User:
     return approver
 
 
-
-def evaluate_approval_chain(
-    *, module: str, amount: Decimal, department=None, cost_center=None
-):
+def evaluate_approval_chain(*, module: str, amount: Decimal, department=None, cost_center=None):
     """
     Evaluates server-side approval routing for a module & amount: most specific policy wins
     (cost center, then department, then global), highest matching amount tier, latest active
@@ -225,11 +222,13 @@ def set_approval_delegate_service(
 
 
 @transaction.atomic
-def revoke_approval_delegate_service(*, delegation: ApprovalDelegate, actor: User) -> ApprovalDelegate:
-    """Ends a delegation early. Only the approver who granted it (or a Super Admin) may."""
+def revoke_approval_delegate_service(
+    *, delegation: ApprovalDelegate, actor: User
+) -> ApprovalDelegate:
+    """Ends a delegation early. Only the approver who granted it may."""
     from django.core.exceptions import ValidationError
 
-    if delegation.approver_id != actor.id and not actor.is_superuser:
+    if delegation.approver_id != actor.id:
         raise ValidationError("Only the approver who granted a delegation can revoke it.")
     if not delegation.is_active:
         return delegation
@@ -249,10 +248,11 @@ def revoke_approval_delegate_service(*, delegation: ApprovalDelegate, actor: Use
 class DecisionHandler:
     """How to approve / reject one kind of target through its own (engine-backed) service."""
 
-    def __init__(self, model, approve, reject):
+    def __init__(self, model, approve, reject, return_=None):
         self.model = model
         self.approve = approve
         self.reject = reject
+        self.return_ = return_
 
 
 def decision_handlers() -> dict:
@@ -262,6 +262,8 @@ def decision_handlers() -> dict:
     engine (role / delegation / limits / separation of duties). Anything not listed here cannot
     be approved generically - there is deliberately no "just set the status" fallback.
     """
+    from apps.budgets import services as budget_services
+    from apps.budgets.models import BudgetTransfer
     from apps.contracts.models import Contract
     from apps.contracts.services import approve_business_service, reject_business_service
     from apps.invoices.models import MatchException
@@ -280,6 +282,9 @@ def decision_handlers() -> dict:
 
     def pr_reject(t, actor, c, module=None):
         pr_services.reject_purchase_requisition_service(requisition=t, approver=actor, comments=c)
+
+    def pr_return(t, actor, c, module=None):
+        pr_services.return_purchase_requisition_service(requisition=t, approver=actor, comments=c)
 
     def po_approve(t, actor, c, module=None):
         if module == ApprovalPolicy.MODULE_BUDGET_EXCEPTION or (
@@ -306,7 +311,9 @@ def decision_handlers() -> dict:
             order_services.reject_purchase_order_service(po=t, approver=actor, reason=c)
 
     return {
-        "PurchaseRequisition": DecisionHandler(PurchaseRequisition, pr_approve, pr_reject),
+        "PurchaseRequisition": DecisionHandler(
+            PurchaseRequisition, pr_approve, pr_reject, pr_return
+        ),
         "PurchaseOrder": DecisionHandler(PurchaseOrder, po_approve, po_reject),
         "POAmendment": DecisionHandler(
             POAmendment,
@@ -331,10 +338,22 @@ def decision_handlers() -> dict:
             lambda t, a, c, module=None: approve_business_service(contract=t, user=a, notes=c),
             lambda t, a, c, module=None: reject_business_service(contract=t, user=a, reason=c),
         ),
+        "BudgetTransfer": DecisionHandler(
+            BudgetTransfer,
+            lambda t, a, c, module=None: budget_services.approve_budget_transfer_service(
+                transfer=t, approver=a, comments=c
+            ),
+            lambda t, a, c, module=None: budget_services.reject_budget_transfer_service(
+                transfer=t, approver=a, comments=c
+            ),
+        ),
         "MatchException": DecisionHandler(
             MatchException,
             lambda t, a, c, module=None: resolve_match_exception_service(
-                match_exception=t, resolved_by_user=a, resolution_notes=c or "Approved", action="RESOLVE"
+                match_exception=t,
+                resolved_by_user=a,
+                resolution_notes=c or "Approved",
+                action="RESOLVE",
             ),
             lambda t, a, c, module=None: resolve_match_exception_service(
                 match_exception=t, resolved_by_user=a, resolution_notes=c, action="REJECT"
@@ -361,18 +380,27 @@ def process_approval_action_service(
     by pointing this at it. Unknown target types are refused outright.
     Always returns the latest persisted ApprovalAction for the target.
     """
+    from apps.accounts.permissions import forbid_non_transacting_actor
+
+    forbid_non_transacting_actor(actor, "approve, reject or return business requests")
     name = target_object.__class__.__name__
     handler = decision_handlers().get(name)
     if handler is None:
-        raise ValidationError(f"{name} records cannot be approved through the generic approval endpoint.")
+        raise ValidationError(
+            f"{name} records cannot be approved through the generic approval endpoint."
+        )
 
     act_str = str(action).upper()
     if act_str in ("APPROVE", "APPROVED"):
         handler.approve(target_object, actor, comments, module=module)
     elif act_str in ("REJECT", "REJECTED"):
         handler.reject(target_object, actor, comments, module=module)
+    elif act_str in ("RETURN", "RETURNED"):
+        if handler.return_ is None:
+            raise ValidationError(f"{name} records cannot be returned for clarification.")
+        handler.return_(target_object, actor, comments, module=module)
     else:
-        raise ValidationError(f"Unknown approval action '{action}'. Use APPROVE or REJECT.")
+        raise ValidationError(f"Unknown approval action '{action}'. Use APPROVE, REJECT or RETURN.")
 
     return (
         ApprovalAction.objects.filter(

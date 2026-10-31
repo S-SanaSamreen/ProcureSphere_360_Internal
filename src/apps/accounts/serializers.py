@@ -76,5 +76,6 @@ class LoginRequestSerializer(serializers.Serializer):
 class LoginResponseSerializer(serializers.Serializer):
     message = serializers.CharField(default="Login successful.")
     user = UserSerializer()
-    csrf_token = serializers.CharField(help_text="CSRF token for subsequent state-changing requests")
-
+    csrf_token = serializers.CharField(
+        help_text="CSRF token for subsequent state-changing requests"
+    )

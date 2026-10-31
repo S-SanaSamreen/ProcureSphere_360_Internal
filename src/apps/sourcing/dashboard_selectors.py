@@ -31,10 +31,19 @@ RESPONSE_STATUSES = [VendorBid.STATUS_SUBMITTED, VendorBid.STATUS_AMENDED]
 # ------------------------------------------------------------------ vendor bid portal ------
 
 
-def get_bid_portal_metrics() -> dict:
+def _events(user):
+    from apps.core.tenancy import scope_sourcing_events
+
+    qs = SourcingEvent.objects.all()
+    return qs if user is None else scope_sourcing_events(qs, user)
+
+
+def get_bid_portal_metrics(user=None) -> dict:
     now = timezone.now()
-    live = SourcingEvent.objects.filter(status__in=BID_PORTAL_STATUSES)
-    live_bids = VendorBid.objects.filter(event__status__in=BID_PORTAL_STATUSES)
+    live = _events(user).filter(status__in=BID_PORTAL_STATUSES)
+    live_bids = VendorBid.objects.filter(
+        event__status__in=BID_PORTAL_STATUSES, event__in=_events(user).values("pk")
+    )
     return {
         "open_windows": live.filter(status=SourcingEvent.STATUS_BID_WINDOW).count(),
         "scheduled": live.filter(status=SourcingEvent.STATUS_PUBLISHED).count(),
@@ -44,7 +53,9 @@ def get_bid_portal_metrics() -> dict:
             bid_end_date__lte=now + timedelta(days=3),
         ).count(),
         "awaiting_response": BidInvite.objects.filter(
-            event__status__in=BID_PORTAL_STATUSES, is_responded=False
+            event__status__in=BID_PORTAL_STATUSES,
+            is_responded=False,
+            event__in=_events(user).values("pk"),
         ).count(),
         "drafts": live_bids.filter(status=VendorBid.STATUS_DRAFT).count(),
         "submitted": live_bids.filter(status__in=RESPONSE_STATUSES).count(),
@@ -53,11 +64,12 @@ def get_bid_portal_metrics() -> dict:
     }
 
 
-def get_bid_portal_events():
+def get_bid_portal_events(user=None):
     """Events in the bid-portal stage, plus those that closed within the last 14 days."""
     recent = timezone.now() - timedelta(days=14)
     return (
-        SourcingEvent.objects.filter(
+        _events(user)
+        .filter(
             Q(status__in=BID_PORTAL_STATUSES)
             | Q(status=SourcingEvent.STATUS_TECHNICAL_REVIEW, bid_end_date__gte=recent)
         )
@@ -152,12 +164,13 @@ def get_bid_portal_rows(event: SourcingEvent):
 # ------------------------------------------------------------------ evaluation & award -----
 
 
-def get_evaluation_metrics() -> dict:
+def get_evaluation_metrics(user=None) -> dict:
     from apps.orders.models import PurchaseOrder
 
-    counts = {s: SourcingEvent.objects.filter(status=s).count() for s in EVALUATION_STATUSES}
+    counts = {s: _events(user).filter(status=s).count() for s in EVALUATION_STATUSES}
     awarded_with_po = (
-        SourcingEvent.objects.filter(status=SourcingEvent.STATUS_AWARDED)
+        _events(user)
+        .filter(status=SourcingEvent.STATUS_AWARDED)
         .filter(purchase_orders__isnull=False)
         .exclude(purchase_orders__status=PurchaseOrder.STATUS_CANCELLED)
         .distinct()
@@ -172,8 +185,8 @@ def get_evaluation_metrics() -> dict:
     }
 
 
-def get_evaluation_events(status=None):
-    qs = SourcingEvent.objects.filter(status__in=EVALUATION_STATUSES)
+def get_evaluation_events(status=None, user=None):
+    qs = _events(user).filter(status__in=EVALUATION_STATUSES)
     if status in EVALUATION_STATUSES:
         qs = qs.filter(status=status)
     return qs.annotate(

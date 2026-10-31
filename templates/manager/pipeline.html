@@ -870,6 +870,8 @@
             return `<span class="badge bg-success-subtle text-success rounded-pill px-2 py-1"><i class="fa-solid fa-check me-1"></i>${escapeHtml(text)}</span>`;
         } else if (s === 'SOURCING') {
             return `<span class="badge bg-info-subtle text-info-emphasis rounded-pill px-2 py-1"><i class="fa-solid fa-gavel me-1"></i>${escapeHtml(text)}</span>`;
+        } else if (s === 'COMPLETED') {
+            return `<span class="badge bg-success rounded-pill px-2 py-1"><i class="fa-solid fa-circle-check me-1"></i>${escapeHtml(text)}</span>`;
         } else if (s === 'PO_ISSUED') {
             return `<span class="badge bg-primary-subtle text-primary rounded-pill px-2 py-1"><i class="fa-solid fa-cart-shopping me-1"></i>${escapeHtml(text)}</span>`;
         } else if (s === 'MANAGER_REVIEW' || s === 'BUDGET_REVIEW' || s === 'SUBMITTED') {

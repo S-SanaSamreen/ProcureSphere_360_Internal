@@ -31,6 +31,7 @@ from .selectors import (
     get_vendor_open_transactions,
     get_vendor_purchase_orders,
     get_vendor_sourcing_history,
+    scope_vendors_queryset,
 )
 from .services import (
     activate_vendor_service,
@@ -76,30 +77,10 @@ def _require_kyc_review(user):
 
 
 def _get_scoped_vendor_or_404(request, vendor_id, select_category=False):
-    from django.db.models import Q
-
-    from apps.accounts.models import Role
     qs = Vendor.objects.all()
     if select_category:
         qs = qs.select_related("category")
-    scoped_org = getattr(request.user, "effective_organization", None)
-    if scoped_org:
-        qs = qs.filter(
-            Q(organization=scoped_org)
-            | Q(organization__isnull=True)
-            | Q(created_by__organization=scoped_org)
-            | Q(created_by__department__organization=scoped_org)
-        )
-    else:
-        role_code = getattr(request.user, "role_code", None) or (
-            request.user.role.code if getattr(request.user, "role", None) else None
-        )
-        if not (
-            request.user.is_superuser
-            or getattr(request.user, "is_staff", False)
-            or role_code in [Role.PROC_MGR, Role.PROC_EXEC, Role.AUDITOR, Role.SUPER_ADMIN, Role.FINANCE_AP]
-        ):
-            raise Http404("Vendor not found.")
+    qs = scope_vendors_queryset(qs, request.user)
     return get_object_or_404(qs, pk=vendor_id)
 
 
@@ -167,9 +148,7 @@ def _kyc_context(vendor, caps):
         "can_activate_vendor": caps["can_operate"] and in_review and kyc["can_activate"],
         # APPROVED vendors rest here until Procurement activates them (when auto-activation is off)
         "can_activate_approved": (
-            caps["can_operate"]
-            and vendor.status == Vendor.STATUS_APPROVED
-            and kyc["can_activate"]
+            caps["can_operate"] and vendor.status == Vendor.STATUS_APPROVED and kyc["can_activate"]
         ),
         "can_request_changes": caps["can_review_kyc"] and in_review,
         "can_blacklist": caps["can_suspend"] and not vendor.is_blacklisted,
@@ -365,6 +344,9 @@ def vendor_risk_assess_view(request, vendor_id):
 @require_POST
 def vendor_kyc_action_view(request, vendor_id, kyc_action):
     """KYC review actions: start review, verify/reject document, request changes, activate."""
+    # Authorise before looking the vendor up, so a caller with no governance role is refused
+    # (403) rather than being told the vendor "does not exist".
+    _require_governance_view(request.user)
     vendor = _get_scoped_vendor_or_404(request, vendor_id)
     try:
         messages.success(request, _run_kyc_action(request, vendor, kyc_action))
@@ -524,6 +506,7 @@ def vendor_risk_modal_view(request, vendor_id):
 @require_POST
 def vendor_kyc_htmx_view(request, vendor_id, kyc_action):
     """HTMX KYC transitions; same shared handler and RBAC as vendor_kyc_action_view."""
+    _require_governance_view(request.user)
     vendor = _get_scoped_vendor_or_404(request, vendor_id)
     try:
         detail = _run_kyc_action(request, vendor, kyc_action)
@@ -691,3 +674,36 @@ def vendor_delete_view(request, vendor_id):
             "Remove or archive the linked records first, or put the vendor on hold instead.",
         )
         return redirect("vendor_detail", vendor_id=vendor_id)
+
+
+@login_required(login_url="/login/")
+def vendor_change_requests_view(request):
+    """Procurement Manager reviews pending bank/tax detail changes of their organization."""
+    from .models import VendorChangeRequest
+    from .services import decide_vendor_change_request_service
+
+    user = request.user
+    if getattr(user, "role_code", None) != "PROC_MGR":
+        raise PermissionDenied("Only the Procurement Manager can review vendor change requests.")
+    org = getattr(user, "effective_organization", None)
+    qs = VendorChangeRequest.objects.select_related("vendor", "requested_by")
+    if not user.is_superuser:
+        qs = qs.filter(vendor__organization=org) if org else qs.none()
+    if request.method == "POST":
+        req = get_object_or_404(qs, pk=request.POST.get("request_id"))
+        try:
+            decide_vendor_change_request_service(
+                change_request=req,
+                approver=user,
+                approve=request.POST.get("decision") == "approve",
+                comments=request.POST.get("comments", ""),
+            )
+            messages.success(request, "Change request decided.")
+        except (ValidationError, PermissionDenied) as exc:
+            messages.error(request, " ".join(getattr(exc, "messages", [str(exc)])))
+        return redirect("vendor_change_requests")
+    return render(
+        request,
+        "pages/vendors/change_requests.html",
+        {"change_requests": qs.order_by("-created_at")[:100]},
+    )

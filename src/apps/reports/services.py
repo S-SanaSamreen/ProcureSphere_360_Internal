@@ -6,6 +6,7 @@ from django.utils import timezone
 
 from apps.audit.models import AuditLog
 from apps.contracts.models import Contract
+from apps.core import tenancy
 from apps.invoices.models import MatchException
 from apps.orders.models import PurchaseOrder
 from apps.receipts.models import ReceiptLine
@@ -16,9 +17,13 @@ from apps.sourcing.models import SourcingEvent
 from .models import ExportJob
 
 
-def get_pr_aging_report():
+def get_pr_aging_report(user=None):
     """1. PR aging and approval-bottleneck report"""
-    prs = PurchaseRequisition.objects.select_related("requester", "department", "cost_center").all()
+    from apps.requisitions.selectors import scope_requisitions_to_org
+
+    prs = PurchaseRequisition.objects.select_related("requester", "department", "cost_center")
+    if user is not None:
+        prs = scope_requisitions_to_org(prs, user)
     now = timezone.now()
     report_data = []
     for pr in prs:
@@ -38,7 +43,7 @@ def get_pr_aging_report():
     return report_data
 
 
-def get_spend_analytics_report():
+def get_spend_analytics_report(user=None):
     """2. Spend by vendor / category / department / cost center / period"""
     from apps.invoices.models import SupplierInvoice
 
@@ -49,6 +54,10 @@ def get_spend_analytics_report():
         .exclude(status="REJECTED")
         .order_by("-invoice_date")
     )
+    if user is not None:
+        from apps.invoices.selectors import scope_invoices_queryset
+
+        invoices = scope_invoices_queryset(invoices, user)
 
     report_data = []
     for inv in invoices:
@@ -79,9 +88,11 @@ def get_spend_analytics_report():
     return report_data
 
 
-def get_sourcing_cycle_time_report():
+def get_sourcing_cycle_time_report(user=None):
     """3. Sourcing cycle time and bid participation"""
     events = SourcingEvent.objects.prefetch_related("bids", "invitations").all()
+    if user is not None:
+        events = tenancy.scope_sourcing_events(events, user)
     report_data = []
     for e in events:
         bid_count = e.bids.count()
@@ -103,9 +114,13 @@ def get_sourcing_cycle_time_report():
     return report_data
 
 
-def get_po_status_report():
+def get_po_status_report(user=None):
     """4. PO open / partial / closed status"""
     pos = PurchaseOrder.objects.select_related("vendor", "cost_center").all()
+    if user is not None:
+        from apps.orders.selectors import scope_purchase_orders_queryset
+
+        pos = scope_purchase_orders_queryset(pos, user)
     report_data = []
     for po in pos:
         report_data.append(
@@ -128,6 +143,7 @@ def get_receipt_rejection_report(
     vendor=None,
     po_number=None,
     inspection_status=None,
+    user=None,
 ):
     """5. Receipt / rejection and delivery performance report"""
     from django.utils.dateparse import parse_date
@@ -146,6 +162,10 @@ def get_receipt_rejection_report(
         .all()
         .order_by("-receipt__received_date", "receipt__grn_number")
     )
+    if user is not None:
+        from apps.receipts.selectors import scoped_receipt_lines
+
+        receipt_lines = receipt_lines.filter(pk__in=scoped_receipt_lines(user).values("pk"))
 
     if start_date:
         parsed_start = parse_date(str(start_date)) if isinstance(start_date, str) else start_date
@@ -231,11 +251,14 @@ def get_receipt_delivery_performance_summary(
     start_date=None,
     end_date=None,
     vendor=None,
+    user=None,
 ):
     """
     Computes aggregated summary KPIs for receipt, rejection, and delivery performance.
     """
-    report = get_receipt_rejection_report(start_date=start_date, end_date=end_date, vendor=vendor)
+    report = get_receipt_rejection_report(
+        start_date=start_date, end_date=end_date, vendor=vendor, user=user
+    )
     total_lines = len(report)
     total_grns = len({r["grn_number"] for r in report})
     total_qty_received = sum(r["qty_received"] for r in report)
@@ -270,9 +293,11 @@ def get_receipt_delivery_performance_summary(
     }
 
 
-def get_invoice_exception_aging_report():
+def get_invoice_exception_aging_report(user=None):
     """6. Invoice match-exception aging"""
     exceptions = MatchException.objects.select_related("invoice__vendor", "resolved_by").all()
+    if user is not None:
+        exceptions = tenancy.scope_match_exceptions(exceptions, user)
     now = timezone.now()
     report_data = []
     for exc in exceptions:
@@ -427,9 +452,11 @@ def _score(value):
     return None if value is None else float(value)
 
 
-def get_supplier_performance_report():
+def get_supplier_performance_report(user=None):
     """8. Supplier performance scorecard and trend"""
     scorecards = VendorScorecard.objects.select_related("vendor", "evaluated_by").all()
+    if user is not None:
+        scorecards = tenancy.scope_scorecards(scorecards, user)
     report_data = []
     for sc in scorecards:
         report_data.append(
@@ -449,9 +476,16 @@ def get_supplier_performance_report():
     return report_data
 
 
-def get_audit_log_report():
-    """9. User / approval audit export with filters and immutable references"""
-    logs = AuditLog.objects.select_related("actor").all()[:200]
+def get_audit_log_report(user=None):
+    """9. User / approval audit export with filters and immutable references.
+
+    Tenant-scoped and fail-closed: a non-superuser sees only entries by actors of their own
+    organisation, and nothing at all when they have none.
+    """
+    qs = AuditLog.objects.select_related("actor")
+    if user is not None:
+        qs = tenancy.scope_audit_logs(qs, user)
+    logs = qs[:200]
     report_data = []
     for log in logs:
         report_data.append(
@@ -494,7 +528,7 @@ def generate_export_job_service(export_job_id: int) -> ExportJob:
 
     try:
         report_fn = REPORT_DISPATCHER.get(job.report_type, get_audit_log_report)
-        data = report_fn()
+        data = report_fn(user=job.requested_by)
 
         if not data:
             # Fallback for empty data
@@ -662,6 +696,7 @@ def generate_export_job_service(export_job_id: int) -> ExportJob:
 
         # Compute SHA-256 of the generated file for integrity verification
         import hashlib
+
         if job.result_file:
             job.result_file.seek(0)
             job.file_hash = hashlib.sha256(job.result_file.read()).hexdigest()

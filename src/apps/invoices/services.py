@@ -4,12 +4,13 @@ from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils import timezone
 
-from apps.accounts.models import Role, User
+from apps.accounts.models import Role
+from apps.accounts.permissions import forbid_non_transacting_actor
 from apps.audit.models import AuditLog
-from apps.budgets.services import convert_commitment_to_actual_service
 from apps.orders.models import PurchaseOrder
 from apps.receipts.models import ReceiptLine
 from apps.vendors.models import Vendor
+
 from .models import InvoiceLine, MatchException, PaymentStatus, SupplierInvoice
 
 
@@ -54,6 +55,7 @@ def create_supplier_invoice_service(
     Creates a new Supplier Invoice in RECEIVED status with line items.
     Enforces unique invoice_number per vendor (duplicate detection).
     """
+    forbid_non_transacting_actor(created_by_user, "create or approve invoices")
     if po.vendor_id != vendor.id:
         raise ValidationError(
             f"Purchase Order {po.po_number} does not belong to vendor '{vendor.legal_name}'."
@@ -100,14 +102,13 @@ def create_supplier_invoice_service(
                 po_line = po_line_raw
             else:
                 from apps.orders.models import POLine
+
                 try:
                     po_line = POLine.objects.filter(pk=po_line_raw, po=po).first()
                 except Exception:
                     po_line = None
 
-        item_desc = item.get(
-            "item_description", getattr(po_line, "item_description", "Line Item")
-        )
+        item_desc = item.get("item_description", getattr(po_line, "item_description", "Line Item"))
         try:
             qty = Decimal(str(item["quantity"]))
             unit_price = Decimal(str(item["unit_price"]))
@@ -220,6 +221,7 @@ def run_3_way_match_service(
     Executes automated 3-way match: PO line vs Goods Receipt line vs Supplier Invoice line.
     Generates explicit MatchException records if variance exceeds tolerance thresholds.
     """
+    forbid_non_transacting_actor(user, "run invoice matching")
     from apps.invoices.models import MatchTolerancePolicy
 
     # Only invoices still in the matching phase may be (re)matched. Re-running the match on a
@@ -265,22 +267,26 @@ def run_3_way_match_service(
         accepted_qty_agg = ReceiptLine.objects.filter(po_line=po_line).aggregate(
             total_accepted=models.Sum("quantity_accepted")
         )["total_accepted"] or Decimal("0.00")
+        if po_line.is_service:
+            # Service lines are accepted through business-owner-confirmed milestones.
+            from apps.orders.service_entries import confirmed_service_quantity
+
+            accepted_qty_agg += confirmed_service_quantity(po_line)
 
         # Deduct prior invoiced quantities from other active/matched invoices on this PO line
-        prior_invoiced_qty = (
-            InvoiceLine.objects.filter(
-                po_line=po_line,
-                invoice__status__in=[
-                    SupplierInvoice.STATUS_MATCHING,
-                    SupplierInvoice.STATUS_EXCEPTION,
-                    SupplierInvoice.STATUS_APPROVAL,
-                    SupplierInvoice.STATUS_READY_FOR_PAYMENT,
-                    SupplierInvoice.STATUS_PAID,
-                ],
-            )
-            .exclude(invoice_id=invoice.id)
-            .aggregate(total_prior=models.Sum("quantity"))["total_prior"]
-            or Decimal("0.00")
+        prior_invoiced_qty = InvoiceLine.objects.filter(
+            po_line=po_line,
+            invoice__status__in=[
+                SupplierInvoice.STATUS_MATCHING,
+                SupplierInvoice.STATUS_EXCEPTION,
+                SupplierInvoice.STATUS_APPROVAL,
+                SupplierInvoice.STATUS_READY_FOR_PAYMENT,
+                SupplierInvoice.STATUS_PAID,
+            ],
+        ).exclude(invoice_id=invoice.id).aggregate(total_prior=models.Sum("quantity"))[
+            "total_prior"
+        ] or Decimal(
+            "0.00"
         )
 
         remaining_accepted_qty = max(Decimal("0.00"), accepted_qty_agg - prior_invoiced_qty)
@@ -386,6 +392,7 @@ def resolve_match_exception_service(
     """
     Finance exception resolution workflow for 3-way match variances.
     """
+    forbid_non_transacting_actor(resolved_by_user, "resolve or approve invoice match exceptions")
     from apps.approvals import engine
     from apps.approvals.models import ApprovalPolicy
 
@@ -400,7 +407,9 @@ def resolve_match_exception_service(
     # scope, multi-step chains, approval limits). The default policy is a single Finance / AP step.
     request = engine.get_pending_request(ApprovalPolicy.MODULE_INVOICE, match_exception)
     if request is None:
-        cost_center = match_exception.invoice.po.cost_center if match_exception.invoice.po_id else None
+        cost_center = (
+            match_exception.invoice.po.cost_center if match_exception.invoice.po_id else None
+        )
         request = engine.open_approval_request(
             module=ApprovalPolicy.MODULE_INVOICE,
             target=match_exception,
@@ -441,7 +450,9 @@ def resolve_match_exception_service(
 
         # If all exceptions on invoice are resolved, promote invoice to READY_FOR_PAYMENT
         invoice = match_exception.invoice
-        remaining_open = invoice.exceptions.filter(status=MatchException.STATUS_OPEN).count()
+        remaining_open = invoice.exceptions.filter(
+            status__in=MatchException.UNRESOLVED_STATUSES
+        ).count()
         if remaining_open == 0:
             invoice.status = SupplierInvoice.STATUS_READY_FOR_PAYMENT
             invoice.save(update_fields=["status", "updated_at"])
@@ -492,6 +503,7 @@ def mark_invoice_paid_service(
     Requires a payment reference (UTR / Check #). Creates a PaymentStatus record
     for transaction evidence and audit trail.
     """
+    forbid_non_transacting_actor(user, "pay invoices")
     if not payment_reference:
         raise ValidationError("Transaction / Payment Reference ID (UTR / Check #) is required.")
 
@@ -508,10 +520,7 @@ def mark_invoice_paid_service(
         )
 
     role_code = _get_user_role_code(user)
-    if not (
-        getattr(user, "is_superuser", False)
-        or role_code in [Role.FINANCE_AP, Role.SUPER_ADMIN]
-    ):
+    if role_code != Role.FINANCE_AP:
         raise ValidationError(
             "Permission Denied: Only Finance / AP personnel can execute invoice payments."
         )
@@ -540,7 +549,14 @@ def mark_invoice_paid_service(
 
     # Convert spend ledger commitment -> actual
     from apps.budgets.services import convert_commitment_to_actual_service
+
     convert_commitment_to_actual_service(po=invoice.po, invoice=invoice, user=user)
+
+    # Paying the last open invoice of a fully received PO can complete the originating request.
+    if invoice.po.requisition_id:
+        from apps.requisitions.services import refresh_requisition_fulfilment_status
+
+        refresh_requisition_fulfilment_status(invoice.po.requisition, actor=user)
 
     AuditLog.objects.create(
         actor=user,
@@ -557,3 +573,176 @@ def mark_invoice_paid_service(
     )
 
     return invoice
+
+
+# ==============================================================================
+# EXCEPTION RESOLUTION OPTIONS: credit note / revised invoice, hold until receipt
+# ==============================================================================
+
+FINANCE_ROLES = (Role.FINANCE_AP,)
+
+
+def _assert_finance_actor(user, invoice):
+    from apps.invoices.selectors import scope_invoices_queryset
+
+    role = _get_user_role_code(user)
+    if getattr(user, "is_superuser", False) or role not in FINANCE_ROLES:
+        raise ValidationError("Permission Denied: only Finance / AP can resolve match exceptions.")
+    if not scope_invoices_queryset(SupplierInvoice.objects.filter(pk=invoice.pk), user).exists():
+        raise ValidationError("Permission Denied: this invoice belongs to another organization.")
+
+
+def _audit_exception(user, exception, verb, extra=None):
+    AuditLog.objects.create(
+        actor=user,
+        action=AuditLog.ACTION_UPDATE,
+        target_model="MatchException",
+        target_object_id=str(exception.id),
+        new_state={
+            "status": exception.status,
+            "event": verb,
+            "invoice": exception.invoice.invoice_number,
+            **(extra or {}),
+        },
+    )
+
+
+@transaction.atomic
+def request_credit_note_service(
+    *, match_exception: MatchException, user, notes: str
+) -> MatchException:
+    """Asks the vendor for a credit note / revised invoice; the exception stays unresolved."""
+    exception = MatchException.objects.select_for_update().get(pk=match_exception.pk)
+    _assert_finance_actor(user, exception.invoice)
+    if exception.status != MatchException.STATUS_OPEN:
+        raise ValidationError(f"Match exception is already in status '{exception.status}'.")
+    if not (notes or "").strip():
+        raise ValidationError("Tell the vendor what to correct (notes are required).")
+    exception.status = MatchException.STATUS_AWAITING_VENDOR
+    exception.resolution_notes = notes.strip()
+    exception.save(update_fields=["status", "resolution_notes", "updated_at"])
+    _audit_exception(user, exception, "CREDIT_NOTE_REQUESTED", {"notes": notes.strip()})
+
+    from apps.notifications.models import Notification
+    from apps.notifications.services import notify_vendor_users
+
+    notify_vendor_users(
+        vendor=exception.invoice.vendor,
+        notification_type=Notification.TYPE_EXCEPTION_RAISED,
+        title=f"Credit note / revised invoice requested: {exception.invoice.invoice_number}",
+        message=f"Finance requests a correction: {notes.strip()[:400]}",
+        target_url=f"/vendor/invoices/{exception.invoice_id}/revise/",
+    )
+    return exception
+
+
+@transaction.atomic
+def hold_exception_until_receipt_service(
+    *, match_exception: MatchException, user, notes: str
+) -> MatchException:
+    """Holds a quantity exception until a receipt is posted for the PO (then auto re-matches)."""
+    exception = MatchException.objects.select_for_update().get(pk=match_exception.pk)
+    _assert_finance_actor(user, exception.invoice)
+    if exception.status != MatchException.STATUS_OPEN:
+        raise ValidationError(f"Match exception is already in status '{exception.status}'.")
+    if exception.exception_type != MatchException.TYPE_QUANTITY_VARIANCE:
+        raise ValidationError("Only quantity exceptions can be held until a receipt is posted.")
+    if not (notes or "").strip():
+        raise ValidationError("Hold notes are required.")
+    exception.status = MatchException.STATUS_HELD
+    exception.resolution_notes = notes.strip()
+    exception.save(update_fields=["status", "resolution_notes", "updated_at"])
+    _audit_exception(user, exception, "HELD_UNTIL_RECEIPT", {"notes": notes.strip()})
+    return exception
+
+
+def _supersede_unresolved(invoice, note, actor):
+    from apps.approvals import engine
+    from apps.approvals.models import ApprovalPolicy
+
+    for exc in invoice.exceptions.filter(status__in=MatchException.UNRESOLVED_STATUSES):
+        engine.cancel_pending_request(ApprovalPolicy.MODULE_INVOICE, exc, actor=actor, reason=note)
+        exc.status = MatchException.STATUS_RESOLVED
+        exc.resolution_notes = note
+        exc.save(update_fields=["status", "resolution_notes", "updated_at"])
+        _audit_exception(actor, exc, "SUPERSEDED", {"note": note})
+
+
+@transaction.atomic
+def rematch_held_exceptions_for_po(po, user=None):
+    """Re-runs the 3-way match of every invoice with a HELD exception once a receipt posts."""
+    invoices = SupplierInvoice.objects.filter(
+        po=po, exceptions__status=MatchException.STATUS_HELD
+    ).distinct()
+    results = []
+    for invoice in invoices:
+        _supersede_unresolved(
+            invoice, "Auto re-match: receipt/service confirmation posted for the PO.", user
+        )
+        matcher = user
+        if matcher is None or not getattr(matcher, "pk", None):
+            matcher = (
+                invoice.exceptions.order_by("-created_at").first().resolved_by
+                if invoice.exceptions.exists()
+                else None
+            )
+        results.append(run_3_way_match_service(invoice=invoice, user=matcher))
+    return results
+
+
+@transaction.atomic
+def submit_revised_invoice_service(
+    *, invoice: SupplierInvoice, vendor_user, line_items: list, notes=""
+):
+    """
+    Vendor answers a credit-note / revised-invoice request: corrected quantities and prices
+    replace the invoice lines (history kept in the audit log) and the invoice is re-matched.
+    """
+    invoice = SupplierInvoice.objects.select_for_update().get(pk=invoice.pk)
+    vendor = getattr(vendor_user, "vendor", None)
+    if vendor is None or vendor.pk != invoice.vendor_id:
+        raise ValidationError("Access Denied: this invoice belongs to another vendor.")
+    waiting = invoice.exceptions.filter(status=MatchException.STATUS_AWAITING_VENDOR)
+    if not waiting.exists():
+        raise ValidationError(
+            "No credit note / revised invoice has been requested for this invoice."
+        )
+    if not line_items:
+        raise ValidationError("Provide the corrected invoice lines.")
+
+    before = {
+        str(line.pk): {"quantity": str(line.quantity), "unit_price": str(line.unit_price)}
+        for line in invoice.lines.all()
+    }
+    lines = {str(line.pk): line for line in invoice.lines.all()}
+    for item in line_items:
+        line = lines.get(str(item.get("line_id")))
+        if line is None:
+            raise ValidationError("Revised line does not belong to this invoice.")
+        try:
+            qty = Decimal(str(item["quantity"]))
+            price = Decimal(str(item["unit_price"]))
+        except Exception:
+            raise ValidationError("Quantity and unit price must be valid numbers.")
+        if qty <= 0 or price < 0:
+            raise ValidationError("Quantity must be positive and price cannot be negative.")
+        line.quantity = qty
+        line.unit_price = price
+        line.save()
+    subtotal = sum((line.line_total for line in invoice.lines.all()), Decimal("0.00"))
+    invoice.subtotal = subtotal
+    invoice.tax_amount = subtotal * invoice.po.tax_rate
+    invoice.total_amount = subtotal + invoice.tax_amount
+    if notes:
+        invoice.notes = f"{invoice.notes}\nRevised: {notes}".strip()
+    invoice.save()
+    AuditLog.objects.create(
+        actor=vendor_user,
+        action=AuditLog.ACTION_UPDATE,
+        target_model="SupplierInvoice",
+        target_object_id=str(invoice.id),
+        previous_state={"lines": before},
+        new_state={"event": "REVISED_INVOICE_SUBMITTED", "total_amount": str(invoice.total_amount)},
+    )
+    _supersede_unresolved(invoice, "Superseded by vendor revised invoice.", vendor_user)
+    return run_3_way_match_service(invoice=invoice, user=vendor_user)

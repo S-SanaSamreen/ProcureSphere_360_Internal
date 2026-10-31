@@ -19,6 +19,7 @@ def _enforce_internal_budget_access(request):
     )
     if not user.is_authenticated:
         from django.core.exceptions import PermissionDenied
+
         raise PermissionDenied("Authentication required.")
     if user.is_superuser:
         return
@@ -29,10 +30,17 @@ def _enforce_internal_budget_access(request):
     if role_code in ALLOWED_SCOPED:
         return  # queryset scoping applied in the view
     from django.core.exceptions import PermissionDenied
+
     raise PermissionDenied("You do not have permission to view budget information.")
 
 
-BUDGET_FULL_ACCESS_ROLES = {Role.FINANCE_AP, Role.SUPER_ADMIN, Role.AUDITOR, Role.PROC_MGR, Role.PROC_EXEC}
+BUDGET_FULL_ACCESS_ROLES = {
+    Role.FINANCE_AP,
+    Role.SUPER_ADMIN,
+    Role.AUDITOR,
+    Role.PROC_MGR,
+    Role.PROC_EXEC,
+}
 
 
 @login_required(login_url="/login/")
@@ -48,7 +56,11 @@ def list_view(request):
     selected_cc_id = request.GET.get("cost_center") or ""
     selected_period_id = request.GET.get("period") or ""
 
-    scoped_org = getattr(request.user, "effective_organization", None) if not request.user.is_superuser else None
+    scoped_org = (
+        getattr(request.user, "effective_organization", None)
+        if not request.user.is_superuser
+        else None
+    )
     role_code = getattr(request.user, "role_code", None) or (
         request.user.role.code if hasattr(request.user, "role") and request.user.role else None
     )
@@ -60,11 +72,15 @@ def list_view(request):
     if scoped_org:
         departments = departments.filter(organization=scoped_org)
         cost_centers = cost_centers.filter(department__organization=scoped_org)
+        fiscal_periods = fiscal_periods.filter(organization=scoped_org)
     elif not request.user.is_superuser:
         departments = departments.none()
         cost_centers = cost_centers.none()
+        fiscal_periods = fiscal_periods.none()
 
-    if role_code in [Role.REQUESTER, Role.DEPT_APPROVER] and getattr(request.user, "department_id", None):
+    if role_code in [Role.REQUESTER, Role.DEPT_APPROVER] and getattr(
+        request.user, "department_id", None
+    ):
         departments = departments.filter(id=request.user.department_id)
         cost_centers = cost_centers.filter(department_id=request.user.department_id)
 
@@ -92,7 +108,6 @@ def list_view(request):
     else:
         filtered_cost_centers = all_cost_centers
 
-
     budgets = scope_budgets_queryset(
         Budget.objects.select_related("cost_center__department", "fiscal_period").all(),
         request.user,
@@ -104,7 +119,6 @@ def list_view(request):
         budgets = budgets.filter(cost_center_id=selected_cc_id)
     if selected_period_id:
         budgets = budgets.filter(fiscal_period_id=selected_period_id)
-
 
     totals = budgets.aggregate(
         total_allocated=Sum("allocated_amount"),
@@ -169,7 +183,11 @@ def ledger_view(request):
     selected_cc_id = request.GET.get("cost_center") or ""
     selected_entry_type = request.GET.get("entry_type") or ""
 
-    scoped_org = getattr(request.user, "effective_organization", None) if not request.user.is_superuser else None
+    scoped_org = (
+        getattr(request.user, "effective_organization", None)
+        if not request.user.is_superuser
+        else None
+    )
     role_code = getattr(request.user, "role_code", None) or (
         request.user.role.code if hasattr(request.user, "role") and request.user.role else None
     )
@@ -184,7 +202,9 @@ def ledger_view(request):
         departments = departments.none()
         cost_centers = cost_centers.none()
 
-    if role_code in [Role.REQUESTER, Role.DEPT_APPROVER] and getattr(request.user, "department_id", None):
+    if role_code in [Role.REQUESTER, Role.DEPT_APPROVER] and getattr(
+        request.user, "department_id", None
+    ):
         departments = departments.filter(id=request.user.department_id)
         cost_centers = cost_centers.filter(department_id=request.user.department_id)
 
@@ -197,7 +217,9 @@ def ledger_view(request):
         filtered_cost_centers = all_cost_centers
 
     ledger = scope_spend_ledger_queryset(
-        SpendLedger.objects.select_related("budget__cost_center__department").order_by("-created_at"),
+        SpendLedger.objects.select_related("budget__cost_center__department").order_by(
+            "-created_at"
+        ),
         request.user,
     )
 
@@ -243,7 +265,11 @@ def budget_exceptions_view(request):
     selected_dept_id = request.GET.get("dept") or ""
     selected_cc_id = request.GET.get("cost_center") or ""
 
-    scoped_org = getattr(request.user, "effective_organization", None) if not request.user.is_superuser else None
+    scoped_org = (
+        getattr(request.user, "effective_organization", None)
+        if not request.user.is_superuser
+        else None
+    )
     role_code = getattr(request.user, "role_code", None) or (
         request.user.role.code if hasattr(request.user, "role") and request.user.role else None
     )
@@ -258,7 +284,9 @@ def budget_exceptions_view(request):
         departments = departments.none()
         cost_centers = cost_centers.none()
 
-    if role_code in [Role.REQUESTER, Role.DEPT_APPROVER] and getattr(request.user, "department_id", None):
+    if role_code in [Role.REQUESTER, Role.DEPT_APPROVER] and getattr(
+        request.user, "department_id", None
+    ):
         departments = departments.filter(id=request.user.department_id)
         cost_centers = cost_centers.filter(department_id=request.user.department_id)
 
@@ -279,7 +307,9 @@ def budget_exceptions_view(request):
         exceptions = exceptions.filter(department__organization=scoped_org)
     elif not request.user.is_superuser:
         exceptions = exceptions.none()
-    if role_code in [Role.REQUESTER, Role.DEPT_APPROVER] and getattr(request.user, "department_id", None):
+    if role_code in [Role.REQUESTER, Role.DEPT_APPROVER] and getattr(
+        request.user, "department_id", None
+    ):
         exceptions = exceptions.filter(department_id=request.user.department_id)
 
     if selected_dept_id:
@@ -309,5 +339,65 @@ def budget_exceptions_view(request):
             "selected_cc_id": selected_cc_id,
             "selected_dept_obj": selected_dept_obj,
             "selected_cc_obj": selected_cc_obj,
+        },
+    )
+
+
+@login_required(login_url="/login/")
+def budget_transfers_view(request):
+    """Finance requests budget transfers; approvers decide in the approvals inbox."""
+    from django.contrib import messages
+    from django.core.exceptions import PermissionDenied, ValidationError
+    from django.shortcuts import redirect
+
+    from apps.budgets import services as budget_services
+    from apps.budgets.models import BudgetTransfer
+
+    _enforce_internal_budget_access(request)
+    user = request.user
+    role_code = getattr(user, "role_code", None)
+    if role_code not in (Role.FINANCE_AP, Role.PROC_MGR, Role.AUDITOR, Role.SUPER_ADMIN) and not (
+        user.is_superuser
+    ):
+        raise PermissionDenied(
+            "Budget transfers are visible to Finance, Procurement Manager, Auditor and Super Admin (read-only)."
+        )
+    org = getattr(user, "effective_organization", None)
+    budgets = Budget.objects.select_related("cost_center", "fiscal_period")
+    transfers = BudgetTransfer.objects.select_related(
+        "source__cost_center", "destination__cost_center", "requested_by"
+    )
+    if user.is_superuser:
+        pass
+    elif org:
+        budgets = budgets.filter(cost_center__department__organization=org)
+        transfers = transfers.filter(source__cost_center__department__organization=org)
+    else:
+        budgets = budgets.none()
+        transfers = transfers.none()
+
+    if request.method == "POST":
+        if role_code != Role.FINANCE_AP:
+            raise PermissionDenied("Only Finance can request budget transfers.")
+        try:
+            budget_services.request_budget_transfer_service(
+                source=budgets.get(pk=request.POST.get("source")),
+                destination=budgets.get(pk=request.POST.get("destination")),
+                amount=request.POST.get("amount"),
+                reason=request.POST.get("reason", ""),
+                requested_by=user,
+            )
+            messages.success(request, "Budget transfer submitted for approval.")
+        except (ValidationError, Budget.DoesNotExist) as exc:
+            messages.error(request, " ".join(getattr(exc, "messages", [str(exc)])))
+        return redirect("budget_transfers")
+
+    return render(
+        request,
+        "pages/budgets/transfers.html",
+        {
+            "budgets": budgets.order_by("cost_center__code"),
+            "transfers": transfers.order_by("-created_at")[:100],
+            "can_request": role_code == Role.FINANCE_AP,
         },
     )

@@ -42,6 +42,7 @@ def grn_history_setup(db, db_roles):
         email="receiver_hist@hpe.com",
         password="Password123!",
         role=db_roles[Role.STORES_RECEIVER],
+        organization=org,
     )
 
     # PO 1: Dell Servers

@@ -3,6 +3,8 @@ Sourcing RBAC (docs/rbac_matrix.md "Sourcing Events (RFQ/RFP)" and "Vendor Seale
 
 - PROC_EXEC / PROC_MGR: create, edit drafts, invite, publish, evaluate, negotiate, recommend.
 - PROC_MGR: approve / reject award recommendations (PRD 3.2: "sourcing approval").
+- SUPER_ADMIN (and the platform superuser): read-only; never manages events or decides awards
+  (PRD 3.6) - fix the approval policy / users instead.
 - FINANCE_AP, LEGAL_MGR, AUDITOR: read event headers; bids only for AUDITOR (post-close).
 - VENDOR_USER: never uses the internal views; bid portal is under /vendor/ (invitation-scoped).
 """
@@ -19,8 +21,8 @@ EVENT_READ_ROLES = {
     Role.LEGAL_MGR,
     Role.AUDITOR,
 }
-EVENT_MANAGE_ROLES = {Role.SUPER_ADMIN, Role.PROC_EXEC, Role.PROC_MGR}
-AWARD_APPROVE_ROLES = {Role.SUPER_ADMIN, Role.PROC_MGR}
+EVENT_MANAGE_ROLES = {Role.PROC_EXEC, Role.PROC_MGR}
+AWARD_APPROVE_ROLES = {Role.PROC_MGR}
 BID_READ_ROLES = {Role.SUPER_ADMIN, Role.PROC_EXEC, Role.PROC_MGR, Role.AUDITOR}
 
 

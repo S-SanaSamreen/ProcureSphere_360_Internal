@@ -254,7 +254,9 @@ def test_pr_08_fail_closed_on_missing_policy(base_org_and_users):
 
 
 @pytest.mark.django_db
-def test_smk_pr_050_multi_step_approval_and_smk_ap_005_role_validation(base_org_and_users, db_roles):
+def test_smk_pr_050_multi_step_approval_and_smk_ap_005_role_validation(
+    base_org_and_users, db_roles
+):
     """
     SMK-PR-050: Multi-step approval chain: Step 1 approval keeps PR in MANAGER_REVIEW;
     final step transitions to APPROVED.
@@ -313,8 +315,9 @@ def test_smk_pr_050_multi_step_approval_and_smk_ap_005_role_validation(base_org_
     pr = approve_purchase_requisition_service(
         requisition=pr, approver=ctx["dept_approver"], comments="Step 1 Dept Approved"
     )
-    # SMK-PR-050: Must NOT be marked APPROVED yet! Must advance and stay in MANAGER_REVIEW
-    assert pr.status == PurchaseRequisition.STATUS_MANAGER_REVIEW
+    # SMK-PR-050: Must NOT be marked APPROVED yet! Must advance to Finance's BUDGET_REVIEW
+    # (PRD 4.2: the Finance step is the budget review stage)
+    assert pr.status == PurchaseRequisition.STATUS_BUDGET_REVIEW
 
     # Step 2: Authorized Finance Approver approves
     pr = approve_purchase_requisition_service(

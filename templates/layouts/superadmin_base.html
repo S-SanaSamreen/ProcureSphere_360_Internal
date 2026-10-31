@@ -55,6 +55,18 @@
                     </a>
                 </li>
                 <li class="nav-item">
+                    <a href="/superadmin/locations/"
+                        class="nav-link sa-nav-link rounded-3 py-2 px-3 {% if '/superadmin/locations/' in request.path or '/superadmin/business-units/' in request.path %}active{% endif %}">
+                        <i class="fa-solid fa-location-dot me-2"></i><span>Locations &amp; Business Units</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="/superadmin/scorecard-weights/"
+                        class="nav-link sa-nav-link rounded-3 py-2 px-3 {% if '/superadmin/scorecard-weights/' in request.path %}active{% endif %}">
+                        <i class="fa-solid fa-scale-balanced me-2"></i><span>Supplier Scorecard Weights</span>
+                    </a>
+                </li>
+                <li class="nav-item">
                     <a href="/superadmin/users/"
                         class="nav-link sa-nav-link rounded-3 py-2 px-3 {% if '/superadmin/users/' in request.path %}active{% endif %}">
                         <i class="fa-solid fa-users-gear me-2"></i><span>Manage Users &amp; Roles</span>

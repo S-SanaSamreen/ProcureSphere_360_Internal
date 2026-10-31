@@ -23,7 +23,9 @@ class BudgetAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
-            return qs.filter(cost_center__department__organization=request.user.effective_organization)
+            return qs.filter(
+                cost_center__department__organization=request.user.effective_organization
+            )
         return qs
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
@@ -45,7 +47,9 @@ class BudgetReservationAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
-            return qs.filter(budget__cost_center__department__organization=request.user.effective_organization)
+            return qs.filter(
+                budget__cost_center__department__organization=request.user.effective_organization
+            )
         return qs
 
 
@@ -65,6 +69,7 @@ class SpendLedgerAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
-            return qs.filter(budget__cost_center__department__organization=request.user.effective_organization)
+            return qs.filter(
+                budget__cost_center__department__organization=request.user.effective_organization
+            )
         return qs
-

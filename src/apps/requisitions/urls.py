@@ -11,6 +11,8 @@ urlpatterns = [
     path("requisitions/<uuid:pk>/cancel/", views.cancel_view, name="requisition_cancel"),
     path("requisitions/<uuid:pk>/approve/", views.approve_view, name="requisition_approve"),
     path("requisitions/<uuid:pk>/reject/", views.reject_view, name="requisition_reject"),
+    path("requisitions/<uuid:pk>/return/", views.return_view, name="requisition_return"),
+    path("requisitions/<uuid:pk>/withdraw/", views.withdraw_view, name="requisition_withdraw"),
     path(
         "requisitions/<uuid:pk>/attachments/<uuid:attachment_id>/",
         views.attachment_download_view,

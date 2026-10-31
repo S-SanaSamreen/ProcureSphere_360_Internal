@@ -1,9 +1,12 @@
 from celery import shared_task
 
+from apps.core.job_runs import record_job_run
+
 from .services import scan_vendor_document_expirations_service
 
 
 @shared_task(name="apps.vendors.tasks.scan_vendor_document_expirations_task")
+@record_job_run("apps.vendors.tasks.scan_vendor_document_expirations_task")
 def scan_vendor_document_expirations_task():
     """
     Periodic Celery Beat task scanning vendor KYC document expirations.

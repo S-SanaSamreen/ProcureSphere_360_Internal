@@ -5,14 +5,12 @@ from django.contrib.auth.forms import PasswordChangeForm, SetPasswordForm
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
-from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.cache import never_cache
 
 
 @never_cache
 def portal_login_view(request):
-
     """
 
     Renders and processes the ProcureSphere 360 ERP Portal login form.
@@ -35,8 +33,6 @@ def portal_login_view(request):
 
         return redirect("/")
 
-
-
     is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
 
     if request.method == "POST":
@@ -45,41 +41,39 @@ def portal_login_view(request):
 
         password = request.POST.get("password", "")
 
-
-
         if not email or not password:
             if is_ajax:
-                return JsonResponse({"ok": False, "error": "Please provide both email and password."}, status=400)
+                return JsonResponse(
+                    {"ok": False, "error": "Please provide both email and password."}, status=400
+                )
             messages.error(request, "Please provide both email and password.")
 
             return render(request, "pages/login.html", {"email": email})
-
-
 
         # Explicit request=request keyword parameter is required for django-axes compatibility
 
         user = authenticate(request=request, username=email, password=password)
 
-
-
         if user is not None:
 
             if not user.is_active:
                 if is_ajax:
-                    return JsonResponse({"ok": False, "error": "Your account has been deactivated. Please contact support."}, status=403)
+                    return JsonResponse(
+                        {
+                            "ok": False,
+                            "error": "Your account has been deactivated. Please contact support.",
+                        },
+                        status=403,
+                    )
                 messages.error(
-
                     request, "Your account has been deactivated. Please contact support."
-
                 )
 
                 return render(request, "pages/login.html", {"email": email})
 
-
-
             login(request, user)
-
-
+            if user.mfa_enabled:
+                request.session["mfa_verified"] = False  # held at the second-factor step
 
             # Record AuditLog for authentication
 
@@ -88,37 +82,28 @@ def portal_login_view(request):
                 from apps.audit.models import AuditLog
                 from apps.audit.services import create_audit_log_service
 
-
-
                 create_audit_log_service(
-
                     actor=user,
-
                     action=AuditLog.ACTION_LOGIN,
-
                     target_model="User",
-
                     target_object_id=str(user.id),
-
                     new_state={
-
                         "email": user.email,
-
                         "role": user.role_code if hasattr(user, "role_code") else None,
-
                     },
-
                     ip_address=request.META.get("REMOTE_ADDR"),
-
                     user_agent=request.META.get("HTTP_USER_AGENT", ""),
-
                 )
 
             except (ImportError, Exception):
 
                 pass
 
-
+            if user.mfa_enabled:
+                verify_url = reverse("accounts:mfa_verify")
+                if is_ajax:
+                    return JsonResponse({"ok": True, "redirect": verify_url})
+                return redirect(verify_url)
 
             if getattr(user, "must_change_password", False):
                 change_url = reverse("accounts:change_password")
@@ -160,21 +145,17 @@ def portal_login_view(request):
                 return render(request, "pages/login.html", {"email": email})
 
             if is_ajax:
-                return JsonResponse({"ok": False, "error": "Invalid email or password. Please try again."}, status=401)
+                return JsonResponse(
+                    {"ok": False, "error": "Invalid email or password. Please try again."},
+                    status=401,
+                )
             messages.error(request, "Invalid email or password. Please try again.")
-
-
 
     return render(request, "pages/login.html")
 
 
-
-
-
 @login_required
-
 def change_password_view(request):
-
     """
 
     Renders and processes the password change form.
@@ -197,41 +178,23 @@ def change_password_view(request):
 
             update_session_auth_hash(request, user)  # Keep user session active
 
-
-
             from apps.audit.models import AuditLog
             from apps.audit.services import create_audit_log_service
 
-
-
             create_audit_log_service(
-
                 actor=user,
-
                 action=AuditLog.ACTION_UPDATE,
-
                 target_model="User",
-
                 target_object_id=str(user.id),
-
                 previous_state={"must_change_password": True},
-
                 new_state={"must_change_password": False, "action": "first_login_password_change"},
-
                 ip_address=request.META.get("REMOTE_ADDR"),
-
                 user_agent=request.META.get("HTTP_USER_AGENT", ""),
-
             )
 
-
-
             messages.success(
-
                 request,
-
                 "Your password has been changed successfully. Welcome to ProcureSphere 360!",
-
             )
 
             return redirect("/")
@@ -244,31 +207,18 @@ def change_password_view(request):
 
         form = PasswordChangeForm(request.user)
 
-
-
     return render(
-
         request,
-
         "accounts/change_password.html",
-
         {
-
             "form": form,
-
             "is_forced": getattr(request.user, "must_change_password", False),
-
         },
-
     )
-
-
-
 
 
 @never_cache
 def portal_logout_view(request):
-
     """
 
     Logs out the user from the ERP Portal and redirects to the public landing page (/).
@@ -282,23 +232,13 @@ def portal_logout_view(request):
         from apps.audit.models import AuditLog
         from apps.audit.services import create_audit_log_service
 
-
-
         create_audit_log_service(
-
             actor=user,
-
             action=AuditLog.ACTION_LOGOUT,
-
             target_model="User",
-
             target_object_id=str(user.id),
-
             previous_state={"email": user.email},
-
         )
-
-
 
     logout(request)
 
@@ -309,13 +249,8 @@ def portal_logout_view(request):
     return response
 
 
-
-
-
 @login_required(login_url="/login/")
-
 def password_change_view(request):
-
     """Lets a user replace their password; mandatory on first login with a temporary password."""
 
     forced = request.user.must_change_password
@@ -340,31 +275,18 @@ def password_change_view(request):
 
             update_session_auth_hash(request, user)
 
-
-
             from apps.audit.models import AuditLog
             from apps.audit.services import create_audit_log_service
 
-
-
             create_audit_log_service(
-
                 actor=user,
-
                 action=AuditLog.ACTION_UPDATE,
-
                 target_model="User",
-
                 target_object_id=str(user.id),
-
                 previous_state={"must_change_password": forced},
-
                 new_state={"must_change_password": False, "event": "password_changed"},
-
                 ip_address=request.META.get("REMOTE_ADDR"),
-
                 user_agent=request.META.get("HTTP_USER_AGENT", ""),
-
             )
 
             messages.success(request, "Password updated.")
@@ -374,12 +296,8 @@ def password_change_view(request):
     return render(request, "pages/password_change.html", {"form": form, "forced": forced})
 
 
-
-
-
 # Aliases for route compatibility
 
 login_page_view = portal_login_view
 
 logout_page_view = portal_logout_view
-

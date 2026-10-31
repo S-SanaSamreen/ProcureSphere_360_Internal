@@ -41,6 +41,7 @@ def day9_day10_setup(db, db_roles):
     )
 
     receiver = User.objects.create_user(
+        organization=org,
         email="stores_susmitha@hpe.com",
         password="Password123!",
         role=db_roles[Role.STORES_RECEIVER],
@@ -359,7 +360,7 @@ def test_day9_unauthorized_user_blocked_from_returns_and_corrections(
     Day 9 RBAC:
     - Service and view layers block Requester, Auditor, and ordinary staff without Stores role.
     - Unauthenticated requests redirect to login.
-    - Super Admin and Stores Receiver are explicitly permitted.
+    - Only the Stores Receiver is permitted (Super Admin is read-only, PRD 3.6).
     """
     po = day9_day10_setup["po"]
     receiver = day9_day10_setup["receiver"]
@@ -436,8 +437,7 @@ def test_day9_unauthorized_user_blocked_from_returns_and_corrections(
         resp_ret = client.post(ret_url, {"tracking_reference": "ATTEMPT"}, follow=True)
         assert resp_ret.status_code == 200
         assert any(
-            "Permission Denied: Only Stores Receiver or Super Admin can process vendor returns"
-            in m.message
+            "Permission Denied: Only the Stores Receiver can process vendor returns" in m.message
             for m in resp_ret.context["messages"]
         )
 
@@ -448,12 +448,12 @@ def test_day9_unauthorized_user_blocked_from_returns_and_corrections(
         )
         assert resp_corr.status_code == 200
         assert any(
-            "Permission Denied: Only Stores Receiver or Super Admin can correct receipt quantities"
+            "Permission Denied: Only the Stores Receiver can correct receipt quantities"
             in m.message
             for m in resp_corr.context["messages"]
         )
 
-    # 4. View layer & service layer: Super Admin is authorized
+    # 4. PRD 3.6: Super Admin cannot post returns either (read-only oversight)
     super_admin = User.objects.create_user(
         email="superadmin_guard_9@hpe.com",
         password="Password123!",
@@ -464,14 +464,14 @@ def test_day9_unauthorized_user_blocked_from_returns_and_corrections(
     resp_admin_ret = client.post(
         ret_url,
         {
-            "tracking_reference": "ADMIN-RMA-OK",
+            "tracking_reference": "ADMIN-RMA-NO",
             "return_quantity": "1.00",
-            "return_notes": "Admin processed return",
+            "return_notes": "Admin attempted return",
         },
         follow=True,
     )
     assert resp_admin_ret.status_code == 200
-    assert any(
+    assert not any(
         "Vendor return recorded successfully" in m.message
         for m in resp_admin_ret.context["messages"]
     )

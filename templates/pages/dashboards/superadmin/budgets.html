@@ -13,9 +13,6 @@
             <button hx-get="/superadmin/fiscal-periods/create/" hx-target="#modal-content-body" data-bs-toggle="modal" data-bs-target="#modal-container" class="btn btn-primary text-white fw-bold rounded-pill px-4 shadow-sm">
                 <i class="fa-solid fa-calendar-plus me-2"></i> Add Fiscal Period
             </button>
-            <button hx-get="/superadmin/budgets/create/" hx-target="#modal-content-body" data-bs-toggle="modal" data-bs-target="#modal-container" class="btn btn-warning text-dark fw-bold rounded-pill px-4 shadow-sm">
-                <i class="fa-solid fa-plus me-2"></i> Add Budget
-            </button>
         </div>
     </div>
 </div>
@@ -24,7 +21,7 @@
     <div class="card-body p-0">
         <div class="px-4 py-3 border-bottom">
             <h5 class="fw-bold text-dark mb-0"><i class="fa-solid fa-calendar-days text-primary me-2"></i>Fiscal Periods</h5>
-            <p class="text-muted small mb-0">Set the name and start/end dates. These periods appear in the budget allocation dropdown.</p>
+            <p class="text-muted small mb-0">Set the name and start/end dates. Finance/AP allocates budgets against these periods.</p>
         </div>
         <div class="table-responsive">
             <table class="table table-hover align-middle mb-0">
@@ -56,6 +53,16 @@
                         </td>
                         <td class="pe-4 text-end">
                             <button hx-get="/superadmin/fiscal-periods/{{ p.pk }}/edit/" hx-target="#modal-content-body" data-bs-toggle="modal" data-bs-target="#modal-container" class="btn btn-sm btn-outline-secondary rounded-pill px-3">Edit dates</button>
+                            <form method="post" action="/superadmin/fiscal-periods/{{ p.pk }}/toggle/" class="d-inline">
+                                {% csrf_token %}
+                                {% if p.is_closed %}
+                                <input type="hidden" name="action" value="open">
+                                <button type="submit" class="btn btn-sm btn-outline-success rounded-pill px-3">Reopen</button>
+                                {% else %}
+                                <input type="hidden" name="action" value="close">
+                                <button type="submit" class="btn btn-sm btn-outline-danger rounded-pill px-3">Close period</button>
+                                {% endif %}
+                            </form>
                         </td>
                     </tr>
                     {% empty %}
@@ -96,7 +103,7 @@
                         <td class="text-end text-danger fw-bold">${{ b.actual_amount|floatformat:2 }}</td>
                         <td class="text-end text-success fw-bold">${{ b.available_amount|floatformat:2 }}</td>
                         <td class="pe-4 text-end">
-                            <button hx-get="/superadmin/budgets/{{ b.pk }}/edit/" hx-target="#modal-content-body" data-bs-toggle="modal" data-bs-target="#modal-container" class="btn btn-sm btn-outline-secondary rounded-pill px-3">Edit</button>
+                            
                         </td>
                     </tr>
                     {% empty %}

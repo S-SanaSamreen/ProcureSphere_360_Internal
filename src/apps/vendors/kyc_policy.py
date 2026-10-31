@@ -38,7 +38,7 @@ class ProvisionalKYCPolicy:
     # Default mandatory document types required for general vendor categories
     DEFAULT_MANDATORY_DOC_TYPES = [
         VendorDocument.DOC_TYPE_CERT,  # Certificate of Incorporation
-        VendorDocument.DOC_TYPE_TAX,   # Tax Clearance Certificate
+        VendorDocument.DOC_TYPE_TAX,  # Tax Clearance Certificate
         VendorDocument.DOC_TYPE_BANK,  # Bank Verification Document
     ]
 
@@ -140,49 +140,58 @@ class ProvisionalKYCPolicy:
                 else:
                     unverified_mandatory_codes.add(doc.document_type)
 
-            document_summaries.append({
-                "id": str(doc.id),
-                "title": doc.title,
-                "document_type": doc.document_type,
-                "type_label": doc_type_labels.get(doc.document_type, doc.document_type),
-                "is_mandatory": doc.document_type in mandatory_codes,
-                "status": doc_status,
-                "is_verified": doc.is_verified,
-                "is_expired": is_expired,
-                "is_expiring_soon": is_expiring_soon,
-                "has_file": bool(doc.file),
-                "expiry_date": doc.expiry_date.isoformat() if doc.expiry_date else None,
-                "verified_by": doc.verified_by.email if doc.verified_by else None,
-                "verified_at": getattr(doc, "verified_at", None),
-                "reviewer_notes": getattr(doc, "reviewer_notes", ""),
-                "version": getattr(doc, "version", 1),
-            })
+            document_summaries.append(
+                {
+                    "id": str(doc.id),
+                    "title": doc.title,
+                    "document_type": doc.document_type,
+                    "type_label": doc_type_labels.get(doc.document_type, doc.document_type),
+                    "is_mandatory": doc.document_type in mandatory_codes,
+                    "status": doc_status,
+                    "is_verified": doc.is_verified,
+                    "is_expired": is_expired,
+                    "is_expiring_soon": is_expiring_soon,
+                    "has_file": bool(doc.file),
+                    "expiry_date": doc.expiry_date.isoformat() if doc.expiry_date else None,
+                    "verified_by": doc.verified_by.email if doc.verified_by else None,
+                    "verified_at": getattr(doc, "verified_at", None),
+                    "reviewer_notes": getattr(doc, "reviewer_notes", ""),
+                    "version": getattr(doc, "version", 1),
+                }
+            )
 
-        missing_mandatory = [
-            code for code in mandatory_codes if code not in uploaded_by_type
-        ]
+        missing_mandatory = [code for code in mandatory_codes if code not in uploaded_by_type]
 
         # Identify superseded documents (replaced by a verified active document)
         superseded_doc_ids = set()
         for doc in documents:
-            if doc.replaces_document_id and doc.is_verified and getattr(doc, "status", None) == "VERIFIED":
+            if (
+                doc.replaces_document_id
+                and doc.is_verified
+                and getattr(doc, "status", None) == "VERIFIED"
+            ):
                 superseded_doc_ids.add(doc.replaces_document_id)
             if doc.document_type in verified_mandatory_codes and doc.is_verified:
                 for other in documents:
                     if other.document_type == doc.document_type and other.id != doc.id:
-                        if other.status in ["REJECTED", "EXPIRED", "CHANGES_REQUIRED"] or (other.expiry_date and other.expiry_date < today):
+                        if other.status in ["REJECTED", "EXPIRED", "CHANGES_REQUIRED"] or (
+                            other.expiry_date and other.expiry_date < today
+                        ):
                             superseded_doc_ids.add(other.id)
 
         # All mandatory types must have at least one verified, non-expired copy
         all_mandatory_verified = set(mandatory_codes).issubset(verified_mandatory_codes)
         has_blocking_rejections = any(
-            doc.document_type in mandatory_codes and doc.id not in superseded_doc_ids for doc in rejected_docs
+            doc.document_type in mandatory_codes and doc.id not in superseded_doc_ids
+            for doc in rejected_docs
         )
         has_blocking_action_required = any(
-            doc.document_type in mandatory_codes and doc.id not in superseded_doc_ids for doc in action_required_docs
+            doc.document_type in mandatory_codes and doc.id not in superseded_doc_ids
+            for doc in action_required_docs
         )
         has_blocking_expirations = any(
-            doc.document_type in mandatory_codes and doc.id not in superseded_doc_ids for doc in expired_docs
+            doc.document_type in mandatory_codes and doc.id not in superseded_doc_ids
+            for doc in expired_docs
         )
 
         is_compliant = (
@@ -197,7 +206,9 @@ class ProvisionalKYCPolicy:
             "is_compliant": is_compliant,
             "eligible_for_legal_approval": is_compliant,
             "mandatory_types": [doc_type_labels.get(c, c) for c in mandatory_codes],
-            "verified_mandatory_types": [doc_type_labels.get(c, c) for c in verified_mandatory_codes],
+            "verified_mandatory_types": [
+                doc_type_labels.get(c, c) for c in verified_mandatory_codes
+            ],
             "missing_mandatory_types": [doc_type_labels.get(c, c) for c in missing_mandatory],
             "unverified_mandatory_types": [
                 doc_type_labels.get(c, c)

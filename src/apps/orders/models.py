@@ -61,21 +61,15 @@ class PurchaseOrder(TimeStampedModel):
     status = models.CharField(
         max_length=50, choices=STATUS_CHOICES, default=STATUS_DRAFT, db_index=True
     )
-    subtotal = models.DecimalField(
-        max_digits=14, decimal_places=2, default=Decimal("0.00")
-    )
+    subtotal = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal("0.00"))
     tax_rate = models.DecimalField(
         max_digits=6,
         decimal_places=4,
         default=default_po_tax_rate,
         help_text="Tax rate applied to this PO (fraction, 0.10 = 10%). Fixed at creation.",
     )
-    tax_amount = models.DecimalField(
-        max_digits=14, decimal_places=2, default=Decimal("0.00")
-    )
-    total_amount = models.DecimalField(
-        max_digits=14, decimal_places=2, default=Decimal("0.00")
-    )
+    tax_amount = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal("0.00"))
+    total_amount = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal("0.00"))
 
     terms_and_conditions = models.TextField(blank=True)
     acknowledged_at = models.DateTimeField(null=True, blank=True)
@@ -93,9 +87,7 @@ class PurchaseOrder(TimeStampedModel):
 
 
 class POLine(TimeStampedModel):
-    po = models.ForeignKey(
-        PurchaseOrder, on_delete=models.CASCADE, related_name="lines"
-    )
+    po = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name="lines")
     item_description = models.CharField(max_length=255)
     quantity = models.DecimalField(max_digits=12, decimal_places=2)
     quantity_received = models.DecimalField(
@@ -104,6 +96,8 @@ class POLine(TimeStampedModel):
     unit_of_measure = models.CharField(max_length=30, default="EA")
     unit_price = models.DecimalField(max_digits=12, decimal_places=2)
     line_total = models.DecimalField(max_digits=14, decimal_places=2)
+    # Service lines are "received" through confirmed ServiceEntry milestones, not goods receipts.
+    is_service = models.BooleanField(default=False)
 
     def save(self, *args, **kwargs):
         self.line_total = self.quantity * self.unit_price
@@ -111,9 +105,7 @@ class POLine(TimeStampedModel):
 
     @property
     def remaining_quantity(self):
-        return max(
-            Decimal("0.00"), self.quantity - (self.quantity_received or Decimal("0.00"))
-        )
+        return max(Decimal("0.00"), self.quantity - (self.quantity_received or Decimal("0.00")))
 
     def __str__(self):
         return f"{self.item_description} (Qty: {self.quantity}, Recv: {self.quantity_received})"
@@ -130,20 +122,11 @@ class POAmendment(TimeStampedModel):
         (STATUS_REJECTED, "Rejected"),
     ]
 
-    po = models.ForeignKey(
-        PurchaseOrder, on_delete=models.CASCADE, related_name="amendments"
-    )
+    po = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name="amendments")
     amendment_number = models.PositiveIntegerField()
     reason = models.TextField()
     previous_version_snapshot = models.JSONField(
         help_text="Immutable JSON snapshot of PO prior to change order"
-    )
-    pending_line_items = models.JSONField(
-        default=list,
-        help_text="Proposed line item changes awaiting approval",
-    )
-    status = models.CharField(
-        max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True
     )
     requested_by = models.ForeignKey(
         "accounts.User",
@@ -153,9 +136,7 @@ class POAmendment(TimeStampedModel):
     status = models.CharField(
         max_length=30, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True
     )
-    delta_amount = models.DecimalField(
-        max_digits=14, decimal_places=2, default=Decimal("0.00")
-    )
+    delta_amount = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal("0.00"))
     pending_line_items = models.JSONField(
         default=list,
         blank=True,
@@ -187,9 +168,7 @@ class DeliverySchedule(TimeStampedModel):
     po = models.ForeignKey(
         PurchaseOrder, on_delete=models.CASCADE, related_name="delivery_schedules"
     )
-    po_line = models.ForeignKey(
-        POLine, on_delete=models.CASCADE, related_name="schedules"
-    )
+    po_line = models.ForeignKey(POLine, on_delete=models.CASCADE, related_name="schedules")
     expected_delivery_date = models.DateField()
     quantity_expected = models.DecimalField(max_digits=12, decimal_places=2)
     destination_address = models.TextField(blank=True)
@@ -197,3 +176,57 @@ class DeliverySchedule(TimeStampedModel):
 
     def __str__(self):
         return f"Delivery Schedule for {self.po.po_number} Line {self.po_line.id} on {self.expected_delivery_date}"
+
+
+class ServiceEntry(TimeStampedModel):
+    """
+    Milestone / percent-complete record for a service PO line. Stores records the entry; the
+    business owner (requester or department approver) confirms it. Confirmed entries count as
+    accepted quantity for the 3-way match of service lines.
+    """
+
+    STATUS_RECORDED = "RECORDED"
+    STATUS_CONFIRMED = "CONFIRMED"
+    STATUS_REJECTED = "REJECTED"
+    STATUS_CHOICES = [
+        (STATUS_RECORDED, "Awaiting Confirmation"),
+        (STATUS_CONFIRMED, "Confirmed"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    po_line = models.ForeignKey(POLine, on_delete=models.PROTECT, related_name="service_entries")
+    milestone = models.CharField(max_length=200)
+    percent_complete = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        help_text="Share of the line delivered by this milestone (0-100).",
+    )
+    entry_date = models.DateField()
+    notes = models.TextField(blank=True, default="")
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default=STATUS_RECORDED, db_index=True
+    )
+    recorded_by = models.ForeignKey(
+        "accounts.User", on_delete=models.PROTECT, related_name="service_entries_recorded"
+    )
+    confirmed_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="service_entries_confirmed",
+    )
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    decision_comments = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    @property
+    def equivalent_quantity(self):
+        return (self.po_line.quantity * self.percent_complete / Decimal("100")).quantize(
+            Decimal("0.01")
+        )
+
+    def __str__(self):
+        return f"{self.po_line.item_description}: {self.milestone} {self.percent_complete}% [{self.status}]"

@@ -5,6 +5,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.accounts.models import Role, User
+from apps.accounts.permissions import forbid_non_transacting_actor
 from apps.audit.models import AuditLog
 from apps.notifications.models import Notification
 from apps.notifications.services import notify_role_users, notify_users
@@ -44,6 +45,7 @@ def create_contract_service(
     """
     Creates a new Contract in DRAFT status after strict validation of mandatory fields and term dates.
     """
+    forbid_non_transacting_actor(contract_owner, "create contracts")
     if vendor.status == Vendor.STATUS_SUSPENDED:
         raise ValidationError(
             f"Vendor '{vendor.legal_name}' is suspended and cannot enter into contracts."
@@ -114,6 +116,7 @@ def submit_for_legal_review_service(*, contract: Contract, user: User, notes: st
     """
     Submits contract from DRAFT to LEGAL_REVIEW state.
     """
+    forbid_non_transacting_actor(user, "submit contracts")
     if contract.status != Contract.STATUS_DRAFT:
         raise ValidationError(
             f"Cannot submit contract in status '{contract.status}' for legal review."
@@ -149,10 +152,8 @@ def approve_legal_review_service(*, contract: Contract, user: User, notes: str =
     Approves legal review, moving contract to BUSINESS_APPROVAL state.
     """
     role_code = _get_user_role_code(user)
-    if not (getattr(user, "is_superuser", False) or role_code in [Role.LEGAL_MGR, Role.SUPER_ADMIN]):
-        raise ValidationError(
-            "Permission Denied: Only Legal Managers or Super Admins can approve legal reviews."
-        )
+    if getattr(user, "is_superuser", False) or role_code != Role.LEGAL_MGR:
+        raise ValidationError("Permission Denied: Only Legal Managers can approve legal reviews.")
 
     if contract.status != Contract.STATUS_LEGAL_REVIEW:
         raise ValidationError(
@@ -203,10 +204,8 @@ def reject_legal_review_service(*, contract: Contract, user: User, reason: str) 
     Rejects legal review, returning contract to DRAFT state for corrections.
     """
     role_code = _get_user_role_code(user)
-    if not (getattr(user, "is_superuser", False) or role_code in [Role.LEGAL_MGR, Role.SUPER_ADMIN]):
-        raise ValidationError(
-            "Permission Denied: Only Legal Managers or Super Admins can reject legal reviews."
-        )
+    if getattr(user, "is_superuser", False) or role_code != Role.LEGAL_MGR:
+        raise ValidationError("Permission Denied: Only Legal Managers can reject legal reviews.")
 
     if not reason or not str(reason).strip():
         raise ValidationError("Rejection reason is required.")
@@ -263,6 +262,7 @@ def approve_business_service(*, contract: Contract, user: User, notes: str = "")
     CONTRACT approval chain is approved). Authorisation, separation of duties, approval limits
     and multi-step chains are enforced by the approval engine.
     """
+    forbid_non_transacting_actor(user, "approve contracts")
     from apps.approvals import engine
 
     if contract.vendor.status == Vendor.STATUS_SUSPENDED:
@@ -325,6 +325,7 @@ def approve_business_service(*, contract: Contract, user: User, notes: str = "")
 @transaction.atomic
 def reject_business_service(*, contract: Contract, user: User, reason: str) -> Contract:
     """Business approver rejects the contract, returning it to DRAFT for rework."""
+    forbid_non_transacting_actor(user, "reject contracts")
     from apps.approvals import engine
 
     if not reason or not str(reason).strip():
@@ -369,6 +370,7 @@ def activate_contract_service(*, contract: Contract, user: User) -> Contract:
     Activates contract state after verifying mandatory workflow approvals.
     Direct activation from DRAFT or LEGAL_REVIEW without completing legal and business approval is forbidden.
     """
+    forbid_non_transacting_actor(user, "activate contracts")
     if contract.status != Contract.STATUS_BUSINESS_APPROVAL:
         raise ValidationError(
             f"Cannot activate contract in status '{contract.status}'. "
@@ -391,13 +393,11 @@ def create_contract_version_service(
     Amends contract by incrementing version number, preserving prior version values,
     and updating active contract values.
     """
+    forbid_non_transacting_actor(user, "amend contracts")
     role_code = _get_user_role_code(user)
-    if not (
-        getattr(user, "is_superuser", False)
-        or role_code in [Role.LEGAL_MGR, Role.PROC_MGR, Role.SUPER_ADMIN]
-    ):
+    if getattr(user, "is_superuser", False) or role_code not in [Role.LEGAL_MGR, Role.PROC_MGR]:
         raise ValidationError(
-            "Permission Denied: Only Legal Managers, Procurement Managers, or Super Admins can amend contracts."
+            "Permission Denied: Only Legal Managers or Procurement Managers can amend contracts."
         )
 
     if not amendment_summary or not str(amendment_summary).strip():
@@ -474,6 +474,7 @@ def add_contract_milestone_service(
     """
     Adds a tracked milestone to a contract with audit logging.
     """
+    forbid_non_transacting_actor(user, "edit contract milestones")
     if not title or not str(title).strip():
         raise ValidationError("Milestone title is required.")
     if not due_date:
@@ -513,6 +514,7 @@ def complete_contract_milestone_service(
     """
     Marks a milestone as completed.
     """
+    forbid_non_transacting_actor(user, "edit contract milestones")
     if milestone.is_completed:
         raise ValidationError("Milestone is already completed.")
 
@@ -538,6 +540,7 @@ def add_contract_obligation_service(
     """
     Adds a legal obligation to a contract with audit logging.
     """
+    forbid_non_transacting_actor(user, "edit contract obligations")
     if not title or not str(title).strip():
         raise ValidationError("Obligation title is required.")
     if not due_date:
@@ -577,6 +580,7 @@ def fulfill_contract_obligation_service(
     """
     Marks an obligation as fulfilled.
     """
+    forbid_non_transacting_actor(user, "edit contract obligations")
     if obligation.is_fulfilled:
         raise ValidationError("Obligation is already fulfilled.")
 
@@ -602,6 +606,7 @@ def upload_contract_document_service(
     """
     Uploads a signed contract document or appendix after title and format/size validation.
     """
+    forbid_non_transacting_actor(user, "upload contract documents")
     role_code = getattr(user, "role_code", None) or (
         user.role.code if getattr(user, "role", None) else None
     )
@@ -617,6 +622,7 @@ def upload_contract_document_service(
 
     if hasattr(file, "read") or hasattr(file, "size"):
         from apps.core.validators import validate_file_upload
+
         validate_file_upload(file)
 
     file_name = ""
@@ -672,12 +678,9 @@ def renew_contract_service(
     Renews an active or renewal-due contract, creating a new version.
     """
     role_code = _get_user_role_code(user)
-    if not (
-        getattr(user, "is_superuser", False)
-        or role_code in [Role.LEGAL_MGR, Role.PROC_MGR, Role.SUPER_ADMIN]
-    ):
+    if getattr(user, "is_superuser", False) or role_code not in [Role.LEGAL_MGR, Role.PROC_MGR]:
         raise ValidationError(
-            "Permission Denied: Only Legal Managers, Procurement Managers, or Super Admins can renew contracts."
+            "Permission Denied: Only Legal Managers or Procurement Managers can renew contracts."
         )
 
     if contract.status not in [
@@ -760,12 +763,9 @@ def terminate_contract_service(*, contract: Contract, user: User, reason: str) -
     Terminates a contract.
     """
     role_code = _get_user_role_code(user)
-    if not (
-        getattr(user, "is_superuser", False)
-        or role_code in [Role.LEGAL_MGR, Role.PROC_MGR, Role.SUPER_ADMIN]
-    ):
+    if getattr(user, "is_superuser", False) or role_code not in [Role.LEGAL_MGR, Role.PROC_MGR]:
         raise ValidationError(
-            "Permission Denied: Only Legal Managers, Procurement Managers, or Super Admins can terminate contracts."
+            "Permission Denied: Only Legal Managers or Procurement Managers can terminate contracts."
         )
 
     if not reason or not str(reason).strip():
@@ -942,9 +942,7 @@ def scan_contract_expirations_and_milestones_service() -> int:
                 message=msg,
                 target_date=contract.end_date,
             )
-            _set_contract_status_by_scheduler(
-                contract, Contract.STATUS_EXPIRED, "end date passed"
-            )
+            _set_contract_status_by_scheduler(contract, Contract.STATUS_EXPIRED, "end date passed")
             alerts_created += 1
 
             notify_role_users(

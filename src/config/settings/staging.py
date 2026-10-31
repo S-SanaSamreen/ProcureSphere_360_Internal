@@ -1,5 +1,8 @@
 from .base import *  # noqa: F403
-from .base import env
+from .base import SECRET_KEY, env
+from .secret_guard import validate_secret_key
+
+validate_secret_key(SECRET_KEY)
 
 DEBUG = False
 

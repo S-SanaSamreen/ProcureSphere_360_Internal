@@ -252,22 +252,31 @@ class AmendBidPayload(serializers.Serializer):
 
     def validate_line_items(self, value):
         from decimal import Decimal, InvalidOperation
+
         for idx, item in enumerate(value):
             price = item.get("quoted_unit_price")
             if price is None:
-                raise serializers.ValidationError(f"Line item {idx + 1} is missing quoted_unit_price.")
+                raise serializers.ValidationError(
+                    f"Line item {idx + 1} is missing quoted_unit_price."
+                )
             try:
                 d_price = Decimal(str(price))
                 if d_price < Decimal("0.00"):
-                    raise serializers.ValidationError(f"Quoted unit price cannot be negative for line item {idx + 1}.")
+                    raise serializers.ValidationError(
+                        f"Quoted unit price cannot be negative for line item {idx + 1}."
+                    )
             except (InvalidOperation, TypeError, ValueError):
-                raise serializers.ValidationError(f"Invalid quoted unit price for line item {idx + 1}.")
+                raise serializers.ValidationError(
+                    f"Invalid quoted unit price for line item {idx + 1}."
+                )
             qty = item.get("quantity")
             if qty is not None:
                 try:
                     d_qty = Decimal(str(qty))
                     if d_qty <= Decimal("0.00"):
-                        raise serializers.ValidationError(f"Quantity must be greater than zero for line item {idx + 1}.")
+                        raise serializers.ValidationError(
+                            f"Quantity must be greater than zero for line item {idx + 1}."
+                        )
                 except (InvalidOperation, TypeError, ValueError):
                     raise serializers.ValidationError(f"Invalid quantity for line item {idx + 1}.")
         return value

@@ -5,18 +5,18 @@ from apps.accounts.models import Role
 
 class IsLegalManager(permissions.BasePermission):
     """
-    Allows access only to users with LEGAL_MGR role or SUPER_ADMIN.
+    Allows access only to users with the LEGAL_MGR role (never Super Admin / platform admin).
     """
 
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
         if request.user.is_superuser:
-            return True
+            return False
         role_code = getattr(request.user, "role_code", None) or (
             request.user.role.code if getattr(request.user, "role", None) else None
         )
-        return role_code in [Role.LEGAL_MGR, Role.SUPER_ADMIN]
+        return role_code == Role.LEGAL_MGR
 
     def has_object_permission(self, request, view, obj):
         return self.has_permission(request, view)
@@ -30,14 +30,14 @@ class IsNotAuditor(permissions.BasePermission):
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
-        if request.user.is_superuser:
-            return True
         if request.method in permissions.SAFE_METHODS:
             return True
+        if request.user.is_superuser:
+            return False
         role_code = getattr(request.user, "role_code", None) or (
             request.user.role.code if getattr(request.user, "role", None) else None
         )
-        return role_code != Role.AUDITOR
+        return role_code not in (Role.AUDITOR, Role.SUPER_ADMIN)
 
     def has_object_permission(self, request, view, obj):
         return self.has_permission(request, view)
@@ -46,22 +46,21 @@ class IsNotAuditor(permissions.BasePermission):
 class CanManageContract(permissions.BasePermission):
     """
     Permission required to create, amend, terminate, or update core contract structure:
-    Legal Manager, Procurement Manager, Procurement Executive, Super Admin.
+    Legal Manager, Procurement Manager (Super Admin is read-only).
     Requesters, Auditors, and Vendors are strictly prohibited (403) from write operations.
     """
 
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
-        if request.user.is_superuser:
-            return True
         if request.method in permissions.SAFE_METHODS:
             return True
+        if request.user.is_superuser:
+            return False
         role_code = getattr(request.user, "role_code", None) or (
             request.user.role.code if getattr(request.user, "role", None) else None
         )
         return role_code in [
-            Role.SUPER_ADMIN,
             Role.LEGAL_MGR,
             Role.PROC_MGR,
         ]
@@ -69,26 +68,24 @@ class CanManageContract(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         if not request.user or not request.user.is_authenticated:
             return False
-        if request.user.is_superuser:
-            return True
         return self.has_permission(request, view)
 
 
 class CanBusinessApproveContract(permissions.BasePermission):
     """
     Permission required for business approval of contracts:
-    Procurement Manager, Department Approver, or Super Admin.
+    Procurement Manager or Department Approver (never Super Admin).
     """
 
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
         if request.user.is_superuser:
-            return True
+            return False
         role_code = getattr(request.user, "role_code", None) or (
             request.user.role.code if getattr(request.user, "role", None) else None
         )
-        if role_code in [Role.PROC_MGR, Role.DEPT_APPROVER, Role.SUPER_ADMIN]:
+        if role_code in [Role.PROC_MGR, Role.DEPT_APPROVER]:
             return True
         # any other role / person the CONTRACT approval policy names (the engine decides per request)
         from apps.approvals import engine
@@ -102,18 +99,18 @@ class CanBusinessApproveContract(permissions.BasePermission):
 class CanRenewOrTerminateContract(permissions.BasePermission):
     """
     Permission required for renewal or termination of contracts:
-    Legal Manager, Procurement Manager, or Super Admin.
+    Legal Manager or Procurement Manager (never Super Admin).
     """
 
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
         if request.user.is_superuser:
-            return True
+            return False
         role_code = getattr(request.user, "role_code", None) or (
             request.user.role.code if getattr(request.user, "role", None) else None
         )
-        return role_code in [Role.LEGAL_MGR, Role.PROC_MGR, Role.SUPER_ADMIN]
+        return role_code in [Role.LEGAL_MGR, Role.PROC_MGR]
 
     def has_object_permission(self, request, view, obj):
         return self.has_permission(request, view)

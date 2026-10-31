@@ -8,6 +8,7 @@ from django.shortcuts import redirect, render
 
 from apps.accounts.models import Role
 from apps.audit.models import AuditLog
+from apps.core import tenancy
 from apps.reports.models import ExportJob
 from apps.reports.services import (
     get_audit_log_report,
@@ -80,7 +81,10 @@ def dashboard_view(request):
     )
     if getattr(user, "is_vendor", False) or role_code in [Role.VENDOR_USER, "VENDOR_USER"]:
         from django.core.exceptions import PermissionDenied
-        raise PermissionDenied("External vendor users are not authorized to access internal reports.")
+
+        raise PermissionDenied(
+            "External vendor users are not authorized to access internal reports."
+        )
     jobs = ExportJob.objects.filter(requested_by=request.user).order_by("-created_at")[:20]
 
     reports = [
@@ -167,6 +171,7 @@ def generate_view(request):
 
         try:
             from apps.reports.tasks import run_export_job_task
+
             run_export_job_task.delay(job.id)
             messages.success(request, f"{report_type} report queued for generation.")
         except Exception as e:
@@ -181,7 +186,7 @@ def proc_exec_pr_aging_view(request):
     role_code = _require_proc_report_access(request)
     base_layout = _resolve_base_layout(role_code)
 
-    rows = get_pr_aging_report()
+    rows = get_pr_aging_report(user=request.user)
 
     q = (request.GET.get("q") or "").strip().lower()
     status_filter = (request.GET.get("status") or "").strip().upper()
@@ -238,7 +243,7 @@ def proc_exec_sourcing_cycle_view(request):
     role_code = _require_proc_report_access(request)
     base_layout = _resolve_base_layout(role_code)
 
-    rows = get_sourcing_cycle_time_report()
+    rows = get_sourcing_cycle_time_report(user=request.user)
 
     q = (request.GET.get("q") or "").strip().lower()
     status_filter = (request.GET.get("status") or "").strip().upper()
@@ -246,8 +251,7 @@ def proc_exec_sourcing_cycle_view(request):
         rows = [
             r
             for r in rows
-            if q in str(r.get("event_number", "")).lower()
-            or q in str(r.get("title", "")).lower()
+            if q in str(r.get("event_number", "")).lower() or q in str(r.get("title", "")).lower()
         ]
     if status_filter:
         rows = [r for r in rows if str(r.get("status", "")).upper() == status_filter]
@@ -306,7 +310,7 @@ def proc_exec_po_status_view(request):
     role_code = _require_proc_report_access(request)
     base_layout = _resolve_base_layout(role_code)
 
-    rows = get_po_status_report()
+    rows = get_po_status_report(user=request.user)
 
     q = (request.GET.get("q") or "").strip().lower()
     status_filter = (request.GET.get("status") or "").strip().upper()
@@ -314,8 +318,7 @@ def proc_exec_po_status_view(request):
         rows = [
             r
             for r in rows
-            if q in str(r.get("po_number", "")).lower()
-            or q in str(r.get("vendor", "")).lower()
+            if q in str(r.get("po_number", "")).lower() or q in str(r.get("vendor", "")).lower()
         ]
     if status_filter:
         rows = [r for r in rows if str(r.get("status", "")).upper() == status_filter]
@@ -383,8 +386,9 @@ def proc_exec_audit_report_view(request):
     logs_qs = (
         AuditLog.objects.select_related("actor")
         .filter(target_model__in=sorted(PROCUREMENT_AUDIT_MODELS))
-        .order_by("-timestamp")[:200]
+        .order_by("-timestamp")
     )
+    logs_qs = tenancy.scope_audit_logs(logs_qs, request.user)[:200]
 
     q = (request.GET.get("q") or "").strip().lower()
     action_filter = (request.GET.get("action") or "").strip().upper()
@@ -416,7 +420,7 @@ def proc_exec_audit_report_view(request):
 
     if request.GET.get("export") == "csv":
         # Export reuses the audited report service shape (direct download for speed).
-        _ = get_audit_log_report()
+        _ = get_audit_log_report(user=request.user)
         fieldnames = [
             "audit_id",
             "timestamp",

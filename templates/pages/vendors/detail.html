@@ -269,13 +269,13 @@ This cannot be undone. Only DRAFT and REJECTED vendors with no linked transactio
             <div class="d-flex justify-content-between align-items-center mb-3">
                 <h5 class="fw-bold mb-0"><i class="fa-solid fa-award me-2 text-success"></i>Performance</h5>
                 {% if latest_scorecard and latest_scorecard.composite_score is not None %}
-                    <span class="badge bg-dark fs-6">{{ latest_scorecard.composite_score|floatformat:1 }}/100</span>
+                    <span class="badge bg-dark fs-6">{{ latest_scorecard.composite_score|floatformat:1 }}/100{% if latest_scorecard.rating_band %} &middot; {{ latest_scorecard.rating_band }}{% endif %}</span>
                 {% endif %}
             </div>
             {% if latest_scorecard %}
                 <div class="small text-muted mb-2">Period {{ latest_scorecard.evaluation_period }} · {{ latest_scorecard.created_at|date:"Y-m-d" }}</div>
-                {% for label, score in latest_scorecard.indicator_rows %}
-                    <div class="d-flex justify-content-between small"><span>{{ label }}</span><span class="fw-semibold">{% if score is None %}<span class="text-muted fw-normal">No data</span>{% else %}{{ score|floatformat:1 }}{% endif %}</span></div>
+                {% for label, score, weight in latest_scorecard.dimension_rows %}
+                    <div class="d-flex justify-content-between small"><span>{{ label }} <span class="text-muted">({{ weight|floatformat:"-2" }}%)</span></span><span class="fw-semibold">{% if score is None %}<span class="text-muted fw-normal">No data</span>{% else %}{{ score|floatformat:1 }}{% endif %}</span></div>
                     <div class="progress mb-2" style="height:6px" role="progressbar" aria-label="{{ label }}" aria-valuenow="{{ score|default:0|floatformat:0 }}" aria-valuemin="0" aria-valuemax="100">
                         <div class="progress-bar bg-success" style="width: {{ score|default:0|floatformat:0 }}%"></div>
                     </div>

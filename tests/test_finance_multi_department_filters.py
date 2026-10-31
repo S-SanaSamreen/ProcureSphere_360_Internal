@@ -26,7 +26,9 @@ def finance_env(db):
         organization=org, code="OPS", defaults={"name": "Global Operations"}
     )
 
-    role_fin, _ = Role.objects.get_or_create(code=Role.FINANCE_AP, defaults={"name": "Finance & AP"})
+    role_fin, _ = Role.objects.get_or_create(
+        code=Role.FINANCE_AP, defaults={"name": "Finance & AP"}
+    )
     role_req, _ = Role.objects.get_or_create(code=Role.REQUESTER, defaults={"name": "Requester"})
     role_vendor, _ = Role.objects.get_or_create(code=Role.VENDOR_USER, defaults={"name": "Vendor"})
 
@@ -34,6 +36,7 @@ def finance_env(db):
         email="fin.filter.test@hpe.com",
         password="TestPassword123!",
         role=role_fin,
+        organization=org,
     )
     requester_user = User.objects.create_user(
         email="req.filter.test@hpe.com",
@@ -104,6 +107,20 @@ def finance_env(db):
         total_amount=Decimal("120000.00"),
         requested_delivery_date=today + timezone.timedelta(days=14),
         status=PurchaseRequisition.STATUS_BUDGET_REVIEW,
+    )
+    # An out-of-budget PR awaiting its budget exception approval (the Finance dashboard's
+    # "pending budget exceptions" are PRs with an open budget-exception approval request).
+    from apps.approvals import engine as approval_engine
+    from apps.approvals.models import ApprovalPolicy
+
+    approval_engine.open_approval_request(
+        module=ApprovalPolicy.MODULE_BUDGET_EXCEPTION,
+        target=pr_it,
+        amount=pr_it.total_amount,
+        maker=requester_user,
+        department=dept_it,
+        cost_center=cc_it,
+        required=True,
     )
 
     return {

@@ -17,6 +17,7 @@ class ApprovalPolicy(TimeStampedModel):
     MODULE_PO_AMENDMENT = "PO_AMENDMENT"
     MODULE_CONTRACT = "CONTRACT"
     MODULE_BUDGET_EXCEPTION = "BUDGET_EXCEPTION"
+    MODULE_BUDGET_TRANSFER = "BUDGET_TRANSFER"
 
     MODULE_CHOICES = [
         (MODULE_PR, "Purchase Requisition"),
@@ -24,11 +25,10 @@ class ApprovalPolicy(TimeStampedModel):
         (MODULE_SOURCING, "Sourcing Award"),
         (MODULE_INVOICE, "Invoice Match Exception"),
         (MODULE_VENDOR, "Vendor KYC Approval"),
-
         (MODULE_PO_AMENDMENT, "Purchase Order Amendment"),
         (MODULE_CONTRACT, "Contract Approval"),
-
         (MODULE_BUDGET_EXCEPTION, "Budget Exception"),
+        (MODULE_BUDGET_TRANSFER, "Budget Transfer"),
     ]
 
     name = models.CharField(max_length=200)
@@ -48,12 +48,8 @@ class ApprovalPolicy(TimeStampedModel):
         related_name="approval_policies",
     )
 
-    min_amount = models.DecimalField(
-        max_digits=14, decimal_places=2, default=Decimal("0.00")
-    )
-    max_amount = models.DecimalField(
-        max_digits=14, decimal_places=2, null=True, blank=True
-    )
+    min_amount = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal("0.00"))
+    max_amount = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
 
     is_active = models.BooleanField(default=True)
 
@@ -85,9 +81,7 @@ class ApprovalPolicy(TimeStampedModel):
 
     @property
     def is_in_use(self):
-        return self.pk is not None and (
-            self.requests.exists() or self.exception_requests.exists()
-        )
+        return self.pk is not None and (self.requests.exists() or self.exception_requests.exists())
 
     def save(self, *args, **kwargs):
         if not self._state.adding and self.is_in_use:
@@ -106,9 +100,7 @@ class ApprovalPolicy(TimeStampedModel):
 
 
 class ApprovalStep(TimeStampedModel):
-    policy = models.ForeignKey(
-        ApprovalPolicy, on_delete=models.CASCADE, related_name="steps"
-    )
+    policy = models.ForeignKey(ApprovalPolicy, on_delete=models.CASCADE, related_name="steps")
     step_number = models.PositiveIntegerField()
     approver_role = models.ForeignKey(
         "accounts.Role", on_delete=models.PROTECT, related_name="approval_steps"
@@ -142,9 +134,7 @@ class ApprovalStep(TimeStampedModel):
         return super().delete(*args, **kwargs)
 
     def __str__(self):
-        return (
-            f"Step {self.step_number}: {self.approver_role.name} for {self.policy.name}"
-        )
+        return f"Step {self.step_number}: {self.approver_role.name} for {self.policy.name}"
 
 
 class ApprovalRequest(TimeStampedModel):
@@ -158,12 +148,14 @@ class ApprovalRequest(TimeStampedModel):
     STATUS_APPROVED = "APPROVED"
     STATUS_REJECTED = "REJECTED"
     STATUS_CANCELLED = "CANCELLED"
+    STATUS_RETURNED = "RETURNED"
 
     STATUS_CHOICES = [
         (STATUS_PENDING, "Pending"),
         (STATUS_APPROVED, "Approved"),
         (STATUS_REJECTED, "Rejected"),
         (STATUS_CANCELLED, "Cancelled"),
+        (STATUS_RETURNED, "Returned for clarification"),
     ]
 
     module = models.CharField(max_length=50, choices=ApprovalPolicy.MODULE_CHOICES, db_index=True)
@@ -179,10 +171,18 @@ class ApprovalRequest(TimeStampedModel):
     )
     amount = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal("0.00"))
     department = models.ForeignKey(
-        "organization.Department", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+        "organization.Department",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
     )
     cost_center = models.ForeignKey(
-        "organization.CostCenter", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+        "organization.CostCenter",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
     )
     exception_reason = models.TextField(blank=True)
     steps = models.JSONField(default=list)
@@ -226,6 +226,7 @@ class ApprovalAction(TimeStampedModel):
     ACTION_REJECT = "REJECTED"
     ACTION_DELEGATE = "DELEGATED"
     ACTION_COMMENT = "COMMENTED"
+    ACTION_RETURN = "RETURNED"
 
     ACTION_CHOICES = [
         (ACTION_SUBMIT, "Submitted"),
@@ -233,15 +234,14 @@ class ApprovalAction(TimeStampedModel):
         (ACTION_REJECT, "Rejected"),
         (ACTION_DELEGATE, "Delegated"),
         (ACTION_COMMENT, "Commented"),
+        (ACTION_RETURN, "Returned for clarification"),
     ]
 
     approval_request = models.ForeignKey(
         ApprovalRequest, null=True, blank=True, on_delete=models.SET_NULL, related_name="actions"
     )
 
-    policy_step = models.ForeignKey(
-        ApprovalStep, on_delete=models.SET_NULL, null=True, blank=True
-    )
+    policy_step = models.ForeignKey(ApprovalStep, on_delete=models.SET_NULL, null=True, blank=True)
     target_object_id = models.UUIDField(db_index=True)
     target_model_name = models.CharField(max_length=100)
     actor = models.ForeignKey(

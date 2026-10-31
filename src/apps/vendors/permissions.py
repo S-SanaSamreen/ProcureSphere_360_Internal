@@ -4,7 +4,7 @@ Vendor governance RBAC (docs/rbac_matrix.md, "Vendor Onboarding & KYC" / "Vendor
 - PROC_EXEC: read governance, record risk assessments, place/release HOLD, KYC review.
 - PROC_MGR: everything PROC_EXEC can do + suspend/blacklist and reinstate (PRD 3.2:
   "vendor governance").
-- FINANCE_AP, AUDITOR: read-only.
+- FINANCE_AP, AUDITOR, SUPER_ADMIN (PRD 3.6): read-only; Super Admin never decides KYC.
 """
 
 from rest_framework.permissions import SAFE_METHODS, BasePermission
@@ -19,12 +19,12 @@ GOVERNANCE_READ_ROLES = {
     Role.LEGAL_MGR,
     Role.AUDITOR,
 }
-GOVERNANCE_OPERATE_ROLES = {Role.SUPER_ADMIN, Role.PROC_EXEC, Role.PROC_MGR}
-GOVERNANCE_SUSPEND_ROLES = {Role.SUPER_ADMIN, Role.PROC_MGR}
+GOVERNANCE_OPERATE_ROLES = {Role.PROC_EXEC, Role.PROC_MGR}
+GOVERNANCE_SUSPEND_ROLES = {Role.PROC_MGR}
 # KYC document review (verify / reject / request corrections). Legal reviews the legal and
 # regulatory documents; activation itself stays with GOVERNANCE_OPERATE_ROLES (docs/assumptions.md).
 KYC_REVIEW_ROLES = GOVERNANCE_OPERATE_ROLES | {Role.LEGAL_MGR}
-LEGAL_VERIFY_ROLES = {Role.SUPER_ADMIN, Role.LEGAL_MGR}
+LEGAL_VERIFY_ROLES = {Role.LEGAL_MGR}
 
 
 def _role(user):

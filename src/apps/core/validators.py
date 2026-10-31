@@ -59,7 +59,9 @@ def validate_pan_number(value: str) -> str:
     norm = normalize_tax_identifier(value)
     if not PAN_REGEX.match(norm):
         raise ValidationError(
-            _("Invalid PAN format. PAN must be 10 characters: 5 uppercase letters, 4 digits, 1 uppercase letter (e.g. ABCDE1234F).")
+            _(
+                "Invalid PAN format. PAN must be 10 characters: 5 uppercase letters, 4 digits, 1 uppercase letter (e.g. ABCDE1234F)."
+            )
         )
     return norm
 
@@ -75,7 +77,9 @@ def validate_gstin(value: str) -> str:
     norm = normalize_tax_identifier(value)
     if not GSTIN_REGEX.match(norm):
         raise ValidationError(
-            _("Invalid GSTIN format. GSTIN must be 15 alphanumeric characters (e.g. 29ABCDE1234F1Z5).")
+            _(
+                "Invalid GSTIN format. GSTIN must be 15 alphanumeric characters (e.g. 29ABCDE1234F1Z5)."
+            )
         )
     return norm
 
@@ -96,7 +100,6 @@ def validate_pan_gstin_consistency(pan: str, gstin: str) -> None:
                     f"which does not match the separate PAN '{norm_pan}'."
                 )
             )
-
 
 
 def check_upload_rate_limit(key: str, max_requests: int = 10, window_seconds: int = 60):
@@ -186,9 +189,7 @@ def validate_file_upload(file):
         }.get(ext, set())
         valid_mimes = allowed_mimes | generic_fallbacks
         if allowed_mimes and raw_mime not in valid_mimes:
-            raise ValidationError(
-                _(f"Invalid MIME type '{content_type}' for .{ext} file.")
-            )
+            raise ValidationError(_(f"Invalid MIME type '{content_type}' for .{ext} file."))
 
     # 4. Binary signature & content validation (with pointer preservation)
     initial_pos = None
@@ -258,7 +259,9 @@ def validate_file_upload(file):
                         )
             except zipfile.BadZipFile:
                 raise ValidationError(
-                    _(f"Invalid file content for .{ext}. The file is corrupt or not a valid archive.")
+                    _(
+                        f"Invalid file content for .{ext}. The file is corrupt or not a valid archive."
+                    )
                 )
 
         elif ext == "csv":
@@ -268,13 +271,13 @@ def validate_file_upload(file):
                 raise ValidationError(_("CSV file is empty."))
             # Reject known binary executable headers first
             binary_headers = (
-                b"MZ",                     # DOS / PE executable
-                b"%PDF-",                  # PDF
-                b"PK\x03\x04",             # ZIP / OpenXML
-                b"\x7fELF",                # ELF executable
-                b"\x89PNG",                # PNG
-                b"\xff\xd8\xff",           # JPEG
-                b"\xd0\xcf\x11\xe0",       # OLECF (doc/xls)
+                b"MZ",  # DOS / PE executable
+                b"%PDF-",  # PDF
+                b"PK\x03\x04",  # ZIP / OpenXML
+                b"\x7fELF",  # ELF executable
+                b"\x89PNG",  # PNG
+                b"\xff\xd8\xff",  # JPEG
+                b"\xd0\xcf\x11\xe0",  # OLECF (doc/xls)
             )
             if any(sample.startswith(sig) for sig in binary_headers):
                 raise ValidationError(

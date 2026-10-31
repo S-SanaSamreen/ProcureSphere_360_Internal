@@ -261,3 +261,75 @@ def test_requisition_with_a_po_cannot_be_cancelled_via_api(world):
     resp = client.post(f"/api/v1/requisitions/{pr.pk}/cancel/", {}, format="json")
     assert resp.status_code == 400
     assert status_of(pr) == PurchaseRequisition.STATUS_PO_ISSUED
+
+
+# ----------------------------------------------------------------- PR completion (PRD close-out)
+def _invoice_for(po, vendor, status):
+    from apps.invoices.models import SupplierInvoice
+
+    today = timezone.localdate()
+    return SupplierInvoice.objects.create(
+        invoice_number=f"INV-{po.po_number}-{status}",
+        vendor=vendor,
+        po=po,
+        invoice_date=today,
+        due_date=today + datetime.timedelta(days=30),
+        status=status,
+        subtotal=po.subtotal,
+        total_amount=po.total_amount,
+    )
+
+
+def test_pr_completes_only_when_po_fully_received_and_invoices_paid(world):
+    from apps.invoices.models import SupplierInvoice
+    from apps.requisitions.services import refresh_requisition_fulfilment_status
+
+    pr = make_pr(world)
+    po = make_po(world, pr)
+    PurchaseOrder.objects.filter(pk=po.pk).update(status=PurchaseOrder.STATUS_ISSUED)
+    refresh_requisition_fulfilment_status(pr)
+    pr.refresh_from_db()
+    assert pr.status == PurchaseRequisition.STATUS_PO_ISSUED
+
+    # fully received but not yet paid: still PO_ISSUED
+    PurchaseOrder.objects.filter(pk=po.pk).update(status=PurchaseOrder.STATUS_COMPLETED)
+    refresh_requisition_fulfilment_status(pr)
+    pr.refresh_from_db()
+    assert pr.status == PurchaseRequisition.STATUS_PO_ISSUED
+
+    inv = _invoice_for(po, world["vendor"], SupplierInvoice.STATUS_READY_FOR_PAYMENT)
+    refresh_requisition_fulfilment_status(pr)
+    pr.refresh_from_db()
+    assert pr.status == PurchaseRequisition.STATUS_PO_ISSUED
+
+    # paid: the request is fulfilled
+    SupplierInvoice.objects.filter(pk=inv.pk).update(status=SupplierInvoice.STATUS_PAID)
+    refresh_requisition_fulfilment_status(pr)
+    pr.refresh_from_db()
+    assert pr.status == PurchaseRequisition.STATUS_COMPLETED
+    assert AuditLog.objects.filter(
+        target_model="PurchaseRequisition", target_object_id=str(pr.id)
+    ).exists()
+
+
+def test_rejected_invoice_does_not_block_completion_but_open_invoice_reverts_it(world):
+    from apps.invoices.models import SupplierInvoice
+    from apps.requisitions.services import refresh_requisition_fulfilment_status
+
+    pr = make_pr(world)
+    po = make_po(world, pr)
+    PurchaseOrder.objects.filter(pk=po.pk).update(status=PurchaseOrder.STATUS_COMPLETED)
+    _invoice_for(po, world["vendor"], SupplierInvoice.STATUS_PAID)
+    refresh_requisition_fulfilment_status(pr)
+    pr.refresh_from_db()
+    assert pr.status == PurchaseRequisition.STATUS_COMPLETED
+
+    # a rejected invoice does not block completion; an unpaid live one would
+    _invoice_for(po, world["vendor"], SupplierInvoice.STATUS_REJECTED)
+    refresh_requisition_fulfilment_status(pr)
+    pr.refresh_from_db()
+    assert pr.status == PurchaseRequisition.STATUS_COMPLETED
+    _invoice_for(po, world["vendor"], SupplierInvoice.STATUS_EXCEPTION)
+    refresh_requisition_fulfilment_status(pr)
+    pr.refresh_from_db()
+    assert pr.status == PurchaseRequisition.STATUS_PO_ISSUED

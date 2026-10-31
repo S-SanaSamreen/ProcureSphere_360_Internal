@@ -41,27 +41,32 @@ def stores_setup(db, db_roles):
     )
 
     receiver = User.objects.create_user(
+        organization=org,
         email="receiver_batch2@hpe.com",
         password="Password123!",
         role=db_roles[Role.STORES_RECEIVER],
     )
     admin_user = User.objects.create_user(
+        organization=org,
         email="admin_batch2@hpe.com",
         password="Password123!",
         role=db_roles[Role.SUPER_ADMIN],
         is_superuser=True,
     )
     requester = User.objects.create_user(
+        organization=org,
         email="requester_batch2@hpe.com",
         password="Password123!",
         role=db_roles[Role.REQUESTER],
     )
     auditor = User.objects.create_user(
+        organization=org,
         email="auditor_batch2@hpe.com",
         password="Password123!",
         role=db_roles[Role.AUDITOR],
     )
     staff_user = User.objects.create_user(
+        organization=org,
         email="staff_no_role@hpe.com",
         password="Password123!",
         is_staff=True,
@@ -751,7 +756,10 @@ def test_day13_security_no_staff_bypass_on_returns_and_corrections(stores_setup)
     )
     rejection.refresh_from_db()
     assert rejection.returned_to_vendor is False
-    assert any("Permission Denied" in m.message for m in resp1.context["messages"])
+    # role-less staff are now stopped earlier, by the fail-closed middleware (403)
+    assert resp1.status_code == 403 or any(
+        "Permission Denied" in m.message for m in resp1.context["messages"]
+    )
 
     # 2. Staff cannot correct receipt quantity
     resp2 = client.post(
@@ -761,7 +769,10 @@ def test_day13_security_no_staff_bypass_on_returns_and_corrections(stores_setup)
     )
     r_line1.refresh_from_db()
     assert r_line1.quantity_received == Decimal("20.00")
-    assert any("Permission Denied" in m.message for m in resp2.context["messages"])
+    # role-less staff are now stopped earlier, by the fail-closed middleware (403)
+    assert resp2.status_code == 403 or any(
+        "Permission Denied" in m.message for m in resp2.context["messages"]
+    )
 
 
 # ==============================================================================

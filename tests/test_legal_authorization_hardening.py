@@ -18,6 +18,7 @@ from apps.contracts.services import (
     submit_for_legal_review_service,
 )
 from apps.vendors.models import Vendor, VendorCategory
+from tests.org_helpers import create_org_user
 
 pytestmark = pytest.mark.django_db
 
@@ -64,59 +65,59 @@ def auth_fixture(db):
         address="200 Hardware Blvd, Suite 20, Dallas, TX",
     )
 
-    super_admin = User.objects.create_user(
+    super_admin = create_org_user(
         email="super.admin.harden@test.local",
         password="Password123!",
         role=roles[Role.SUPER_ADMIN],
         is_superuser=True,
     )
-    legal_mgr = User.objects.create_user(
+    legal_mgr = create_org_user(
         email="legal.mgr.harden@test.local",
         password="Password123!",
         role=roles[Role.LEGAL_MGR],
     )
-    proc_mgr = User.objects.create_user(
+    proc_mgr = create_org_user(
         email="proc.mgr.harden@test.local",
         password="Password123!",
         role=roles[Role.PROC_MGR],
     )
-    proc_exec = User.objects.create_user(
+    proc_exec = create_org_user(
         email="proc.exec.harden@test.local",
         password="Password123!",
         role=roles[Role.PROC_EXEC],
     )
-    finance_ap = User.objects.create_user(
+    finance_ap = create_org_user(
         email="finance.ap.harden@test.local",
         password="Password123!",
         role=roles[Role.FINANCE_AP],
     )
-    auditor = User.objects.create_user(
+    auditor = create_org_user(
         email="auditor.harden@test.local",
         password="Password123!",
         role=roles[Role.AUDITOR],
     )
-    requester = User.objects.create_user(
+    requester = create_org_user(
         email="requester.harden@test.local",
         password="Password123!",
         role=roles[Role.REQUESTER],
     )
-    stores_receiver = User.objects.create_user(
+    stores_receiver = create_org_user(
         email="stores.receiver.harden@test.local",
         password="Password123!",
         role=roles[Role.STORES_RECEIVER],
     )
-    dept_approver = User.objects.create_user(
+    dept_approver = create_org_user(
         email="dept.approver.harden@test.local",
         password="Password123!",
         role=roles[Role.DEPT_APPROVER],
     )
-    vendor_user_a = User.objects.create_user(
+    vendor_user_a = create_org_user(
         email="vendor.user.a@test.local",
         password="Password123!",
         role=roles[Role.VENDOR_USER],
         vendor=vendor_a,
     )
-    vendor_user_b = User.objects.create_user(
+    vendor_user_b = create_org_user(
         email="vendor.user.b@test.local",
         password="Password123!",
         role=roles[Role.VENDOR_USER],
@@ -194,7 +195,8 @@ def test_unauthenticated_requests_redirect_to_login(client, auth_fixture):
 
 def test_legal_dashboard_authorized_roles(client, auth_fixture):
     """
-    Legal Managers and Super Admins are explicitly authorized to access the Legal Dashboard.
+    Legal Managers access the Legal Dashboard; the Super Admin is read-only and has no legal
+    desk (PRD 3.6), so it is redirected away.
     """
     # Legal Manager
     client.force_login(auth_fixture["legal_mgr"])
@@ -205,20 +207,22 @@ def test_legal_dashboard_authorized_roles(client, auth_fixture):
     # Super Admin
     client.force_login(auth_fixture["super_admin"])
     res_admin = client.get(reverse("contracts_dashboard"))
-    assert res_admin.status_code == 200
-    assert "Legal Compliance Desk" in res_admin.content.decode()
+    assert res_admin.status_code == 302
 
 
 def test_legal_dashboard_blocked_for_unauthorized_roles(client, auth_fixture):
     """
-    Requesters, Stores Receivers, Dept Approvers, Proc Execs, and Vendor Users
-    cannot access the Legal Dashboard; they are redirected with Permission Denied.
+    Requesters, Stores Receivers, Dept Approvers and Proc Execs cannot access the Legal
+    Dashboard; they are redirected with Permission Denied. Vendor Users never reach it at all:
+    the vendor-isolation middleware refuses internal URLs outright (403).
     """
+    client.force_login(auth_fixture["vendor_user_a"])
+    assert client.get(reverse("contracts_dashboard"), follow=False).status_code == 403
+
     unauthorized_users = [
         auth_fixture["requester"],
         auth_fixture["stores_receiver"],
         auth_fixture["dept_approver"],
-        auth_fixture["vendor_user_a"],
         auth_fixture["proc_exec"],
     ]
 
@@ -243,8 +247,9 @@ def test_legal_dashboard_blocked_for_unauthorized_roles(client, auth_fixture):
 
 def test_contract_register_authorized_roles(client, auth_fixture):
     """
-    All documented contract-viewing roles per RBAC matrix can view the register:
-    Super Admin, Legal Mgr, Proc Mgr, Proc Exec, Finance/AP, Auditor, and Vendor User (scoped).
+    All internal contract-viewing roles per RBAC matrix can view the register:
+    Super Admin, Legal Mgr, Proc Mgr, Proc Exec, Finance/AP and Auditor. Vendor users are served
+    by the vendor portal instead (see test_vendor_users_see_only_their_own_contracts_in_the_portal).
     """
     authorized_users = [
         auth_fixture["super_admin"],
@@ -253,7 +258,6 @@ def test_contract_register_authorized_roles(client, auth_fixture):
         auth_fixture["proc_exec"],
         auth_fixture["finance_ap"],
         auth_fixture["auditor"],
-        auth_fixture["vendor_user_a"],
     ]
 
     for user in authorized_users:
@@ -295,10 +299,18 @@ def test_contract_register_blocked_for_unauthorized_roles(client, auth_fixture):
 
 def test_contract_detail_authorized_roles(client, auth_fixture):
     """
-    Legitimate viewing roles can view contract details:
-    Super Admin, Legal Mgr, Proc Mgr, Proc Exec, Finance/AP, Auditor, and the contract's own Vendor User.
+    Legitimate internal viewing roles can view contract details:
+    Super Admin, Legal Mgr, Proc Mgr, Proc Exec, Finance/AP and Auditor. A vendor user
+    (even the contract's own vendor) is refused on the internal URL (403).
     """
     contract_a = auth_fixture["contract_a"]
+    client.force_login(auth_fixture["vendor_user_a"])
+    assert (
+        client.get(
+            reverse("contract_detail", kwargs={"contract_id": contract_a.id}), follow=False
+        ).status_code
+        == 403
+    )
     authorized_users = [
         auth_fixture["super_admin"],
         auth_fixture["legal_mgr"],
@@ -306,7 +318,6 @@ def test_contract_detail_authorized_roles(client, auth_fixture):
         auth_fixture["proc_exec"],
         auth_fixture["finance_ap"],
         auth_fixture["auditor"],
-        auth_fixture["vendor_user_a"],
     ]
 
     for user in authorized_users:
@@ -345,8 +356,8 @@ def test_contract_detail_blocked_by_guessing_id(client, auth_fixture):
 
 def test_contract_detail_cross_vendor_isolation(client, auth_fixture):
     """
-    Vendor User B cannot view Contract A belonging to Vendor A.
-    They are redirected to the contract register with a Permission Denied error.
+    Vendor User B cannot reach Contract A: the internal detail URL refuses every vendor (403),
+    and the vendor portal only ever lists the vendor's own contracts.
     """
     contract_a = auth_fixture["contract_a"]
     vendor_user_b = auth_fixture["vendor_user_b"]
@@ -355,14 +366,28 @@ def test_contract_detail_cross_vendor_isolation(client, auth_fixture):
     response = client.get(
         reverse("contract_detail", kwargs={"contract_id": contract_a.id}), follow=False
     )
-    assert response.status_code == 302
-    assert response.url == reverse("contracts_list")
+    assert response.status_code == 403
+    portal = client.get(reverse("vendor_contracts"))
+    assert portal.status_code == 200
+    assert contract_a.contract_number not in portal.content.decode()
 
-    response_follow = client.get(
-        reverse("contract_detail", kwargs={"contract_id": contract_a.id}), follow=True
-    )
-    messages_list = list(response_follow.context["messages"])
-    assert any("Permission Denied" in str(m) for m in messages_list)
+
+def test_vendor_users_see_only_their_own_contracts_in_the_portal(client, auth_fixture):
+    """The vendor portal is where vendors view contracts: scoped to their own vendor record."""
+    contract_a = auth_fixture["contract_a"]
+    contract_b = auth_fixture["contract_b"]
+
+    client.force_login(auth_fixture["vendor_user_a"])
+    assert client.get(reverse("contracts_list"), follow=False).status_code == 403  # internal
+    page_a = client.get(reverse("vendor_contracts"))
+    assert page_a.status_code == 200
+    assert contract_a.contract_number in page_a.content.decode()
+    assert contract_b.contract_number not in page_a.content.decode()
+
+    client.force_login(auth_fixture["vendor_user_b"])
+    page_b = client.get(reverse("vendor_contracts"))
+    assert contract_b.contract_number in page_b.content.decode()
+    assert contract_a.contract_number not in page_b.content.decode()
 
 
 # ==============================================================================

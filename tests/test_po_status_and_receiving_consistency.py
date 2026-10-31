@@ -38,12 +38,14 @@ def consistency_setup(db, db_roles):
     )
 
     receiver = User.objects.create_user(
+        organization=org,
         email="receiver_cons@hpe.com",
         password="Password123!",
         role=db_roles[Role.STORES_RECEIVER],
     )
 
     buyer = User.objects.create_user(
+        organization=org,
         email="buyer_cons@hpe.com",
         password="Password123!",
         role=db_roles[Role.PROC_EXEC],

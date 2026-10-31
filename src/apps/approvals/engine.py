@@ -27,6 +27,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.accounts.models import Role, User
+from apps.accounts.permissions import is_non_transacting_actor
 from apps.audit.models import AuditLog
 
 from .models import (
@@ -70,11 +71,12 @@ def select_policy(module, amount, department=None, cost_center=None, *, exceptio
 
 
 def _ensure_default_steps(policy):
-    """Legacy: a PR / PO-amendment policy created without steps gets the historical defaults."""
+    """A PR / PO-amendment policy created without steps gets the defaults (PR: Department Approver, then Finance/AP budget review - PRD 4.2)."""
     if policy.steps.exists():
         return
     dept_role = Role.objects.filter(code=Role.DEPT_APPROVER).first()
     proc_role = Role.objects.filter(code=Role.PROC_MGR).first()
+    finance_role = Role.objects.filter(code=Role.FINANCE_AP).first()
     if policy.module == ApprovalPolicy.MODULE_PR:
         if dept_role:
             ApprovalStep.objects.get_or_create(
@@ -82,14 +84,11 @@ def _ensure_default_steps(policy):
                 step_number=1,
                 defaults={"approver_role": dept_role, "description": "Department Manager Approval"},
             )
-        if proc_role:
+        if finance_role:
             ApprovalStep.objects.get_or_create(
                 policy=policy,
                 step_number=2,
-                defaults={
-                    "approver_role": proc_role,
-                    "description": "Procurement Manager Approval",
-                },
+                defaults={"approver_role": finance_role, "description": "Budget Review"},
             )
     elif policy.module == ApprovalPolicy.MODULE_PO_AMENDMENT and proc_role:
         ApprovalStep.objects.get_or_create(
@@ -150,12 +149,15 @@ def open_approval_request(
     exception_reason="",
     required=True,
     record_submission=True,
+    policy=None,
 ):
     """
     Starts (or returns the already pending) approval cycle for ``target``.
 
     required=True  : no matching policy -> ValidationError (fail closed)
     required=False : no matching policy -> returns None (that transaction needs no approval)
+    policy         : route under this exact policy instead of selecting one (exception-route
+                     chains are never selected as a normal chain)
     """
     target_name = target.__class__.__name__
     existing = (
@@ -172,7 +174,7 @@ def open_approval_request(
         return existing
 
     amount = Decimal(str(amount or 0)).quantize(Decimal("0.01"))
-    policy = select_policy(module, amount, department, cost_center)
+    policy = policy or select_policy(module, amount, department, cost_center)
     if not policy:
         if required:
             raise no_policy_error(module, amount, department, cost_center)
@@ -291,6 +293,12 @@ def authorize_step(request, step, actor):
     are covering as an active delegate). Raises ValidationError when the actor may not take
     this step.
     """
+    if is_non_transacting_actor(actor):
+        raise ValidationError(
+            "The Super Admin and the platform administrator configure the system; they cannot "
+            "approve, reject or return business requests. Fix the approval policy or its users "
+            "so that an eligible approver exists."
+        )
     last_error = None
     for principal in acting_principals(actor):
         try:
@@ -298,8 +306,6 @@ def authorize_step(request, step, actor):
                 return principal
         except ValidationError as exc:
             last_error = exc
-    if actor.is_superuser:
-        return actor  # administrative override of the role requirement (SoD still applies)
     if last_error:
         raise last_error
     raise ValidationError(
@@ -331,8 +337,8 @@ def user_in_policy_roles(module, user) -> bool:
     """
     if not getattr(user, "is_authenticated", False):
         return False
-    if user.is_superuser:
-        return True
+    if is_non_transacting_actor(user):
+        return False
     steps = ApprovalStep.objects.filter(
         policy__module=module, policy__is_active=True, policy__superseded_by__isnull=True
     )
@@ -474,7 +480,7 @@ def approve_step(*, request, actor, comments="", states=None):
 
 @transaction.atomic
 def reject_request(*, request, actor, comments, states=None):
-    """Any approver on the chain (or a Super Admin) may reject; a justification is mandatory."""
+    """Any approver on the chain may reject; a justification is mandatory."""
     request = ApprovalRequest.objects.select_for_update().get(pk=request.pk)
     if request.status != ApprovalRequest.STATUS_PENDING:
         raise ValidationError(
@@ -483,15 +489,14 @@ def reject_request(*, request, actor, comments, states=None):
     if not (comments or "").strip():
         raise ValidationError("Rejection justification comments are mandatory.")
 
-    allowed = actor.is_superuser
-    if not allowed:
-        for step in request.steps:
-            try:
-                authorize_step(request, step, actor)
-                allowed = True
-                break
-            except ValidationError:
-                continue
+    allowed = False
+    for step in request.steps:
+        try:
+            authorize_step(request, step, actor)
+            allowed = True
+            break
+        except ValidationError:
+            continue
     if not allowed:
         raise ValidationError(f"User '{actor.email}' is not an approver for this request.")
 
@@ -506,6 +511,41 @@ def reject_request(*, request, actor, comments, states=None):
         new_state=states[1] if states else "REJECTED",
         comments=comments.strip(),
         step=request.active_step,
+    )
+    return request
+
+
+@transaction.atomic
+def return_request(*, request, actor, comments, states=None):
+    """
+    The approver on the active step sends the request back to its maker for
+    clarification. A comment is mandatory. The request is closed as RETURNED and kept as
+    history; the maker resubmits as a brand-new request bound to the policy version then current.
+    """
+    request = ApprovalRequest.objects.select_for_update().get(pk=request.pk)
+    if request.status != ApprovalRequest.STATUS_PENDING:
+        raise ValidationError(
+            f"This approval request is already {request.get_status_display().lower()}."
+        )
+    if not (comments or "").strip():
+        raise ValidationError("A comment explaining what needs clarification is mandatory.")
+    step = request.active_step
+    if step is not None:
+        authorize_step(request, step, actor)
+    else:
+        raise ValidationError(f"User '{actor.email}' is not an approver for this request.")
+
+    request.status = ApprovalRequest.STATUS_RETURNED
+    request.decided_at = timezone.now()
+    request.save(update_fields=["status", "decided_at", "updated_at"])
+    _record_action(
+        request,
+        actor=actor,
+        action=ApprovalAction.ACTION_RETURN,
+        previous_state=states[0] if states else "PENDING",
+        new_state=states[1] if states else "RETURNED",
+        comments=comments.strip(),
+        step=step,
     )
     return request
 
@@ -546,6 +586,9 @@ def pending_requests_for_user(user, *, modules=None):
     )
     if modules:
         qs = qs.filter(module__in=modules)
+    from apps.core.tenancy import scope_approval_requests
+
+    qs = scope_approval_requests(qs, user)
     return [r for r in qs.order_by("created_at") if can_act(r, user)]
 
 

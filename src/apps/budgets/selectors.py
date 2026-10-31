@@ -40,9 +40,6 @@ def scope_budgets_queryset(qs, user):
     if scoped_org:
         return qs.filter(cost_center__department__organization=scoped_org)
 
-    if getattr(user, "is_staff", False):
-        return qs
-
     return qs.none()
 
 
@@ -80,9 +77,6 @@ def scope_spend_ledger_queryset(qs, user):
     scoped_org = getattr(user, "effective_organization", None)
     if scoped_org:
         return qs.filter(budget__cost_center__department__organization=scoped_org)
-
-    if getattr(user, "is_staff", False):
-        return qs
 
     return qs.none()
 

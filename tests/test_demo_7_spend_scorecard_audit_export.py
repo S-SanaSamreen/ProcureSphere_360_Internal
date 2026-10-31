@@ -16,8 +16,8 @@ from apps.reports.services import (
     get_supplier_performance_report,
 )
 from apps.requisitions.services import create_purchase_requisition_service
-from apps.scorecards.services import calculate_vendor_scorecard_service
-from apps.vendors.models import VendorCategory
+from apps.scorecards.services import calculate_vendor_scorecard_service, current_period_label
+from apps.vendors.models import Vendor, VendorCategory
 from apps.vendors.services import register_vendor_service
 
 
@@ -66,6 +66,9 @@ def test_demo_7_spend_scorecard_and_audited_report_export():
         email="accounts@omnicloud.com",
         address="300 Cloud Way",
     )
+    # POs can only be issued to ACTIVE vendors (vendor lifecycle gate)
+    Vendor.objects.filter(pk=vendor.pk).update(status=Vendor.STATUS_ACTIVE)
+    vendor.refresh_from_db()
 
     pr = create_purchase_requisition_service(
         title="High Performance Switches",
@@ -83,6 +86,10 @@ def test_demo_7_spend_scorecard_and_audited_report_export():
         ],
     )
     check_and_reserve_budget_service(requisition=pr, requested_by_user=proc_mgr)
+
+    # a PO can only be raised against an APPROVED requisition
+    type(pr).objects.filter(pk=pr.pk).update(status="APPROVED")
+    pr.refresh_from_db()
 
     po = generate_purchase_order_service(
         vendor=vendor,
@@ -106,7 +113,7 @@ def test_demo_7_spend_scorecard_and_audited_report_export():
     # 1. Automated Vendor Scorecard calculation
     scorecard = calculate_vendor_scorecard_service(
         vendor=vendor,
-        evaluation_period="Q1-2026",
+        evaluation_period=current_period_label(),  # GRN data is dated today
         evaluated_by_user=proc_mgr,
         comments="80% acceptance rate on 48-Port Network Switches delivery.",
     )

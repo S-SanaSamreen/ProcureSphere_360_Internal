@@ -22,7 +22,7 @@
                 <span class="text-muted small">Quality inspection metrics, delivery reliability, and weighted scorecards</span>
             </div>
             <h1 class="h3 fw-bold text-dark mb-1 font-heading">Supplier Performance & Scorecards</h1>
-            <p class="text-muted small mb-0">Multi-criteria vendor scorecard evaluations (30% Delivery + 30% Quality + 20% Price + 20% Compliance).</p>
+            <p class="text-muted small mb-0">Multi-criteria vendor scorecard evaluations across six weighted dimensions: Delivery, Quality, Price, Responsiveness, Compliance and SLA (weights set per organization by the Super Admin).</p>
         </div>
         <div class="d-flex align-items-center gap-2">
             <button onclick="openCompareModal()" class="btn btn-outline-primary btn-sm rounded-pill px-3 shadow-2xs">
@@ -191,10 +191,12 @@
                             <th class="ps-4">Supplier</th>
                             <th>Category</th>
                             <th>Period</th>
-                            <th>Delivery (30%)</th>
-                            <th>Quality (30%)</th>
-                            <th>Price (20%)</th>
-                            <th>Compliance (20%)</th>
+                            <th>Delivery</th>
+                            <th>Quality</th>
+                            <th>Price</th>
+                            <th>Responsiveness</th>
+                            <th>Compliance</th>
+                            <th>SLA</th>
                             <th>Composite Score</th>
                             <th>Status</th>
                             <th class="pe-4 text-end">Action</th>
@@ -202,7 +204,7 @@
                     </thead>
                     <tbody id="scorecardsTableBody">
                         <tr>
-                            <td colspan="10" class="text-center py-5 text-muted">
+                            <td colspan="12" class="text-center py-5 text-muted">
                                 <div class="spinner-border spinner-border-sm text-amber me-2"></div>
                                 Loading scorecards...
                             </td>
@@ -297,6 +299,7 @@
 <script>
     let currentPerfPage = 1;
     let allScorecardsCache = [];
+    const fmtScore = v => (v === null || v === undefined) ? '<span class="text-muted">-</span>' : Number(v).toFixed(1) + '%';
 
     document.addEventListener('DOMContentLoaded', () => {
         loadPerformanceData(1);
@@ -341,7 +344,7 @@
 
         tableBody.innerHTML = `
             <tr>
-                <td colspan="10" class="text-center py-5 text-muted">
+                <td colspan="12" class="text-center py-5 text-muted">
                     <div class="spinner-border spinner-border-sm text-amber me-2"></div>
                     Loading scorecards...
                 </td>
@@ -380,7 +383,7 @@
             if (scorecards.length === 0) {
                 tableBody.innerHTML = `
                     <tr>
-                        <td colspan="10" class="text-center py-5">
+                        <td colspan="12" class="text-center py-5">
                             <i class="fa-solid fa-award text-muted fs-2 mb-2 d-block"></i>
                             <div class="fw-bold text-dark">No Supplier Scorecards Found</div>
                             <div class="text-muted small">Try adjusting your filters or evaluation period.</div>
@@ -408,13 +411,15 @@
                             </td>
                             <td><span class="badge bg-slate-100 text-dark border">${sc.vendor_category}</span></td>
                             <td><span class="badge bg-light text-dark border fw-semibold">${sc.evaluation_period}</span></td>
-                            <td><span class="fw-semibold text-cyan">${Number(sc.delivery_score).toFixed(1)}%</span></td>
-                            <td><span class="fw-semibold text-emerald">${Number(sc.quality_score).toFixed(1)}%</span></td>
-                            <td><span class="fw-semibold text-indigo">${Number(sc.price_score).toFixed(1)}%</span></td>
-                            <td><span class="fw-semibold text-warning">${Number(sc.compliance_score).toFixed(1)}%</span></td>
+                            <td><span class="fw-semibold text-cyan">${fmtScore(sc.delivery_score)}</span></td>
+                            <td><span class="fw-semibold text-emerald">${fmtScore(sc.quality_score)}</span></td>
+                            <td><span class="fw-semibold text-indigo">${fmtScore(sc.price_score)}</span></td>
+                            <td><span class="fw-semibold">${fmtScore(sc.responsiveness_score)}</span></td>
+                            <td><span class="fw-semibold text-warning">${fmtScore(sc.compliance_score)}</span></td>
+                            <td><span class="fw-semibold">${fmtScore(sc.sla_score)}</span></td>
                             <td>
                                 <span class="fw-bold text-dark">${comp.toFixed(1)}</span>
-                                <span class="small text-muted">/ 100</span>
+                                <span class="small text-muted">/ 100${sc.rating_band ? ' &middot; ' + sc.rating_band : ''}</span>
                             </td>
                             <td>
                                 <span class="badge ${badgeClass} rounded-pill px-2 py-1 fw-bold">${statusLabel}</span>

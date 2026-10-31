@@ -63,6 +63,7 @@ def stores_dashboard_test_world(db, db_roles):
         email="stores_receiver@test.local",
         password="Password123!",
         role=db_roles[Role.STORES_RECEIVER],
+        organization=org,
         department=dept,
     )
     admin_user = User.objects.create_user(
@@ -75,6 +76,7 @@ def stores_dashboard_test_world(db, db_roles):
         email="stores_auditor@test.local",
         password="Password123!",
         role=db_roles[Role.AUDITOR],
+        organization=org,
     )
     requester_user = User.objects.create_user(
         email="stores_requester@test.local",
@@ -474,8 +476,8 @@ def test_stores_dashboard_authorization_and_blocking(stores_dashboard_test_world
     # 2. Vendor user
     client.force_login(stores_dashboard_test_world["vendor_user"])
     vendor_response = client.get(reverse("receipt_dashboard"))
-    assert vendor_response.status_code == 302
-    assert reverse("vendor_dashboard") in vendor_response.url
+    # refused by the vendor-isolation middleware (DEF-001) rather than redirected
+    assert vendor_response.status_code == 403
 
     # 3. Requester user
     client.force_login(stores_dashboard_test_world["requester_user"])
@@ -515,7 +517,9 @@ def test_stores_dashboard_integer_metrics_preserved(stores_dashboard_test_world)
 
 
 @pytest.mark.django_db
-def test_inspection_dispatches_notifications_on_rejection_and_acceptance(stores_dashboard_test_world):
+def test_inspection_dispatches_notifications_on_rejection_and_acceptance(
+    stores_dashboard_test_world,
+):
     """
     Verify quality inspection dispatches:
     - TYPE_EXCEPTION_RAISED to requester and PO creator when quantities are rejected.

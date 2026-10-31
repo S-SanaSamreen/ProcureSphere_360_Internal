@@ -33,4 +33,5 @@ def scope_invoices_queryset(qs, user):
             | Q(po__cost_center__isnull=True, vendor__organization__isnull=True)
         )
 
-    return qs
+    # Fail closed: an internal user with no organisation sees no invoices.
+    return qs.none()

@@ -18,6 +18,7 @@ django-celery-beat>=2.6.0
 
 # Security, CORS & Throttling
 django-axes>=6.3.0
+pyotp>=2.9.0
 django-cors-headers>=4.3.1
 whitenoise>=6.6.0
 

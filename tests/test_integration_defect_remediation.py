@@ -33,11 +33,16 @@ def remediation_setup(db, tmp_path, monkeypatch):
     dept_it = Department.objects.create(name="IT Operations", code="IT-REM", organization=org)
     dept_hr = Department.objects.create(name="HR Operations", code="HR-REM", organization=org)
 
-    cc_it = CostCenter.objects.create(name="IT Infrastructure", code="CC-IT-REM", department=dept_it)
+    cc_it = CostCenter.objects.create(
+        name="IT Infrastructure", code="CC-IT-REM", department=dept_it
+    )
     cc_hr = CostCenter.objects.create(name="HR Recruitment", code="CC-HR-REM", department=dept_hr)
 
     fiscal_period = FiscalPeriod.objects.create(
-        organization=org, year=2026, period_number=1, name="Q1-2026",
+        organization=org,
+        year=2026,
+        period_number=1,
+        name="Q1-2026",
         start_date=timezone.localdate() - timezone.timedelta(days=30),
         end_date=timezone.localdate() + timezone.timedelta(days=300),
     )
@@ -52,22 +57,44 @@ def remediation_setup(db, tmp_path, monkeypatch):
     category = VendorCategory.objects.create(name="Hardware", code="CAT-HW-REM")
 
     # Roles
-    role_admin, _ = Role.objects.get_or_create(code=Role.SUPER_ADMIN, defaults={"name": "Super Admin"})
+    role_admin, _ = Role.objects.get_or_create(
+        code=Role.SUPER_ADMIN, defaults={"name": "Super Admin"}
+    )
     role_req, _ = Role.objects.get_or_create(code=Role.REQUESTER, defaults={"name": "Requester"})
-    role_approver, _ = Role.objects.get_or_create(code=Role.DEPT_APPROVER, defaults={"name": "Dept Approver"})
-    role_procexec, _ = Role.objects.get_or_create(code=Role.PROC_EXEC, defaults={"name": "Proc Exec"})
+    role_approver, _ = Role.objects.get_or_create(
+        code=Role.DEPT_APPROVER, defaults={"name": "Dept Approver"}
+    )
+    role_procexec, _ = Role.objects.get_or_create(
+        code=Role.PROC_EXEC, defaults={"name": "Proc Exec"}
+    )
     role_procmgr, _ = Role.objects.get_or_create(code=Role.PROC_MGR, defaults={"name": "Proc Mgr"})
-    role_finance, _ = Role.objects.get_or_create(code=Role.FINANCE_AP, defaults={"name": "Finance AP"})
-    role_stores, _ = Role.objects.get_or_create(code=Role.STORES_RECEIVER, defaults={"name": "Stores Receiver"})
-    role_legal, _ = Role.objects.get_or_create(code=Role.LEGAL_MGR, defaults={"name": "Legal Manager"})
-    role_vendor, _ = Role.objects.get_or_create(code=Role.VENDOR_USER, defaults={"name": "Vendor User"})
+    role_finance, _ = Role.objects.get_or_create(
+        code=Role.FINANCE_AP, defaults={"name": "Finance AP"}
+    )
+    role_stores, _ = Role.objects.get_or_create(
+        code=Role.STORES_RECEIVER, defaults={"name": "Stores Receiver"}
+    )
+    role_legal, _ = Role.objects.get_or_create(
+        code=Role.LEGAL_MGR, defaults={"name": "Legal Manager"}
+    )
+    role_vendor, _ = Role.objects.get_or_create(
+        code=Role.VENDOR_USER, defaults={"name": "Vendor User"}
+    )
 
     # Users
     admin = User.objects.create_user(
-        email="admin.rem@test.local", password="Password123!", role=role_admin, is_staff=True, is_superuser=True
+        email="admin.rem@test.local",
+        password="Password123!",
+        role=role_admin,
+        is_staff=True,
+        is_superuser=True,
     )
     requester = User.objects.create_user(
-        email="req.it@test.local", password="Password123!", role=role_req, department=dept_it, cost_center=cc_it
+        email="req.it@test.local",
+        password="Password123!",
+        role=role_req,
+        department=dept_it,
+        cost_center=cc_it,
     )
     approver = User.objects.create_user(
         email="app.it@test.local", password="Password123!", role=role_approver, department=dept_it
@@ -89,18 +116,27 @@ def remediation_setup(db, tmp_path, monkeypatch):
     )
 
     vendor_active = Vendor.objects.create(
-        vendor_number="VEN-REM-01", legal_name="Cisco Global",
-        tax_identification_number="TIN-REM-01", category=category, organization=org,
+        vendor_number="VEN-REM-01",
+        legal_name="Cisco Global",
+        tax_identification_number="TIN-REM-01",
+        category=category,
+        organization=org,
         status=Vendor.STATUS_ACTIVE,
     )
     vendor_draft = Vendor.objects.create(
-        vendor_number="VEN-REM-02", legal_name="Draft Supplier",
-        tax_identification_number="TIN-REM-02", category=category, organization=org,
+        vendor_number="VEN-REM-02",
+        legal_name="Draft Supplier",
+        tax_identification_number="TIN-REM-02",
+        category=category,
+        organization=org,
         status=Vendor.STATUS_DRAFT,
     )
     vendor_suspended = Vendor.objects.create(
-        vendor_number="VEN-REM-03", legal_name="Suspended Supplier",
-        tax_identification_number="TIN-REM-03", category=category, organization=org,
+        vendor_number="VEN-REM-03",
+        legal_name="Suspended Supplier",
+        tax_identification_number="TIN-REM-03",
+        category=category,
+        organization=org,
         status=Vendor.STATUS_SUSPENDED,
     )
 
@@ -116,8 +152,10 @@ def remediation_setup(db, tmp_path, monkeypatch):
         f.write(b"%PDF-1.4 Cisco Tax Verification Document")
 
     VendorDocument.objects.create(
-        vendor=vendor_active, document_type=VendorDocument.DOC_TYPE_TAX,
-        title="Cisco Tax Clearance", file=doc_rel,
+        vendor=vendor_active,
+        document_type=VendorDocument.DOC_TYPE_TAX,
+        title="Cisco Tax Clearance",
+        file=doc_rel,
     )
 
     contract_rel = "contracts/sla_cisco.pdf"
@@ -150,9 +188,19 @@ def remediation_setup(db, tmp_path, monkeypatch):
 
 # ─── DEF-001, DEF-002, DEF-003 Tests ──────────────────────────────────────────
 
+
 def test_def_001_demo_roles_are_not_superuser(remediation_setup):
     """DEF-001: Non-superadmin users must not have is_superuser or is_staff."""
-    for role_name in ["requester", "approver", "proc_exec", "proc_mgr", "finance", "stores", "legal", "vendor_user"]:
+    for role_name in [
+        "requester",
+        "approver",
+        "proc_exec",
+        "proc_mgr",
+        "finance",
+        "stores",
+        "legal",
+        "vendor_user",
+    ]:
         user = remediation_setup[role_name]
         assert not user.is_superuser, f"{role_name} has is_superuser=True"
         assert not user.is_staff, f"{role_name} has is_staff=True"
@@ -175,17 +223,30 @@ def test_def_003_vendor_blocked_from_internal_staff_pages(client, remediation_se
     """DEF-003: Vendor users receive 403 when trying to access internal staff UI and API routes."""
     client.force_login(remediation_setup["vendor_user"])
 
-    for url in ["/requisitions/", "/contracts/", "/orders/", "/invoices/", "/budgets/", "/reports/"]:
+    for url in [
+        "/requisitions/",
+        "/contracts/",
+        "/orders/",
+        "/invoices/",
+        "/budgets/",
+        "/reports/",
+    ]:
         resp = client.get(url)
         assert resp.status_code == 403, f"Vendor improperly accessed {url}"
 
-    for api_url in ["/api/v1/requisitions/", "/api/v1/contracts/", "/api/v1/budgets/", "/api/v1/reports/"]:
+    for api_url in [
+        "/api/v1/requisitions/",
+        "/api/v1/contracts/",
+        "/api/v1/budgets/",
+        "/api/v1/reports/",
+    ]:
         resp = client.get(api_url)
         assert resp.status_code == 403
         assert resp.json().get("error", {}).get("code") == "FORBIDDEN"
 
 
 # ─── DEF-004, DEF-006 Tests ───────────────────────────────────────────────────
+
 
 def test_def_004_requester_budget_queryset_scoping(remediation_setup):
     """DEF-004: Requester only sees their own cost center budget via API."""
@@ -203,17 +264,21 @@ def test_def_006_proc_exec_cannot_create_contracts(remediation_setup):
     """DEF-006: Procurement Executive cannot POST contracts via API (403 Forbidden)."""
     client = APIClient()
     client.force_authenticate(user=remediation_setup["proc_exec"])
-    resp = client.post("/api/v1/contracts/", {
-        "title": "Unauthorized Contract",
-        "vendor": str(remediation_setup["vendor_active"].id),
-        "contract_value": "10000.00",
-        "start_date": "2026-01-01",
-        "end_date": "2026-12-31",
-    })
+    resp = client.post(
+        "/api/v1/contracts/",
+        {
+            "title": "Unauthorized Contract",
+            "vendor": str(remediation_setup["vendor_active"].id),
+            "contract_value": "10000.00",
+            "start_date": "2026-01-01",
+            "end_date": "2026-12-31",
+        },
+    )
     assert resp.status_code == 403
 
 
 # ─── DEF-008, DEF-009, DEF-010, DEF-011 Tests ────────────────────────────────
+
 
 def test_def_008_cannot_create_po_for_inactive_or_draft_vendor(remediation_setup):
     """DEF-008: PO creation for DRAFT or SUSPENDED vendor is blocked."""
@@ -221,19 +286,27 @@ def test_def_008_cannot_create_po_for_inactive_or_draft_vendor(remediation_setup
     client.force_authenticate(user=remediation_setup["proc_exec"])
 
     # Attempt PO for draft vendor
-    resp_draft = client.post("/api/v1/purchase-orders/", {
-        "vendor": str(remediation_setup["vendor_draft"].id),
-        "cost_center": str(remediation_setup["cc_it"].id),
-        "lines": [{"item_description": "Widget", "quantity": "10", "unit_price": "50.00"}],
-    }, format="json")
+    resp_draft = client.post(
+        "/api/v1/purchase-orders/",
+        {
+            "vendor": str(remediation_setup["vendor_draft"].id),
+            "cost_center": str(remediation_setup["cc_it"].id),
+            "lines": [{"item_description": "Widget", "quantity": "10", "unit_price": "50.00"}],
+        },
+        format="json",
+    )
     assert resp_draft.status_code == 400
 
     # Attempt PO for suspended vendor
-    resp_susp = client.post("/api/v1/purchase-orders/", {
-        "vendor": str(remediation_setup["vendor_suspended"].id),
-        "cost_center": str(remediation_setup["cc_it"].id),
-        "lines": [{"item_description": "Widget", "quantity": "10", "unit_price": "50.00"}],
-    }, format="json")
+    resp_susp = client.post(
+        "/api/v1/purchase-orders/",
+        {
+            "vendor": str(remediation_setup["vendor_suspended"].id),
+            "cost_center": str(remediation_setup["cc_it"].id),
+            "lines": [{"item_description": "Widget", "quantity": "10", "unit_price": "50.00"}],
+        },
+        format="json",
+    )
     assert resp_susp.status_code == 400
 
 
@@ -242,18 +315,26 @@ def test_def_009_negative_line_items_on_po_rejected(remediation_setup):
     client = APIClient()
     client.force_authenticate(user=remediation_setup["proc_exec"])
 
-    resp_neg_qty = client.post("/api/v1/purchase-orders/", {
-        "vendor": str(remediation_setup["vendor_active"].id),
-        "cost_center": str(remediation_setup["cc_it"].id),
-        "lines": [{"item_description": "Bad Line", "quantity": "-5", "unit_price": "10.00"}],
-    }, format="json")
+    resp_neg_qty = client.post(
+        "/api/v1/purchase-orders/",
+        {
+            "vendor": str(remediation_setup["vendor_active"].id),
+            "cost_center": str(remediation_setup["cc_it"].id),
+            "lines": [{"item_description": "Bad Line", "quantity": "-5", "unit_price": "10.00"}],
+        },
+        format="json",
+    )
     assert resp_neg_qty.status_code == 400
 
-    resp_neg_price = client.post("/api/v1/purchase-orders/", {
-        "vendor": str(remediation_setup["vendor_active"].id),
-        "cost_center": str(remediation_setup["cc_it"].id),
-        "lines": [{"item_description": "Bad Price", "quantity": "5", "unit_price": "-10.00"}],
-    }, format="json")
+    resp_neg_price = client.post(
+        "/api/v1/purchase-orders/",
+        {
+            "vendor": str(remediation_setup["vendor_active"].id),
+            "cost_center": str(remediation_setup["cc_it"].id),
+            "lines": [{"item_description": "Bad Price", "quantity": "5", "unit_price": "-10.00"}],
+        },
+        format="json",
+    )
     assert resp_neg_price.status_code == 400
 
 
@@ -271,10 +352,14 @@ def test_def_010_over_receipt_on_goods_receipt_rejected(remediation_setup):
     client.force_authenticate(user=remediation_setup["stores"])
 
     # Over-receive 15 when ordered quantity is 10
-    resp_over = client.post("/api/v1/receipts/", {
-        "po": str(po.id),
-        "lines": [{"po_line_id": str(po_line.id), "quantity_received": "15"}],
-    }, format="json")
+    resp_over = client.post(
+        "/api/v1/receipts/",
+        {
+            "po": str(po.id),
+            "lines": [{"po_line_id": str(po_line.id), "quantity_received": "15"}],
+        },
+        format="json",
+    )
     assert resp_over.status_code == 400
 
 
@@ -292,13 +377,18 @@ def test_def_011_po_amendment_blocked_on_cancelled_or_draft_po(remediation_setup
     client = APIClient()
     client.force_authenticate(user=remediation_setup["proc_exec"])
 
-    resp = client.post(f"/api/v1/purchase-orders/{po.id}/amend/", {
-        "reason": "Attempt amendment on cancelled PO",
-    }, format="json")
+    resp = client.post(
+        f"/api/v1/purchase-orders/{po.id}/amend/",
+        {
+            "reason": "Attempt amendment on cancelled PO",
+        },
+        format="json",
+    )
     assert resp.status_code == 400
 
 
 # ─── DEF-014, DEF-017, DEF-018 Tests ──────────────────────────────────────────
+
 
 def test_def_014_invoice_creation_with_uuid_string_returns_201_no_500(remediation_setup):
     """DEF-014: POST /api/v1/invoices/create-invoice/ with string po_line UUID succeeds without 500."""
@@ -313,22 +403,28 @@ def test_def_014_invoice_creation_with_uuid_string_returns_201_no_500(remediatio
     client = APIClient()
     client.force_authenticate(user=remediation_setup["finance"])
 
-    resp = client.post("/api/v1/invoices/create-invoice/", {
-        "vendor_id": str(remediation_setup["vendor_active"].id),
-        "po_id": str(po.id),
-        "invoice_number": "INV-TEST-014",
-        "invoice_date": "2026-03-01",
-        "due_date": "2026-03-31",
-        "line_items": [
-            {
-                "po_line": str(po_line.id),  # String UUID!
-                "quantity": 10,
-                "unit_price": 100.00,
-            }
-        ],
-    }, format="json")
+    resp = client.post(
+        "/api/v1/invoices/create-invoice/",
+        {
+            "vendor_id": str(remediation_setup["vendor_active"].id),
+            "po_id": str(po.id),
+            "invoice_number": "INV-TEST-014",
+            "invoice_date": "2026-03-01",
+            "due_date": "2026-03-31",
+            "line_items": [
+                {
+                    "po_line": str(po_line.id),  # String UUID!
+                    "quantity": 10,
+                    "unit_price": 100.00,
+                }
+            ],
+        },
+        format="json",
+    )
 
-    assert resp.status_code == 201, f"Expected 201 Created but received {resp.status_code}: {resp.data}"
+    assert (
+        resp.status_code == 201
+    ), f"Expected 201 Created but received {resp.status_code}: {resp.data}"
     assert resp.data["invoice_number"] == "INV-TEST-014"
 
 
@@ -380,7 +476,9 @@ def test_def_018_pr_creation_rejects_mismatched_cost_center(remediation_setup):
             justification="Testing mismatched cost center",
             requester=remediation_setup["requester"],
             department=remediation_setup["dept_hr"],  # HR Department
-            cost_center=remediation_setup["cc_it"],   # IT Cost Center (Mismatch!)
+            cost_center=remediation_setup["cc_it"],  # IT Cost Center (Mismatch!)
             requested_delivery_date="2026-04-01",
-            line_items=[{"item_description": "Item", "quantity": 1, "estimated_unit_price": 100.00}],
+            line_items=[
+                {"item_description": "Item", "quantity": 1, "estimated_unit_price": 100.00}
+            ],
         )

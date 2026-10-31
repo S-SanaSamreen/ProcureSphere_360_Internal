@@ -24,14 +24,26 @@ pytestmark = pytest.mark.django_db
 REASON = "Confirmed sanctions-list match during audit"
 
 
+def _test_org():
+    from apps.organization.models import Organization
+
+    return Organization.objects.get_or_create(code="HPE-T", defaults={"name": "HPE Test Org"})[0]
+
+
 @pytest.fixture
 def w(procurement_world, db_roles):
     world = dict(procurement_world)
     world["legal"] = User.objects.create_user(
-        email="legal@lc.test", password="Password123!", role=db_roles[Role.LEGAL_MGR]
+        email="legal@lc.test",
+        password="Password123!",
+        role=db_roles[Role.LEGAL_MGR],
+        organization=_test_org(),
     )
     world["mgr2"] = User.objects.create_user(
-        email="mgr2@lc.test", password="Password123!", role=db_roles[Role.PROC_MGR]
+        email="mgr2@lc.test",
+        password="Password123!",
+        role=db_roles[Role.PROC_MGR],
+        organization=_test_org(),
     )
     world["admin"] = User.objects.create_superuser(
         email="admin@lc.test",
@@ -266,7 +278,7 @@ def test_blacklisted_vendor_cannot_be_reinstated_until_the_blacklist_is_lifted(w
     blacklist_vendor_service(vendor=vendor, actor=w["mgr"], reason=REASON)
     with pytest.raises(ValidationError, match="blacklist must be lifted"):
         set_vendor_status_governance_service(
-            vendor=vendor, actor=w["admin"], new_status=target, notes="please"
+            vendor=vendor, actor=w["mgr"], new_status=target, notes="please"
         )
     vendor.refresh_from_db()
     assert vendor.status == Vendor.STATUS_SUSPENDED and vendor.is_blacklisted
@@ -321,10 +333,13 @@ def test_lifting_enforces_separation_of_duties_and_leaves_vendor_suspended(w):
     assert vendor.status == Vendor.STATUS_ACTIVE
 
 
-def test_super_admin_may_lift_a_blacklist_they_imposed(w):
+def test_a_second_manager_may_lift_a_blacklist(w):
+    # PRD 3.6: Super Admin does not take vendor governance decisions, so the Procurement
+    # Manager (who holds suspend/blacklist authority) imposes it; a different manager lifts it
+    # (separation of duties - the imposer cannot lift their own blacklist).
     vendor = active_vendor(w)
-    blacklist_vendor_service(vendor=vendor, actor=w["admin"], reason=REASON)
-    lift_vendor_blacklist_service(vendor=vendor, actor=w["admin"], reason="Imposed in error here")
+    blacklist_vendor_service(vendor=vendor, actor=w["mgr"], reason=REASON)
+    lift_vendor_blacklist_service(vendor=vendor, actor=w["mgr2"], reason="Imposed in error here")
     vendor.refresh_from_db()
     assert not vendor.is_blacklisted
 

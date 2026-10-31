@@ -1,4 +1,5 @@
 import os
+
 import pytest
 from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -20,20 +21,34 @@ def batch1_setup(db, tmp_path, monkeypatch):
     category = VendorCategory.objects.create(name="Hardware", code="CAT-HW-B1")
 
     # Roles
-    role_admin, _ = Role.objects.get_or_create(code=Role.SUPER_ADMIN, defaults={"name": "Super Admin"})
+    role_admin, _ = Role.objects.get_or_create(
+        code=Role.SUPER_ADMIN, defaults={"name": "Super Admin"}
+    )
     role_req, _ = Role.objects.get_or_create(code=Role.REQUESTER, defaults={"name": "Requester"})
-    role_legal, _ = Role.objects.get_or_create(code=Role.LEGAL_MGR, defaults={"name": "Legal Manager"})
-    role_vendor, _ = Role.objects.get_or_create(code=Role.VENDOR_USER, defaults={"name": "Vendor User"})
+    role_legal, _ = Role.objects.get_or_create(
+        code=Role.LEGAL_MGR, defaults={"name": "Legal Manager"}
+    )
+    role_vendor, _ = Role.objects.get_or_create(
+        code=Role.VENDOR_USER, defaults={"name": "Vendor User"}
+    )
 
     # Users
     admin = User.objects.create_user(
-        email="admin.b1@test.local", password="Password123!", role=role_admin, is_staff=True, is_superuser=True
+        email="admin.b1@test.local",
+        password="Password123!",
+        role=role_admin,
+        is_staff=True,
+        is_superuser=True,
     )
     requester = User.objects.create_user(
-        email="req.b1@test.local", password="Password123!", role=role_req, department=dept, cost_center=cc
+        email="req.b1@test.local",
+        password="Password123!",
+        role=role_req,
+        department=dept,
+        cost_center=cc,
     )
     legal = User.objects.create_user(
-        email="legal.b1@test.local", password="Password123!", role=role_legal
+        email="legal.b1@test.local", password="Password123!", role=role_legal, organization=org
     )
 
     vendor_a = Vendor.objects.create(
@@ -80,6 +95,23 @@ def batch1_setup(db, tmp_path, monkeypatch):
     with open(contract_abs, "wb") as f:
         f.write(b"%PDF-1.4 Confidential Contract Master Agreement")
 
+    # Media is served only for files attached to a record the caller may see.
+    import datetime
+
+    from apps.contracts.models import Contract, ContractDocument
+
+    contract = Contract.objects.create(
+        contract_number="CT-B1-001",
+        title="Master Agreement",
+        vendor=vendor_a,
+        start_date=datetime.date(2026, 1, 1),
+        end_date=datetime.date(2027, 1, 1),
+        contract_owner=legal,
+    )
+    ContractDocument.objects.create(
+        contract=contract, title="Master Agreement PDF", file=contract_rel, uploaded_by=legal
+    )
+
     return {
         "admin": admin,
         "requester": requester,
@@ -109,7 +141,10 @@ def test_def_001_demo_roles_are_not_superuser(batch1_setup):
 def test_def_002_media_unauthenticated_access_blocked(client, batch1_setup):
     """DEF-002: Anonymous users cannot download media files directly."""
     resp = client.get(batch1_setup["doc_a_url"])
-    assert resp.status_code in [401, 403], f"Unauthenticated user accessed media: {resp.status_code}"
+    assert resp.status_code in [
+        401,
+        403,
+    ], f"Unauthenticated user accessed media: {resp.status_code}"
 
 
 def test_def_002_media_path_traversal_blocked(client, batch1_setup):
@@ -124,12 +159,16 @@ def test_def_002_vendor_cannot_access_other_vendor_media(client, batch1_setup):
     # Vendor B attempting to access Vendor A's file
     client.force_login(batch1_setup["vendor_user_b"])
     resp = client.get(batch1_setup["doc_a_url"])
-    assert resp.status_code == 403, f"Vendor B improperly accessed Vendor A's document: {resp.status_code}"
+    assert (
+        resp.status_code == 403
+    ), f"Vendor B improperly accessed Vendor A's document: {resp.status_code}"
 
     # Vendor A can access their own document
     client.force_login(batch1_setup["vendor_user_a"])
     resp = client.get(batch1_setup["doc_a_url"])
-    assert resp.status_code == 200, f"Vendor A failed to access their own document: {resp.status_code}"
+    assert (
+        resp.status_code == 200
+    ), f"Vendor A failed to access their own document: {resp.status_code}"
     assert b"Alpha KYC Secret Document Content" in resp.getvalue()
 
 
@@ -163,7 +202,9 @@ def test_def_003_vendor_blocked_from_internal_staff_ui_views(client, batch1_setu
     ]
     for url in internal_ui_routes:
         resp = client.get(url)
-        assert resp.status_code == 403, f"Vendor unexpectedly accessed internal route {url} with status {resp.status_code}"
+        assert (
+            resp.status_code == 403
+        ), f"Vendor unexpectedly accessed internal route {url} with status {resp.status_code}"
 
 
 def test_def_003_vendor_blocked_from_internal_api_endpoints(client, batch1_setup):
@@ -179,7 +220,9 @@ def test_def_003_vendor_blocked_from_internal_api_endpoints(client, batch1_setup
     ]
     for url in internal_api_routes:
         resp = client.get(url)
-        assert resp.status_code == 403, f"Vendor unexpectedly accessed internal API {url} with status {resp.status_code}"
+        assert (
+            resp.status_code == 403
+        ), f"Vendor unexpectedly accessed internal API {url} with status {resp.status_code}"
         assert resp.json().get("error", {}).get("code") == "FORBIDDEN"
 
 

@@ -1,5 +1,8 @@
 from .base import *  # noqa: F403
-from .base import env
+from .base import SECRET_KEY, env
+from .secret_guard import validate_secret_key
+
+validate_secret_key(SECRET_KEY)
 
 DEBUG = False
 
@@ -24,3 +27,5 @@ if env("RENDER_EXTERNAL_HOSTNAME", default=""):
 CSRF_TRUSTED_ORIGINS = env.list(
     "CSRF_TRUSTED_ORIGINS", default=[f"https://{h}" for h in dict.fromkeys(_hosts)]
 )
+
+MFA_REQUIRED_FOR_SUPER_ADMIN = env.bool("MFA_REQUIRED_FOR_SUPER_ADMIN", default=True)

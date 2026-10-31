@@ -94,11 +94,14 @@ class SpendLedger(TimeStampedModel):
     ENTRY_RESERVATION = "RESERVATION"
     ENTRY_COMMITMENT = "COMMITMENT"
     ENTRY_ACTUAL = "ACTUAL"
+    # Approved transfer of allocated budget between cost centers (signed: -source / +destination).
+    ENTRY_TRANSFER = "TRANSFER"
 
     ENTRY_CHOICES = [
         (ENTRY_RESERVATION, "Budget Reservation"),
         (ENTRY_COMMITMENT, "PO Commitment"),
         (ENTRY_ACTUAL, "Invoice Actual Spend"),
+        (ENTRY_TRANSFER, "Budget Transfer (allocation)"),
     ]
 
     budget = models.ForeignKey(Budget, on_delete=models.PROTECT, related_name="ledger_entries")
@@ -117,3 +120,46 @@ class SpendLedger(TimeStampedModel):
 
     def __str__(self):
         return f"{self.entry_type}: ${self.amount} ({self.reference_number})"
+
+
+class BudgetTransfer(TimeStampedModel):
+    """
+    Request to move allocated budget between two cost centers of the same organization and
+    fiscal period. Takes effect only when the approval engine approves it; the movement is then
+    posted as two signed TRANSFER ledger entries.
+    """
+
+    STATUS_PENDING = "PENDING"
+    STATUS_APPROVED = "APPROVED"
+    STATUS_REJECTED = "REJECTED"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending Approval"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    source = models.ForeignKey(Budget, on_delete=models.PROTECT, related_name="transfers_out")
+    destination = models.ForeignKey(Budget, on_delete=models.PROTECT, related_name="transfers_in")
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    reason = models.TextField()
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True
+    )
+    requested_by = models.ForeignKey(
+        "accounts.User", on_delete=models.PROTECT, related_name="budget_transfers_requested"
+    )
+    decided_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="budget_transfers_decided",
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_comments = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Transfer {self.amount}: {self.source.cost_center.code} -> {self.destination.cost_center.code} [{self.status}]"

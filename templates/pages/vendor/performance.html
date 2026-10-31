@@ -34,7 +34,7 @@
                 <div class="col-md-3 text-center border-end-md">
                     <div class="text-uppercase small text-muted fw-bold mb-2">Latest Period ({{ latest_scorecard.evaluation_period }})</div>
                     <div class="display-4 fw-bold {% if latest_scorecard.composite_score >= 85 %}text-success{% elif latest_scorecard.composite_score >= 70 %}text-primary{% elif latest_scorecard.composite_score >= 50 %}text-warning{% else %}text-danger{% endif %}">
-                        {{ latest_scorecard.composite_score|floatformat:1 }}<span class="fs-4 text-muted">/100</span>
+                        {{ latest_scorecard.composite_score|floatformat:1 }}<span class="fs-4 text-muted">/100</span>{% if latest_scorecard.rating_band %}<div class="fs-6 fw-semibold text-secondary">Rating {{ latest_scorecard.rating_band }}</div>{% endif %}
                     </div>
                     <div class="badge mt-2 {% if latest_scorecard.composite_score >= 85 %}bg-success{% elif latest_scorecard.composite_score >= 70 %}bg-primary{% elif latest_scorecard.composite_score >= 50 %}bg-warning text-dark{% else %}bg-danger{% endif %} px-3 py-1 rounded-pill">
                         {% if latest_scorecard.composite_score >= 85 %}Tier 1 / Preferred
@@ -46,61 +46,20 @@
 
                 <div class="col-md-9">
                     <div class="row g-3">
-                        <!-- Delivery Score (30%) -->
-                        <div class="col-sm-6 col-lg-3">
+                        {% for label, score, weight in latest_scorecard.dimension_rows %}
+                        <div class="col-sm-6 col-lg-4">
                             <div class="p-3 bg-light rounded-3 h-100">
                                 <div class="d-flex justify-content-between align-items-center mb-1">
-                                    <span class="small text-muted fw-semibold">Delivery Timeliness</span>
-                                    <span class="fw-bold text-dark">{{ latest_scorecard.delivery_score|floatformat:1 }}%</span>
+                                    <span class="small text-muted fw-semibold">{{ label }}</span>
+                                    <span class="fw-bold text-dark">{% if score is None %}<span class="text-muted fw-normal">No data</span>{% else %}{{ score|floatformat:1 }}%{% endif %}</span>
                                 </div>
                                 <div class="progress" style="height: 6px;">
-                                    <div class="progress-bar bg-success" style="width: {{ latest_scorecard.delivery_score }}%;"></div>
+                                    <div class="progress-bar bg-success" style="width: {{ score|default:0|floatformat:0 }}%;"></div>
                                 </div>
-                                <small class="text-muted d-block mt-2" style="font-size: 0.7rem;">GRN timeliness & SLA (30% wt)</small>
+                                <small class="text-muted d-block mt-2" style="font-size: 0.7rem;">Weight {{ weight|floatformat:"-2" }}%</small>
                             </div>
                         </div>
-
-                        <!-- Quality Score (30%) -->
-                        <div class="col-sm-6 col-lg-3">
-                            <div class="p-3 bg-light rounded-3 h-100">
-                                <div class="d-flex justify-content-between align-items-center mb-1">
-                                    <span class="small text-muted fw-semibold">Quality & Acceptance</span>
-                                    <span class="fw-bold text-dark">{{ latest_scorecard.quality_score|floatformat:1 }}%</span>
-                                </div>
-                                <div class="progress" style="height: 6px;">
-                                    <div class="progress-bar bg-info" style="width: {{ latest_scorecard.quality_score }}%;"></div>
-                                </div>
-                                <small class="text-muted d-block mt-2" style="font-size: 0.7rem;">Inspection rejection rate (30% wt)</small>
-                            </div>
-                        </div>
-
-                        <!-- Price Score (20%) -->
-                        <div class="col-sm-6 col-lg-3">
-                            <div class="p-3 bg-light rounded-3 h-100">
-                                <div class="d-flex justify-content-between align-items-center mb-1">
-                                    <span class="small text-muted fw-semibold">Pricing Adherence</span>
-                                    <span class="fw-bold text-dark">{{ latest_scorecard.price_score|floatformat:1 }}%</span>
-                                </div>
-                                <div class="progress" style="height: 6px;">
-                                    <div class="progress-bar bg-primary" style="width: {{ latest_scorecard.price_score }}%;"></div>
-                                </div>
-                                <small class="text-muted d-block mt-2" style="font-size: 0.7rem;">PO to invoice match (20% wt)</small>
-                            </div>
-                        </div>
-
-                        <!-- Compliance Score (20%) -->
-                        <div class="col-sm-6 col-lg-3">
-                            <div class="p-3 bg-light rounded-3 h-100">
-                                <div class="d-flex justify-content-between align-items-center mb-1">
-                                    <span class="small text-muted fw-semibold">Compliance / KYC</span>
-                                    <span class="fw-bold text-dark">{{ latest_scorecard.compliance_score|floatformat:1 }}%</span>
-                                </div>
-                                <div class="progress" style="height: 6px;">
-                                    <div class="progress-bar bg-warning" style="width: {{ latest_scorecard.compliance_score }}%;"></div>
-                                </div>
-                                <small class="text-muted d-block mt-2" style="font-size: 0.7rem;">Document currency & SLA (20% wt)</small>
-                            </div>
-                        </div>
+                        {% endfor %}
                     </div>
 
                     {% if latest_scorecard.evaluator_comments %}
@@ -128,10 +87,13 @@
                         <tr>
                             <th class="ps-4">Period</th>
                             <th class="text-center">Composite Score</th>
-                            <th class="text-center">Delivery (30%)</th>
-                            <th class="text-center">Quality (30%)</th>
-                            <th class="text-center">Price (20%)</th>
-                            <th class="text-center">Compliance (20%)</th>
+                            <th class="text-center">Band</th>
+                            <th class="text-center">Delivery</th>
+                            <th class="text-center">Quality</th>
+                            <th class="text-center">Price</th>
+                            <th class="text-center">Responsiveness</th>
+                            <th class="text-center">Compliance</th>
+                            <th class="text-center">SLA</th>
                             <th>Evaluated Date</th>
                             <th class="pe-4">Comments</th>
                         </tr>
@@ -145,10 +107,10 @@
                                     {{ sc.composite_score|floatformat:1 }}
                                 </span>
                             </td>
-                            <td class="text-center fw-semibold text-dark">{{ sc.delivery_score|floatformat:1 }}%</td>
-                            <td class="text-center fw-semibold text-dark">{{ sc.quality_score|floatformat:1 }}%</td>
-                            <td class="text-center fw-semibold text-dark">{{ sc.price_score|floatformat:1 }}%</td>
-                            <td class="text-center fw-semibold text-dark">{{ sc.compliance_score|floatformat:1 }}%</td>
+                            <td class="text-center fw-semibold">{{ sc.rating_band|default:"-" }}</td>
+                            {% for label, score, weight in sc.dimension_rows %}
+                            <td class="text-center fw-semibold text-dark">{% if score is None %}<span class="text-muted fw-normal">-</span>{% else %}{{ score|floatformat:1 }}%{% endif %}</td>
+                            {% endfor %}
                             <td class="small text-muted">{{ sc.created_at|date:"M d, Y" }}</td>
                             <td class="small text-muted pe-4 text-truncate" style="max-width: 250px;">
                                 {{ sc.evaluator_comments|default:"Periodic assessment" }}

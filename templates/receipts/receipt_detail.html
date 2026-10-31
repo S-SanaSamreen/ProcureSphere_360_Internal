@@ -15,6 +15,16 @@
             </span>
             <h2 class="fw-bold text-dark mb-0 font-monospace">{{ grn.grn_number }}</h2>
 
+            {% if grn.acknowledged_at %}
+                <span class="badge bg-success-subtle text-success border border-success px-3 py-2" title="Acknowledged by {{ grn.acknowledged_by_vendor.email }}">
+                    <i class="fa-solid fa-handshake me-1"></i> Vendor Acknowledged {{ grn.acknowledged_at|date:"M d, Y H:i" }}
+                </span>
+            {% else %}
+                <span class="badge bg-secondary-subtle text-secondary border border-secondary px-3 py-2">
+                    <i class="fa-solid fa-hourglass-half me-1"></i> Awaiting Vendor Acknowledgement
+                </span>
+            {% endif %}
+
             <!-- Inspection Status Badge -->
             {% if grn.overall_inspection_status == 'PASSED' %}
                 <span class="badge bg-success-subtle text-success border border-success px-3 py-2">

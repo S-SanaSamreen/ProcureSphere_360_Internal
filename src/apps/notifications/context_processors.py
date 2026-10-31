@@ -20,7 +20,7 @@ def notifications_processor(request):
     # 1. Calculate unread notifications count for recipient
     unread_count = Notification.objects.filter(recipient=user, is_read=False).count()
 
-    # 2. Calculate pending approvals count for DEPT_APPROVER, PROC_MGR, or SUPER_ADMIN
+    # 2. Calculate pending approvals count for DEPT_APPROVER or PROC_MGR
     pending_count = 0
     statuses = [
         PurchaseRequisition.STATUS_SUBMITTED,
@@ -29,23 +29,21 @@ def notifications_processor(request):
     ]
     if role_code == Role.DEPT_APPROVER:
         from django.db.models import Q
+
         user_dept = getattr(user, "department", None)
         if not user_dept:
             from apps.organization.models import CostCenter, Department
 
             managed_cc = (
-                CostCenter.objects.filter(manager=user)
-                .select_related("department")
-                .first()
+                CostCenter.objects.filter(manager=user).select_related("department").first()
             )
             if managed_cc and managed_cc.department:
                 user_dept = managed_cc.department
             elif getattr(user, "organization", None):
-                user_dept = Department.objects.filter(
-                    organization=user.organization
-                ).first()
+                user_dept = Department.objects.filter(organization=user.organization).first()
 
         from apps.approvals.models import ApprovalAction
+
         user_approved_pr_ids = ApprovalAction.objects.filter(
             actor=user,
             target_model_name="PurchaseRequisition",
@@ -78,7 +76,7 @@ def notifications_processor(request):
                 .exclude(id__in=user_approved_pr_ids)
                 .count()
             )
-    elif role_code in [Role.PROC_MGR, Role.SUPER_ADMIN]:
+    elif role_code == Role.PROC_MGR:
         pending_count = PurchaseRequisition.objects.filter(status__in=statuses).count()
     elif role_code == Role.LEGAL_MGR:
         from apps.contracts.models import Contract

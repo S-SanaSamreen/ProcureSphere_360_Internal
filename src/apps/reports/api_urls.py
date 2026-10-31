@@ -9,7 +9,6 @@ from apps.accounts.models import Role
 
 from .models import ExportJob
 from .services import (
-    generate_export_job_service,
     get_audit_log_report,
     get_contract_expiry_report,
     get_contract_obligation_report,
@@ -115,9 +114,21 @@ class ExportJobViewSet(viewsets.ModelViewSet):
     # Export jobs are evidence of what was extracted and by whom: create/read only.
     http_method_names = ["get", "post", "head", "options"]
 
+    def get_queryset(self):
+        from apps.core.tenancy import scope_to_org
+
+        return scope_to_org(
+            super().get_queryset(),
+            self.request.user,
+            "requested_by__organization",
+            "requested_by__department__organization",
+        )
+
     def perform_create(self, serializer):
         job = serializer.save(requested_by=self.request.user)
-        generate_export_job_service(job.id)
+        from apps.reports.tasks import run_export_job_task
+
+        run_export_job_task.delay(job.id)
 
 
 @api_view(["GET"])
@@ -126,12 +137,12 @@ def dashboard_summary_view(request):
     """
     Executes executive procurement dashboard overview combining spend, PRs, POs, Invoices, Contracts.
     """
-    pr_data = get_pr_aging_report()
-    spend_data = get_spend_analytics_report()
-    po_data = get_po_status_report()
-    inv_data = get_invoice_exception_aging_report()
+    pr_data = get_pr_aging_report(user=request.user)
+    spend_data = get_spend_analytics_report(user=request.user)
+    po_data = get_po_status_report(user=request.user)
+    inv_data = get_invoice_exception_aging_report(user=request.user)
     contract_data = get_contract_expiry_report(user=request.user)
-    scorecard_data = get_supplier_performance_report()
+    scorecard_data = get_supplier_performance_report(user=request.user)
 
     summary = {
         "total_prs": len(pr_data),
@@ -151,25 +162,25 @@ def dashboard_summary_view(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, IsNotVendorUser])
 def pr_aging_report_view(request):
-    return Response(get_pr_aging_report(), status=status.HTTP_200_OK)
+    return Response(get_pr_aging_report(user=request.user), status=status.HTTP_200_OK)
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, CanViewSpendAnalytics])
 def spend_analytics_report_view(request):
-    return Response(get_spend_analytics_report(), status=status.HTTP_200_OK)
+    return Response(get_spend_analytics_report(user=request.user), status=status.HTTP_200_OK)
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, IsNotVendorUser])
 def sourcing_cycle_report_view(request):
-    return Response(get_sourcing_cycle_time_report(), status=status.HTTP_200_OK)
+    return Response(get_sourcing_cycle_time_report(user=request.user), status=status.HTTP_200_OK)
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, IsNotVendorUser])
 def po_status_report_view(request):
-    return Response(get_po_status_report(), status=status.HTTP_200_OK)
+    return Response(get_po_status_report(user=request.user), status=status.HTTP_200_OK)
 
 
 @api_view(["GET"])
@@ -187,6 +198,7 @@ def receipt_rejection_report_view(request):
             vendor=vendor,
             po_number=po_number,
             inspection_status=status_param,
+            user=request.user,
         ),
         status=status.HTTP_200_OK,
     )
@@ -203,6 +215,7 @@ def receipt_delivery_summary_view(request):
             start_date=start_date,
             end_date=end_date,
             vendor=vendor,
+            user=request.user,
         ),
         status=status.HTTP_200_OK,
     )
@@ -211,7 +224,9 @@ def receipt_delivery_summary_view(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, IsNotVendorUser])
 def invoice_exception_report_view(request):
-    return Response(get_invoice_exception_aging_report(), status=status.HTTP_200_OK)
+    return Response(
+        get_invoice_exception_aging_report(user=request.user), status=status.HTTP_200_OK
+    )
 
 
 @api_view(["GET"])
@@ -255,13 +270,13 @@ def contract_obligation_report_view(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, IsNotVendorUser])
 def supplier_performance_report_view(request):
-    return Response(get_supplier_performance_report(), status=status.HTTP_200_OK)
+    return Response(get_supplier_performance_report(user=request.user), status=status.HTTP_200_OK)
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, IsNotVendorUser])
 def audit_log_report_view(request):
-    return Response(get_audit_log_report(), status=status.HTTP_200_OK)
+    return Response(get_audit_log_report(user=request.user), status=status.HTTP_200_OK)
 
 
 router = DefaultRouter()

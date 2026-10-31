@@ -15,7 +15,6 @@ Settings required in .env:
 """
 
 
-
 def build_credentials_html(
     *, vendor_name: str, vendor_number: str, email: str, password: str
 ) -> str:

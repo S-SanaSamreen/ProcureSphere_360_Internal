@@ -160,7 +160,10 @@ def test_vendor_can_view_and_update_own_profile(client, vendor_setup):
 
     vendor_setup["vendor_a"].refresh_from_db()
     assert vendor_setup["vendor_a"].trade_name == "Acme Tech Solutions"
-    assert vendor_setup["vendor_a"].bank_name == "Silicon Valley Commercial Bank"
+    # Bank details of an ACTIVE vendor change only after Procurement Manager approval.
+    assert vendor_setup["vendor_a"].bank_name != "Silicon Valley Commercial Bank"
+    pending = vendor_setup["vendor_a"].change_requests.get(status="PENDING")
+    assert pending.changes["bank_name"]["new"] == "Silicon Valley Commercial Bank"
     assert vendor_setup["vendor_a"].address == "200 Innovation Parkway, San Jose, CA"
     assert vendor_setup["vendor_a"].phone == "+919876543210"
 
@@ -188,7 +191,9 @@ def test_vendor_phone_validation_on_dashboard_requires_plus_91_and_10_digits(cli
     assert "country code (+91)" in res_no_code.content.decode()
 
     # 2. Invalid: Wrong country code (+1 instead of +91)
-    res_wrong_code = client.post("/vendor/profile/", {**base_data, "phone": "+19876543210"}, follow=True)
+    res_wrong_code = client.post(
+        "/vendor/profile/", {**base_data, "phone": "+19876543210"}, follow=True
+    )
     assert res_wrong_code.status_code == 200
     assert "country code (+91)" in res_wrong_code.content.decode()
 
@@ -198,12 +203,16 @@ def test_vendor_phone_validation_on_dashboard_requires_plus_91_and_10_digits(cli
     assert "exactly 10 digits" in res_short.content.decode()
 
     # 4. Invalid: +91 with 11 digits
-    res_long = client.post("/vendor/profile/", {**base_data, "phone": "+9198765432109"}, follow=True)
+    res_long = client.post(
+        "/vendor/profile/", {**base_data, "phone": "+9198765432109"}, follow=True
+    )
     assert res_long.status_code == 200
     assert "exactly 10 digits" in res_long.content.decode()
 
     # 5. Invalid: 12-digit number NOT starting with 91
-    res_invalid_12 = client.post("/vendor/profile/", {**base_data, "phone": "123456789012"}, follow=True)
+    res_invalid_12 = client.post(
+        "/vendor/profile/", {**base_data, "phone": "123456789012"}, follow=True
+    )
     assert res_invalid_12.status_code == 200
     assert "country code (+91)" in res_invalid_12.content.decode()
 
@@ -213,20 +222,23 @@ def test_vendor_phone_validation_on_dashboard_requires_plus_91_and_10_digits(cli
     assert "required" in res_empty.content.decode().lower()
 
     # 7. Valid: 12 numbers starting with 91 (e.g. 919876543210 auto-normalizes to +919876543210)
-    res_12_valid = client.post("/vendor/profile/", {**base_data, "phone": "919876543210"}, follow=True)
+    res_12_valid = client.post(
+        "/vendor/profile/", {**base_data, "phone": "919876543210"}, follow=True
+    )
     assert res_12_valid.status_code == 200
     assert "updated successfully" in res_12_valid.content.decode()
     vendor_setup["vendor_a"].refresh_from_db()
     assert vendor_setup["vendor_a"].phone == "+919876543210"
 
     # 8. Valid: +91 followed by 10 digits with space/hyphen formatting (normalizes)
-    res_valid_spaced = client.post("/vendor/profile/", {**base_data, "phone": "+91 9876543210"}, follow=True)
+    res_valid_spaced = client.post(
+        "/vendor/profile/", {**base_data, "phone": "+91 9876543210"}, follow=True
+    )
     assert res_valid_spaced.status_code == 200
     assert "updated successfully" in res_valid_spaced.content.decode()
 
     vendor_setup["vendor_a"].refresh_from_db()
     assert vendor_setup["vendor_a"].phone == "+919876543210"
-
 
 
 @pytest.mark.django_db
@@ -1084,10 +1096,18 @@ def test_vendor_submit_partial_invoice(client, vendor_setup):
         total_amount=Decimal("300.00"),
     )
     po_line1 = POLine.objects.create(
-        po=po, item_description="Server Rack", quantity=Decimal("2"), unit_price=Decimal("100.00"), line_total=Decimal("200.00")
+        po=po,
+        item_description="Server Rack",
+        quantity=Decimal("2"),
+        unit_price=Decimal("100.00"),
+        line_total=Decimal("200.00"),
     )
     po_line2 = POLine.objects.create(
-        po=po, item_description="Network Cable", quantity=Decimal("10"), unit_price=Decimal("10.00"), line_total=Decimal("100.00")
+        po=po,
+        item_description="Network Cable",
+        quantity=Decimal("10"),
+        unit_price=Decimal("10.00"),
+        line_total=Decimal("100.00"),
     )
 
     client.force_login(u2)
@@ -1121,6 +1141,7 @@ def test_vendor_submit_partial_invoice(client, vendor_setup):
     assert response.url == f"/vendor/purchase-orders/{po.id}/"
 
     from apps.invoices.models import SupplierInvoice
+
     invoice = SupplierInvoice.objects.get(invoice_number="INV-V1-001")
     assert invoice.vendor == v1
     assert invoice.po == po
@@ -1196,6 +1217,7 @@ def test_post_with_valid_data_creates_invoice_successfully(client, vendor_setup)
     )
     assert res.status_code == 302
     from apps.invoices.models import SupplierInvoice
+
     inv = SupplierInvoice.objects.get(invoice_number="INV-VALID-001")
     assert inv.vendor == v1
     assert inv.po == po
@@ -1422,6 +1444,7 @@ def test_purchase_order_detail_page_renders_without_url_errors(client, vendor_se
     v1 = vendor_setup["vendor_a"]
     u1 = vendor_setup["user_vendor_a"]
     from apps.receipts.models import GoodsReceipt, ReceiptLine
+
     po = PurchaseOrder.objects.create(
         po_number="PO-DETAIL-2026",
         vendor=v1,
@@ -1648,4 +1671,3 @@ def test_vendor_dashboard_metrics_isolation_and_live_freshness(client, vendor_se
     m_a_after_ack = get_vendor_dashboard_metrics(v_a, w["user_vendor_a"])
     assert m_a_after_ack["pos_requiring_ack"] == m_a_initial["pos_requiring_ack"]
     assert m_a_after_ack["active_pos"] >= 1
-

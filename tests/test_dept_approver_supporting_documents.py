@@ -174,11 +174,12 @@ def test_supporting_document_workflow_and_approver_access(db_roles):
     )
     assert audit_logs.count() >= 2
 
-    # 8. Verify Unauthorized access is denied (403)
+    # 8. Verify Unauthorized access is denied (403/404)
     client_unauth = Client()
     client_unauth.force_login(unauthorized_user)
     forbidden_res = client_unauth.get(f"/requisitions/{pr.pk}/attachments/{att_pdf.pk}/")
-    assert forbidden_res.status_code == 403
+    # Cross-organisation requisitions are hidden entirely (404) rather than merely forbidden.
+    assert forbidden_res.status_code in (403, 404)
 
 
 @pytest.mark.django_db

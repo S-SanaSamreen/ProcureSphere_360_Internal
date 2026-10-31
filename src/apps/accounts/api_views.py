@@ -7,6 +7,7 @@ from rest_framework import mixins, status, views, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 
 from .models import Role, User
 from .selectors import get_all_roles, get_all_users
@@ -22,6 +23,8 @@ from .serializers import (
 @method_decorator(ensure_csrf_cookie, name="dispatch")
 class SessionLoginView(views.APIView):
     permission_classes = [AllowAny]
+    throttle_scope = "login"
+    throttle_classes = [ScopedRateThrottle]
     serializer_class = LoginRequestSerializer
 
     @extend_schema(
@@ -43,7 +46,9 @@ class SessionLoginView(views.APIView):
             400: OpenApiResponse(description="Validation error: email and password are required."),
             401: OpenApiResponse(description="Authentication failed: invalid email or password."),
             403: OpenApiResponse(description="Forbidden: account is inactive."),
-            429: OpenApiResponse(description="Too many failed login attempts: account temporarily locked."),
+            429: OpenApiResponse(
+                description="Too many failed login attempts: account temporarily locked."
+            ),
         },
         tags=["Authentication"],
     )
@@ -151,6 +156,8 @@ class SessionLoginView(views.APIView):
             )
 
         login(request, user)
+        if user.mfa_enabled:
+            request.session["mfa_verified"] = False  # API blocked until /accounts/mfa/verify/
         csrf_token = get_token(request)
         serializer = UserSerializer(user)
 

@@ -47,6 +47,34 @@ from .services import (
 )
 
 
+def _ensure_linked_objects_visible(user, data):
+    """The vendor / PO / sourcing event a contract links to must belong to the caller's scope."""
+    from apps.core.tenancy import scope_sourcing_events
+    from apps.orders.selectors import scope_purchase_orders_queryset
+    from apps.vendors.models import Vendor
+    from apps.vendors.selectors import scope_vendors_queryset
+
+    checks = (
+        (data.get("vendor"), scope_vendors_queryset(Vendor.objects.all(), user)),
+        (
+            (data.get("po"), scope_purchase_orders_queryset(type(data["po"]).objects.all(), user))
+            if data.get("po")
+            else (None, None)
+        ),
+        (
+            (
+                data.get("sourcing_event"),
+                scope_sourcing_events(type(data["sourcing_event"]).objects.all(), user),
+            )
+            if data.get("sourcing_event")
+            else (None, None)
+        ),
+    )
+    for obj, qs in checks:
+        if obj is not None and not qs.filter(pk=obj.pk).exists():
+            raise serializers.ValidationError({"detail": "Linked record not found."})
+
+
 class ContractViewSet(viewsets.ModelViewSet):
     serializer_class = ContractSerializer
     permission_classes = [IsAuthenticated, CanManageContract, CanViewContract]
@@ -114,6 +142,7 @@ class ContractViewSet(viewsets.ModelViewSet):
                 "Permission Denied: Compliance Auditors hold strictly read-only permissions and cannot draft contracts."
             )
         data = serializer.validated_data
+        _ensure_linked_objects_visible(self.request.user, data)
         contract = create_contract_service(
             title=data["title"],
             vendor=data["vendor"],
@@ -531,7 +560,9 @@ class ContractViewSet(viewsets.ModelViewSet):
     def alerts(self, request):
         """List all contract alerts across all contracts visible to the user."""
         contract_ids = self.get_queryset().values_list("id", flat=True)
-        alerts_qs = ContractAlert.objects.filter(contract_id__in=contract_ids).order_by("-triggered_at")
+        alerts_qs = ContractAlert.objects.filter(contract_id__in=contract_ids).order_by(
+            "-triggered_at"
+        )
         return Response(
             ContractAlertSerializer(alerts_qs, many=True).data,
             status=status.HTTP_200_OK,
@@ -541,14 +572,19 @@ class ContractViewSet(viewsets.ModelViewSet):
     def renewals(self, request):
         """List contracts in RENEWAL_DUE status or within their renewal notice window."""
         from django.utils import timezone
+
         today = timezone.now().date()
-        qs = self.get_queryset().filter(
-            models.Q(status=Contract.STATUS_RENEWAL_DUE)
-            | models.Q(
-                status=Contract.STATUS_ACTIVE,
-                end_date__lte=today + timezone.timedelta(days=90),
+        qs = (
+            self.get_queryset()
+            .filter(
+                models.Q(status=Contract.STATUS_RENEWAL_DUE)
+                | models.Q(
+                    status=Contract.STATUS_ACTIVE,
+                    end_date__lte=today + timezone.timedelta(days=90),
+                )
             )
-        ).order_by("end_date")
+            .order_by("end_date")
+        )
         return Response(
             ContractSerializer(qs, many=True).data,
             status=status.HTTP_200_OK,

@@ -21,7 +21,7 @@ from .dashboard_selectors import (
     get_evaluation_metrics,
 )
 from .forms import SourcingEventForm
-from .models import BidInvite, Clarification, SourcingEvent, VendorBid
+from .models import BidInvite, Clarification, SourcingDeviation, SourcingEvent, VendorBid
 from .permissions import (
     can_approve_award,
     can_manage_events,
@@ -76,6 +76,14 @@ def _get_user_org(user):
     return None
 
 
+def _event_or_404(request, event_id, qs=None):
+    """Sourcing event lookup limited to the caller's organisation (404 otherwise)."""
+    from apps.core.tenancy import scope_sourcing_events
+
+    base = SourcingEvent.objects.all() if qs is None else qs
+    return get_object_or_404(scope_sourcing_events(base, request.user), pk=event_id)
+
+
 def _require_view(user):
     if not can_view_events(user):
         raise PermissionDenied("RFQ/RFP sourcing is restricted to internal procurement roles.")
@@ -94,7 +102,7 @@ def sourcing_list_view(request):
 
     params = request.GET.copy()
     if params.get("status") == "EVALUATION":
-        events = get_all_sourcing_events().filter(
+        events = get_all_sourcing_events(request.user).filter(
             status__in=[
                 SourcingEvent.STATUS_TECHNICAL_REVIEW,
                 SourcingEvent.STATUS_COMMERCIAL_REVIEW,
@@ -103,7 +111,7 @@ def sourcing_list_view(request):
         params.pop("status")
         events = search_sourcing_events(events, params)
     else:
-        events = search_sourcing_events(get_all_sourcing_events(), params)
+        events = search_sourcing_events(get_all_sourcing_events(request.user), params)
 
     page = Paginator(events, PAGE_SIZE).get_page(request.GET.get("page"))
     qs = request.GET.copy()
@@ -114,7 +122,7 @@ def sourcing_list_view(request):
         {
             "page_obj": page,
             "events": page.object_list,
-            "metrics": get_sourcing_dashboard_metrics(),
+            "metrics": get_sourcing_dashboard_metrics(request.user),
             "status_filters": STATUS_FILTERS,
             "status_filter": request.GET.get("status", ""),
             "type_choices": SourcingEvent.EVENT_TYPE_CHOICES,
@@ -145,7 +153,7 @@ def _form_to_kwargs(cleaned):
 @login_required(login_url="/login/")
 def sourcing_create_view(request):
     _require_manage(request.user)
-    form = SourcingEventForm(request.POST or None)
+    form = SourcingEventForm(request.POST or None, user=request.user)
     if request.method == "POST" and form.is_valid():
         try:
             event = services.create_sourcing_event_service(
@@ -165,12 +173,14 @@ def sourcing_create_view(request):
 @login_required(login_url="/login/")
 def sourcing_edit_view(request, event_id):
     _require_manage(request.user)
-    event = get_object_or_404(SourcingEvent, pk=event_id)
+    event = _event_or_404(request, event_id)
     if event.status != SourcingEvent.STATUS_DRAFT:
         messages.error(request, "Only DRAFT events can be edited.")
         return redirect("sourcing_detail", event_id=event.id)
     form = SourcingEventForm(
-        request.POST or None, initial=SourcingEventForm.initial_from_event(event)
+        request.POST or None,
+        initial=SourcingEventForm.initial_from_event(event),
+        user=request.user,
     )
     if request.method == "POST" and form.is_valid():
         try:
@@ -230,7 +240,9 @@ def _event_audit_trail(event):
 def sourcing_detail_view(request, event_id):
     """Event workspace: lifecycle, invitations, clarifications, evaluation, award and PO."""
     _require_view(request.user)
-    event = get_object_or_404(
+    event = _event_or_404(
+        request,
+        event_id,
         SourcingEvent.objects.select_related(
             "requisition",
             "requisition__department",
@@ -239,7 +251,6 @@ def sourcing_detail_view(request, event_id):
             "created_by__department",
             "created_by__department__organization",
         ),
-        pk=event_id,
     )
 
     if not request.user.is_superuser:
@@ -272,11 +283,17 @@ def sourcing_detail_view(request, event_id):
     eligible_vendors = []
     if can_invite:
         eligible_vendors = get_eligible_vendors_for_event(
-            event, category_id=request.GET.get("inv_cat") or None, q=request.GET.get("inv_q", "")
+            event,
+            category_id=request.GET.get("inv_cat") or None,
+            q=request.GET.get("inv_q", ""),
+            user=request.user,
         )[:100]
     pending_vendors = (
         get_pending_onboarding_vendors(
-            event, category_id=request.GET.get("inv_cat") or None, q=request.GET.get("inv_q", "")
+            event,
+            category_id=request.GET.get("inv_cat") or None,
+            q=request.GET.get("inv_q", ""),
+            user=request.user,
         )[:50]
         if can_invite
         else []
@@ -337,6 +354,9 @@ def sourcing_detail_view(request, event_id):
         ),
         "audit_trail": _event_audit_trail(event),
         "is_deadline_passed": event.bid_end_date < timezone.now(),
+        "deviations": event.deviations.select_related("requested_by", "decided_by"),
+        "deadline_extensions": event.deadline_extensions.select_related("extended_by"),
+        "deviation_kinds": SourcingDeviation.KIND_CHOICES,
     }
     return render(request, "sourcing/sourcing_detail.html", context)
 
@@ -467,7 +487,65 @@ def _act_generate_po(event, request):
     return f"Purchase Order {po.po_number} generated from the award."
 
 
+def _act_extend_deadline(event, request):
+    from django.utils.dateparse import parse_datetime
+
+    raw = (request.POST.get("new_deadline") or "").strip()
+    new_deadline = parse_datetime(raw) if raw else None
+    if new_deadline is None:
+        raise ValidationError("Enter the new deadline as a valid date and time.")
+    if timezone.is_naive(new_deadline):
+        new_deadline = timezone.make_aware(new_deadline)
+    services.extend_bid_deadline_service(
+        event=event,
+        user=request.user,
+        new_deadline=new_deadline,
+        reason=request.POST.get("reason", ""),
+    )
+    return "Bid deadline extended. Invited vendors notified."
+
+
+def _act_sole_source(event, request):
+    services.set_sole_source_service(
+        event=event,
+        user=request.user,
+        justification=request.POST.get("justification", ""),
+        is_sole_source=request.POST.get("is_sole_source", "1") != "0",
+    )
+    return "Sole-source justification recorded and sent for Procurement Manager approval."
+
+
+def _act_request_deviation(event, request):
+    services.request_deviation_service(
+        event=event,
+        user=request.user,
+        kind=request.POST.get("kind", ""),
+        reason=request.POST.get("reason", ""),
+    )
+    return "Deviation request sent to the Procurement Manager."
+
+
+def _act_decide_deviation(event, request):
+    from .models import SourcingDeviation
+
+    deviation = get_object_or_404(
+        SourcingDeviation, pk=request.POST.get("deviation_id"), event=event
+    )
+    approve = request.POST.get("decision") == "approve"
+    services.decide_deviation_service(
+        deviation=deviation,
+        approver=request.user,
+        approve=approve,
+        comments=request.POST.get("comments", ""),
+    )
+    return "Deviation approved." if approve else "Deviation rejected."
+
+
 ACTIONS = {
+    "extend-deadline": (_act_extend_deadline, "manage"),
+    "sole-source": (_act_sole_source, "manage"),
+    "request-deviation": (_act_request_deviation, "manage"),
+    "decide-deviation": (_act_decide_deviation, "manage"),
     "publish": (_act_publish, "manage"),
     "close": (_act_close, "manage"),
     "start-commercial": (_act_commercial, "manage"),
@@ -513,11 +591,13 @@ def sourcing_action_view(request, event_id, action):
     )
     if not allowed:
         raise PermissionDenied("Your role is not authorised for this sourcing action.")
-    event = get_object_or_404(SourcingEvent, pk=event_id)
+    event = _event_or_404(request, event_id)
     try:
         messages.success(request, handler(event, request))
     except ValidationError as exc:
         messages.error(request, " ".join(exc.messages))
+    except PermissionDenied as exc:
+        messages.error(request, str(exc) or "Not permitted.")
     next_url = request.POST.get("next")
     if next_url and next_url.startswith("/"):
         return redirect(next_url)
@@ -532,7 +612,7 @@ def sourcing_action_view(request, event_id, action):
 def sourcing_attachment_download_view(request, event_id, attachment_id):
     """Stage-gated bid attachment download for evaluators (commercial after unsealing)."""
     _require_view(request.user)
-    event = get_object_or_404(SourcingEvent, pk=event_id)
+    event = _event_or_404(request, event_id)
     allowed = get_bid_attachments_for_evaluator(event, request.user)
     attachment = get_object_or_404(allowed, pk=attachment_id)
     try:
@@ -560,8 +640,8 @@ def bid_portal_dashboard_view(request):
         request,
         "sourcing/bid_portal_dashboard.html",
         {
-            "metrics": get_bid_portal_metrics(),
-            "events": get_bid_portal_events(),
+            "metrics": get_bid_portal_metrics(request.user),
+            "events": get_bid_portal_events(request.user),
             "caps": sourcing_capabilities(request.user),
         },
     )
@@ -571,7 +651,7 @@ def bid_portal_dashboard_view(request):
 def bid_portal_event_view(request, event_id):
     """Per-event bid portal monitor: access, validation, attachments, amendments, sealing."""
     _require_bid_access(request.user)
-    event = get_object_or_404(SourcingEvent, pk=event_id)
+    event = _event_or_404(request, event_id)
     services.sync_event_window_status(event=event)
     rows = get_bid_portal_rows(event)
     responses = (VendorBid.STATUS_SUBMITTED, VendorBid.STATUS_AMENDED)
@@ -606,8 +686,8 @@ def evaluation_dashboard_view(request):
         request,
         "sourcing/evaluation_dashboard.html",
         {
-            "metrics": get_evaluation_metrics(),
-            "events": get_evaluation_events(status),
+            "metrics": get_evaluation_metrics(request.user),
+            "events": get_evaluation_events(status, request.user),
             "status": status,
             "caps": sourcing_capabilities(request.user),
         },
@@ -623,9 +703,11 @@ def sourcing_ready_prs_tab_view(request):
     """Pillar 2 HTMX tab: approved PRs ready for sourcing (real DB rows)."""
     _require_view(request.user)
     from apps.requisitions.models import PurchaseRequisition
+    from apps.requisitions.selectors import scope_requisitions_to_org
 
     ready = (
-        PurchaseRequisition.objects.filter(status=PurchaseRequisition.STATUS_APPROVED)
+        scope_requisitions_to_org(PurchaseRequisition.objects.all(), request.user)
+        .filter(status=PurchaseRequisition.STATUS_APPROVED)
         .select_related("department", "cost_center", "requester")
         .prefetch_related("lines", "sourcing_events")
         .order_by("-created_at")[:50]
@@ -642,7 +724,7 @@ def sourcing_events_tab_view(request):
     """Pillar 2 HTMX tab: active sourcing events register (compact)."""
     _require_view(request.user)
     services.sync_all_event_windows()
-    events = get_all_sourcing_events().filter(
+    events = get_all_sourcing_events(request.user).filter(
         status__in=[
             SourcingEvent.STATUS_DRAFT,
             SourcingEvent.STATUS_PUBLISHED,
@@ -663,7 +745,7 @@ def sourcing_events_tab_view(request):
 def sourcing_event_create_htmx_view(request):
     """Pillar 2 HTMX modal: create SourcingEvent (weights + deadline) via service."""
     _require_manage(request.user)
-    form = SourcingEventForm(request.POST or None)
+    form = SourcingEventForm(request.POST or None, user=request.user)
     if request.method == "POST" and form.is_valid():
         try:
             event = services.create_sourcing_event_service(
@@ -701,7 +783,7 @@ def sourcing_event_create_htmx_view(request):
 def sourcing_invites_htmx_view(request, event_id):
     """Pillar 2 HTMX fragment: manage BidInvite (invite ACTIVE vendors / revoke in DRAFT)."""
     _require_view(request.user)
-    event = get_object_or_404(SourcingEvent, pk=event_id)
+    event = _event_or_404(request, event_id)
     services.sync_event_window_status(event=event)
 
     if request.method == "POST":
@@ -750,12 +832,12 @@ def sourcing_invites_htmx_view(request, event_id):
             SourcingEvent.STATUS_BID_WINDOW,
         ),
         "eligible_vendors": (
-            get_eligible_vendors_for_event(event)[:100]
+            get_eligible_vendors_for_event(event, user=request.user)[:100]
             if sourcing_capabilities(request.user)["can_manage"]
             else []
         ),
         "pending_vendors": (
-            get_pending_onboarding_vendors(event)[:50]
+            get_pending_onboarding_vendors(event, user=request.user)[:50]
             if sourcing_capabilities(request.user)["can_manage"]
             else []
         ),
@@ -767,7 +849,7 @@ def sourcing_invites_htmx_view(request, event_id):
 def sourcing_clarifications_htmx_view(request, event_id):
     """Pillar 2 HTMX fragment: list + answer vendor Clarification questions."""
     _require_view(request.user)
-    event = get_object_or_404(SourcingEvent, pk=event_id)
+    event = _event_or_404(request, event_id)
 
     if request.method == "POST":
         _require_manage(request.user)
@@ -817,7 +899,7 @@ def sourcing_clarifications_htmx_view(request, event_id):
 def evaluation_compare_htmx_view(request, event_id):
     """Pillar 3 HTMX fragment: unsealed VendorBid comparison table for a closed event."""
     _require_bid_access(request.user)
-    event = get_object_or_404(SourcingEvent.objects.select_related("requisition"), pk=event_id)
+    event = _event_or_404(request, event_id, SourcingEvent.objects.select_related("requisition"))
     services.sync_event_window_status(event=event)
     if not event.bids_visible_to_evaluators:
         return render(
@@ -849,7 +931,7 @@ def evaluation_score_htmx_view(request, event_id):
     _require_bid_access(request.user)
     if not can_manage_events(request.user):
         raise PermissionDenied("Your role cannot record evaluation scores.")
-    event = get_object_or_404(SourcingEvent, pk=event_id)
+    event = _event_or_404(request, event_id)
     bid = get_object_or_404(VendorBid, pk=request.POST.get("bid_id"), event=event)
     stage = request.POST.get("stage", "technical")
     try:
@@ -900,7 +982,7 @@ def negotiation_note_htmx_view(request, event_id):
     _require_bid_access(request.user)
     if not can_manage_events(request.user):
         raise PermissionDenied("Your role cannot record negotiation notes.")
-    event = get_object_or_404(SourcingEvent, pk=event_id)
+    event = _event_or_404(request, event_id)
     bid = get_object_or_404(VendorBid, pk=request.POST.get("bid_id"), event=event)
     try:
         services.add_negotiation_note_service(
@@ -936,7 +1018,7 @@ def award_recommend_htmx_view(request, event_id):
     _require_bid_access(request.user)
     if not can_manage_events(request.user):
         raise PermissionDenied("Your role cannot recommend awards.")
-    event = get_object_or_404(SourcingEvent, pk=event_id)
+    event = _event_or_404(request, event_id)
     bid = get_object_or_404(VendorBid, pk=request.POST.get("bid_id"), event=event)
     try:
         decision = services.recommend_award_service(
@@ -978,7 +1060,7 @@ def evaluation_event_view(request, event_id):
     from apps.organization.models import CostCenter
 
     _require_bid_access(request.user)
-    event = get_object_or_404(SourcingEvent.objects.select_related("requisition"), pk=event_id)
+    event = _event_or_404(request, event_id, SourcingEvent.objects.select_related("requisition"))
     services.sync_event_window_status(event=event)
     if not event.bids_visible_to_evaluators:
         messages.info(request, "Evaluation opens after the bid window closes.")
@@ -1005,7 +1087,9 @@ def evaluation_event_view(request, event_id):
                 status=PurchaseOrder.STATUS_CANCELLED
             ).exists(),
             "cost_centers": (
-                CostCenter.objects.order_by("code")
+                CostCenter.objects.filter(
+                    department__organization=getattr(request.user, "effective_organization", None)
+                ).order_by("code")
                 if event.status == SourcingEvent.STATUS_AWARDED and not event.requisition_id
                 else []
             ),

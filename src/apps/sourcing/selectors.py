@@ -3,6 +3,9 @@ from datetime import timedelta
 from django.db.models import Count, Q
 from django.utils import timezone
 
+from apps.core.tenancy import scope_sourcing_events
+from apps.vendors.selectors import scope_vendors_queryset
+
 from .models import BidAttachment, BidEvaluation, BidInvite, SourcingEvent, VendorBid
 from .permissions import can_read_bids, can_view_events
 
@@ -15,9 +18,12 @@ OPEN_EVENT_STATUSES = [
 ]
 
 
-def get_all_sourcing_events():
+def get_all_sourcing_events(user=None):
+    base = SourcingEvent.objects.all()
+    if user is not None:
+        base = scope_sourcing_events(base, user)
     return (
-        SourcingEvent.objects.select_related("requisition")
+        base.select_related("requisition")
         .annotate(
             invite_count=Count("invitations", distinct=True),
             submitted_bid_count=Count(
@@ -43,14 +49,7 @@ def get_sourcing_events_for_user(user):
             status=SourcingEvent.STATUS_DRAFT
         )
     if can_view_events(user):
-        if not user.is_superuser:
-            user_dept = getattr(user, "department", None)
-            user_org = getattr(user_dept, "organization", None) if user_dept else None
-            if user_org:
-                qs = qs.filter(
-                    Q(requisition__department__organization=user_org)
-                    | Q(requisition__isnull=True, created_by__department__organization=user_org)
-                )
+        qs = scope_sourcing_events(qs, user)
         return qs
     return qs.none()
 
@@ -101,10 +100,13 @@ def search_sourcing_events(queryset, params):
     return queryset
 
 
-def get_sourcing_dashboard_metrics() -> dict:
+def get_sourcing_dashboard_metrics(user=None) -> dict:
     """RFQ/RFP KPIs for the Procurement Executive dashboard (one aggregate query)."""
     now = timezone.now()
-    return SourcingEvent.objects.aggregate(
+    events = SourcingEvent.objects.all()
+    if user is not None:
+        events = scope_sourcing_events(events, user)
+    return events.aggregate(
         total=Count("id"),
         draft=Count("id", filter=Q(status=SourcingEvent.STATUS_DRAFT)),
         published=Count("id", filter=Q(status=SourcingEvent.STATUS_PUBLISHED)),
@@ -230,14 +232,19 @@ def get_invitation_rows(event: SourcingEvent):
     return rows
 
 
-def get_eligible_vendors_for_event(event: SourcingEvent, category_id=None, q=""):
+def get_eligible_vendors_for_event(event: SourcingEvent, category_id=None, q="", user=None):
     from apps.vendors.models import Vendor
 
     from .services import ELIGIBLE_VENDOR_STATUSES
 
     invited = BidInvite.objects.filter(event=event).values("vendor_id")
     qs = (
-        Vendor.objects.filter(status__in=ELIGIBLE_VENDOR_STATUSES)
+        (
+            Vendor.objects.all()
+            if user is None
+            else scope_vendors_queryset(Vendor.objects.all(), user)
+        )
+        .filter(status__in=ELIGIBLE_VENDOR_STATUSES)
         .exclude(id__in=invited)
         .select_related("category")
         .order_by("legal_name")
@@ -254,13 +261,18 @@ def get_eligible_vendors_for_event(event: SourcingEvent, category_id=None, q="")
 PENDING_ONBOARDING_STATUSES = ["DRAFT", "SUBMITTED", "KYC_REVIEW"]
 
 
-def get_pending_onboarding_vendors(event: SourcingEvent, category_id=None, q=""):
+def get_pending_onboarding_vendors(event: SourcingEvent, category_id=None, q="", user=None):
     """Newly registered vendors that cannot be invited yet (KYC not approved). Display only."""
     from apps.vendors.models import Vendor
 
     invited = BidInvite.objects.filter(event=event).values("vendor_id")
     qs = (
-        Vendor.objects.filter(status__in=PENDING_ONBOARDING_STATUSES)
+        (
+            Vendor.objects.all()
+            if user is None
+            else scope_vendors_queryset(Vendor.objects.all(), user)
+        )
+        .filter(status__in=PENDING_ONBOARDING_STATUSES)
         .exclude(id__in=invited)
         .select_related("category")
         .order_by("legal_name")

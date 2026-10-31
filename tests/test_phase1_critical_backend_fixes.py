@@ -48,11 +48,21 @@ def _get_or_create_role(code, name):
     return role
 
 
+def _test_org():
+    org, _ = Organization.objects.get_or_create(
+        code="HPE-US-TEST",
+        defaults={"name": "Hewlett Packard Enterprise Test", "tax_identifier": "US-123456"},
+    )
+    return org
+
+
 def _get_or_create_user(email, password, role_code, role_name):
     role = _get_or_create_role(role_code, role_name)
     user = User.objects.filter(email=email).first()
     if not user:
-        user = User.objects.create_user(email=email, password=password, role=role)
+        user = User.objects.create_user(
+            email=email, password=password, role=role, organization=_test_org()
+        )
     else:
         if role and user.role_id != role.id:
             user.role = role
@@ -62,14 +72,30 @@ def _get_or_create_user(email, password, role_code, role_name):
 
 @pytest.fixture
 def rbac_users(db):
-    super_admin = _get_or_create_user("superadmin_test@hpe.com", "Password123!", Role.SUPER_ADMIN, "Super Admin")
-    legal_mgr = _get_or_create_user("legal_test@hpe.com", "Password123!", Role.LEGAL_MGR, "Legal Manager")
-    proc_mgr = _get_or_create_user("procmgr_test@hpe.com", "Password123!", Role.PROC_MGR, "Procurement Manager")
-    proc_exec = _get_or_create_user("procexec_test@hpe.com", "Password123!", Role.PROC_EXEC, "Procurement Executive")
-    finance_ap = _get_or_create_user("finance_test@hpe.com", "Password123!", Role.FINANCE_AP, "Finance AP")
-    requester = _get_or_create_user("requester_test@hpe.com", "Password123!", Role.REQUESTER, "Requester")
-    stores = _get_or_create_user("stores_test@hpe.com", "Password123!", Role.STORES_RECEIVER, "Stores Receiver")
-    auditor = _get_or_create_user("auditor_test@hpe.com", "Password123!", Role.AUDITOR, "Compliance Auditor")
+    super_admin = _get_or_create_user(
+        "superadmin_test@hpe.com", "Password123!", Role.SUPER_ADMIN, "Super Admin"
+    )
+    legal_mgr = _get_or_create_user(
+        "legal_test@hpe.com", "Password123!", Role.LEGAL_MGR, "Legal Manager"
+    )
+    proc_mgr = _get_or_create_user(
+        "procmgr_test@hpe.com", "Password123!", Role.PROC_MGR, "Procurement Manager"
+    )
+    proc_exec = _get_or_create_user(
+        "procexec_test@hpe.com", "Password123!", Role.PROC_EXEC, "Procurement Executive"
+    )
+    finance_ap = _get_or_create_user(
+        "finance_test@hpe.com", "Password123!", Role.FINANCE_AP, "Finance AP"
+    )
+    requester = _get_or_create_user(
+        "requester_test@hpe.com", "Password123!", Role.REQUESTER, "Requester"
+    )
+    stores = _get_or_create_user(
+        "stores_test@hpe.com", "Password123!", Role.STORES_RECEIVER, "Stores Receiver"
+    )
+    auditor = _get_or_create_user(
+        "auditor_test@hpe.com", "Password123!", Role.AUDITOR, "Compliance Auditor"
+    )
 
     return {
         "super_admin": super_admin,
@@ -87,15 +113,13 @@ def rbac_users(db):
 def base_org_data(db):
     org, _ = Organization.objects.get_or_create(
         code="HPE-US-TEST",
-        defaults={"name": "Hewlett Packard Enterprise Test", "tax_identifier": "US-123456"}
+        defaults={"name": "Hewlett Packard Enterprise Test", "tax_identifier": "US-123456"},
     )
     dept, _ = Department.objects.get_or_create(
-        code="DEP-IT-TEST",
-        defaults={"organization": org, "name": "IT Infrastructure"}
+        code="DEP-IT-TEST", defaults={"organization": org, "name": "IT Infrastructure"}
     )
     cc, _ = CostCenter.objects.get_or_create(
-        code="CC-DC-TEST",
-        defaults={"department": dept, "name": "Data Center CC"}
+        code="CC-DC-TEST", defaults={"department": dept, "name": "Data Center CC"}
     )
     today = timezone.now().date()
     fp, _ = FiscalPeriod.objects.get_or_create(
@@ -106,7 +130,7 @@ def base_org_data(db):
             "name": "2026-Q1",
             "start_date": today,
             "end_date": today + timezone.timedelta(days=90),
-        }
+        },
     )
     budget, _ = Budget.objects.get_or_create(
         cost_center=cc,
@@ -148,6 +172,7 @@ def base_org_data(db):
 # 1. SUPER ADMIN AUTHORIZATION TESTS
 # =========================================================================
 
+
 @pytest.mark.django_db
 def test_superadmin_views_reject_unauthorized_roles(rbac_users):
     """Ensure non-superadmin roles are denied access server-side to user and org management."""
@@ -171,7 +196,9 @@ def test_superadmin_views_reject_unauthorized_roles(rbac_users):
         client.force_login(user)
         for url in endpoints:
             response = client.get(url, follow=False)
-            assert response.status_code == 403, f"User {user.email} was not denied access (403) to {url}, got {response.status_code}"
+            assert (
+                response.status_code == 403
+            ), f"User {user.email} was not denied access (403) to {url}, got {response.status_code}"
 
     # Super Admin must have access
     client.force_login(rbac_users["super_admin"])
@@ -182,6 +209,7 @@ def test_superadmin_views_reject_unauthorized_roles(rbac_users):
 # =========================================================================
 # 2. CONTRACT AUTHORIZATION & ACTIVATION GUARD TESTS
 # =========================================================================
+
 
 @pytest.mark.django_db
 def test_contract_activation_cannot_bypass_mandatory_workflow(rbac_users, base_org_data):
@@ -229,9 +257,9 @@ def test_contract_role_authorization_on_actions(rbac_users, base_org_data):
     submit_for_legal_review_service(contract=contract, user=rbac_users["legal_mgr"])
 
     # 1. Non-legal user cannot approve legal review
-    with pytest.raises(ValidationError, match="Only Legal Managers or Super Admins"):
+    with pytest.raises(ValidationError, match="Only Legal Managers can approve"):
         approve_legal_review_service(contract=contract, user=rbac_users["requester"])
-    with pytest.raises(ValidationError, match="Only Legal Managers or Super Admins"):
+    with pytest.raises(ValidationError, match="Only Legal Managers can approve"):
         approve_legal_review_service(contract=contract, user=rbac_users["proc_exec"])
 
     # Legal Manager approves legal review -> moves to BUSINESS_APPROVAL
@@ -249,7 +277,7 @@ def test_contract_role_authorization_on_actions(rbac_users, base_org_data):
     assert contract.status == Contract.STATUS_ACTIVE
 
     # 3. Non-authorized role cannot amend
-    with pytest.raises(ValidationError, match="Only Legal Managers, Procurement Managers, or Super Admins"):
+    with pytest.raises(ValidationError, match="Only Legal Managers or Procurement Managers"):
         create_contract_version_service(
             contract=contract,
             user=rbac_users["requester"],
@@ -260,7 +288,7 @@ def test_contract_role_authorization_on_actions(rbac_users, base_org_data):
         )
 
     # 4. Non-authorized role cannot renew
-    with pytest.raises(ValidationError, match="Only Legal Managers, Procurement Managers, or Super Admins"):
+    with pytest.raises(ValidationError, match="Only Legal Managers or Procurement Managers"):
         renew_contract_service(
             contract=contract,
             user=rbac_users["requester"],
@@ -268,7 +296,7 @@ def test_contract_role_authorization_on_actions(rbac_users, base_org_data):
         )
 
     # 5. Non-authorized role cannot terminate
-    with pytest.raises(ValidationError, match="Only Legal Managers, Procurement Managers, or Super Admins"):
+    with pytest.raises(ValidationError, match="Only Legal Managers or Procurement Managers"):
         terminate_contract_service(
             contract=contract,
             user=rbac_users["requester"],
@@ -293,13 +321,19 @@ def test_contract_template_views_enforce_rbac(rbac_users, base_org_data):
 
     # Requester attempting legal approval
     client.force_login(rbac_users["requester"])
-    response = client.post(f"/contracts/{contract.id}/legal-approve/", {"notes": "hack"}, follow=True)
+    response = client.post(
+        f"/contracts/{contract.id}/legal-approve/", {"notes": "hack"}, follow=True
+    )
     assert response.status_code == 200
     contract.refresh_from_db()
-    assert contract.status == Contract.STATUS_LEGAL_REVIEW, "Legal review was bypassed by Requester!"
+    assert (
+        contract.status == Contract.STATUS_LEGAL_REVIEW
+    ), "Legal review was bypassed by Requester!"
 
     # Requester attempting business approval
-    response = client.post(f"/contracts/{contract.id}/business-approve/", {"notes": "hack"}, follow=True)
+    response = client.post(
+        f"/contracts/{contract.id}/business-approve/", {"notes": "hack"}, follow=True
+    )
     assert response.status_code == 200
     contract.refresh_from_db()
     assert contract.status == Contract.STATUS_LEGAL_REVIEW
@@ -308,6 +342,7 @@ def test_contract_template_views_enforce_rbac(rbac_users, base_org_data):
 # =========================================================================
 # 3. INVOICE PAYMENT AUTHORIZATION TESTS
 # =========================================================================
+
 
 @pytest.mark.django_db
 def test_invoice_payment_restricted_to_finance_ap(rbac_users, base_org_data):
@@ -359,7 +394,9 @@ def test_invoice_payment_restricted_to_finance_ap(rbac_users, base_org_data):
     ]
     for unauth_user in unauthorized_users:
         with pytest.raises(ValidationError, match="Only Finance / AP personnel"):
-            mark_invoice_paid_service(invoice=invoice, user=unauth_user, payment_reference="TEST-001")
+            mark_invoice_paid_service(
+                invoice=invoice, user=unauth_user, payment_reference="TEST-001"
+            )
 
     # 2. View-level check: non-Finance role attempting POST /invoices/ready/<id>/pay/
     client = Client()
@@ -445,7 +482,7 @@ def test_invoice_exception_resolution_restricted_to_finance(rbac_users, base_org
             action="RESOLVE",
         )
 
-# Non-finance user cannot resolve in view
+    # Non-finance user cannot resolve in view
     client = Client()
     client.force_login(rbac_users["requester"])
     response = client.post(
@@ -470,6 +507,7 @@ def test_invoice_exception_resolution_restricted_to_finance(rbac_users, base_org
 # =========================================================================
 # 4. PURCHASE ORDER AMENDMENT DATA INTEGRITY TESTS
 # =========================================================================
+
 
 @pytest.mark.django_db
 def test_po_amendment_with_existing_receipts_preserves_lines(rbac_users, base_org_data):
@@ -589,7 +627,7 @@ def test_po_amendment_guards_against_reducing_below_received_quantity(rbac_users
 
 @pytest.mark.django_db
 def test_po_amendment_unauthorized_role_rejected(rbac_users, base_org_data):
-    """Only procurement roles or superadmin can request PO amendments."""
+    """Only procurement roles can request PO amendments (Super Admin is read-only, PRD 3.6)."""
     po = generate_purchase_order_service(
         vendor=base_org_data["vendor"],
         cost_center=base_org_data["cost_center"],
@@ -603,7 +641,7 @@ def test_po_amendment_unauthorized_role_rejected(rbac_users, base_org_data):
         created_by_user=rbac_users["proc_exec"],
     )
 
-    with pytest.raises(ValidationError, match="Only procurement roles or Super Admin"):
+    with pytest.raises(ValidationError, match="Only procurement roles can amend"):
         amend_purchase_order_service(
             po=po,
             reason="Requester trying to amend PO",

@@ -150,7 +150,11 @@ def scan_overdue_approvals_and_escalate_service(
                 target_model="PurchaseRequisition",
                 target_object_id=str(pr.id),
                 previous_state={"status": pr.status, "escalated": False},
-                new_state={"status": pr.status, "escalated": True, "escalation_hours": escalation_hours},
+                new_state={
+                    "status": pr.status,
+                    "escalated": True,
+                    "escalation_hours": escalation_hours,
+                },
             )
         else:
             # Send reminder to the approvers of the request's CURRENT step. The request is bound
@@ -160,12 +164,10 @@ def scan_overdue_approvals_and_escalate_service(
             from apps.approvals.models import ApprovalPolicy
             from apps.approvals.services import evaluate_approval_chain
 
-            module = (
-                ApprovalPolicy.MODULE_BUDGET_EXCEPTION
-                if pr.status == PurchaseRequisition.STATUS_BUDGET_REVIEW
-                else ApprovalPolicy.MODULE_PR
-            )
-            engine_request = approval_engine.get_pending_request(module, pr)
+            # an out-of-budget PR waits on its budget exception; otherwise on the normal chain
+            engine_request = approval_engine.get_pending_request(
+                ApprovalPolicy.MODULE_BUDGET_EXCEPTION, pr
+            ) or approval_engine.get_pending_request(ApprovalPolicy.MODULE_PR, pr)
             approvers = []
             chain = []
             if engine_request is not None:
@@ -189,10 +191,14 @@ def scan_overdue_approvals_and_escalate_service(
                     if step["effective_approver"]:
                         approvers = [step["effective_approver"]]
                     else:
-                        role_approvers = User.objects.filter(role=step["approver_role"], is_active=True)
+                        role_approvers = User.objects.filter(
+                            role=step["approver_role"], is_active=True
+                        )
                         if step["approver_role"].code == Role.DEPT_APPROVER and pr.department:
                             dept_apps = role_approvers.filter(department=pr.department)
-                            approvers = list(dept_apps) if dept_apps.exists() else list(role_approvers)
+                            approvers = (
+                                list(dept_apps) if dept_apps.exists() else list(role_approvers)
+                            )
                         else:
                             approvers = list(role_approvers)
 

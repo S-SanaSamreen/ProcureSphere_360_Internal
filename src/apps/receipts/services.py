@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.accounts.models import Role, User
@@ -15,6 +16,22 @@ from .models import (
     RejectionRecord,
     StockHandoffRecord,
 )
+
+
+def _receivable_limit(po_line: POLine, po: PurchaseOrder, current_received: Decimal):
+    """(remaining, allowed) quantity: open quantity and open quantity + over-delivery tolerance."""
+    from apps.sourcing.controls import get_controls, po_organization
+
+    remaining = max(Decimal("0.00"), po_line.quantity - current_received)
+    tolerance = get_controls(po_organization(po)).over_delivery_tolerance_pct
+    allowed = remaining + (po_line.quantity * tolerance / Decimal("100")).quantize(Decimal("0.01"))
+    return remaining, allowed, tolerance
+
+
+def _rematch_held_invoices(po: PurchaseOrder, user=None) -> None:
+    from apps.invoices.services import rematch_held_exceptions_for_po
+
+    rematch_held_exceptions_for_po(po, user=user)
 
 
 def _validate_and_create_receipt_line(
@@ -51,10 +68,15 @@ def _validate_and_create_receipt_line(
         )
 
     current_received = po_line.quantity_received or Decimal("0.00")
-    remaining_qty = max(Decimal("0.00"), po_line.quantity - current_received)
-    if qty_received > remaining_qty:
+    remaining_qty, allowed_qty, tolerance = _receivable_limit(po_line, po, current_received)
+    if qty_received > allowed_qty:
+        suffix = (
+            f" (including the {tolerance}% over-delivery tolerance = {allowed_qty})"
+            if tolerance > 0
+            else ""
+        )
         raise ValidationError(
-            f"Quantity received ({qty_received}) cannot exceed remaining quantity ({remaining_qty}) for '{po_line.item_description}'."
+            f"Quantity received ({qty_received}) cannot exceed remaining quantity ({remaining_qty}){suffix} for '{po_line.item_description}'."
         )
 
     qty_accepted_raw = item.get("quantity_accepted")
@@ -113,11 +135,9 @@ def _check_stores_receiver_permission(
     role_code = getattr(user, "role_code", None) or (
         user.role.code if hasattr(user, "role") and user.role else None
     )
-    is_authorized = user.is_superuser or role_code in [Role.STORES_RECEIVER, Role.SUPER_ADMIN]
+    is_authorized = role_code == Role.STORES_RECEIVER
     if not is_authorized:
-        raise ValidationError(
-            f"Unauthorized: Only Stores Receiver or Super Admin can {action_desc}."
-        )
+        raise ValidationError(f"Unauthorized: Only Stores Receiver can {action_desc}.")
 
 
 def _update_po_completion_status(po: PurchaseOrder) -> None:
@@ -143,6 +163,10 @@ def _update_po_completion_status(po: PurchaseOrder) -> None:
             PurchaseOrder.STATUS_ACKNOWLEDGED if po.acknowledged_at else PurchaseOrder.STATUS_ISSUED
         )
     po.save(update_fields=["status", "updated_at"])
+    if po.requisition_id:
+        from apps.requisitions.services import refresh_requisition_fulfilment_status
+
+        refresh_requisition_fulfilment_status(po.requisition)
 
 
 @transaction.atomic
@@ -169,6 +193,10 @@ def create_goods_receipt_service(
         raise ValidationError("Receipt must contain at least one line item.")
 
     po = PurchaseOrder.objects.select_for_update().get(id=po.id)
+    po_org_id = _po_organization_id(po)
+    receiver_org = getattr(received_by, "effective_organization", None)
+    if po_org_id and receiver_org is not None and receiver_org.id != po_org_id:
+        raise ValidationError("Purchase Order not found for your organization.")
 
     if po.status not in [
         PurchaseOrder.STATUS_ISSUED,
@@ -200,6 +228,7 @@ def create_goods_receipt_service(
         )
 
     _update_po_completion_status(po)
+    _rematch_held_invoices(po, user=received_by)
 
     AuditLog.objects.create(
         actor=received_by,
@@ -222,6 +251,110 @@ def create_goods_receipt_service(
             target_url=f"/receipts/{receipt.id}/",
         )
 
+    _notify_receipt_posted(receipt)
+
+    return receipt
+
+
+def _po_organization_id(po):
+    """Organisation that owns a PO (cost center / requisition department, else its creator)."""
+    if po.cost_center_id and po.cost_center.department.organization_id:
+        return po.cost_center.department.organization_id
+    if po.requisition_id and po.requisition.department.organization_id:
+        return po.requisition.department.organization_id
+    creator = po.created_by
+    return getattr(creator, "organization_id", None) if creator else None
+
+
+def _org_users(po, **role_filter):
+    """Active internal users of the PO's organisation matching the filter (never other orgs)."""
+    org_id = _po_organization_id(po)
+    if not org_id:
+        return User.objects.none()
+    # org-less legacy accounts (no organisation, no department org) are kept so desks keep working
+    return User.objects.filter(
+        Q(organization_id=org_id) | Q(organization__isnull=True, vendor__isnull=True),
+        is_active=True,
+        **role_filter,
+    )
+
+
+def finance_users_for_po(po):
+    """Active Finance/AP users of the PO's organisation (never another organisation's)."""
+    org_id = _po_organization_id(po)
+    if not org_id:
+        return User.objects.none()
+    return _org_users(po, role__code=Role.FINANCE_AP)
+
+
+def _receipt_summary(receipt):
+    lines = list(receipt.lines.all())
+    accepted = sum((ln.quantity_accepted for ln in lines), Decimal("0.00"))
+    rejected = sum((ln.quantity_rejected for ln in lines), Decimal("0.00"))
+    return accepted, rejected
+
+
+def _notify_receipt_posted(receipt):
+    """Tell the PO's vendor users and the org's Finance/AP what was accepted / rejected."""
+    from apps.notifications.models import Notification
+
+    po = receipt.po
+    accepted, rejected = _receipt_summary(receipt)
+    message = (
+        f"Goods receipt {receipt.grn_number} was recorded for PO {po.po_number}: "
+        f"{accepted} unit(s) accepted, {rejected} unit(s) rejected."
+    )
+    if po.vendor_id:
+        for v_user in User.objects.filter(vendor_id=po.vendor_id, is_active=True):
+            Notification.objects.create(
+                recipient=v_user,
+                notification_type=Notification.TYPE_GOODS_RECEIVED,
+                title=f"Goods Received: {receipt.grn_number} (PO {po.po_number})",
+                message=message + " Please acknowledge the receipt in the vendor portal.",
+                target_url=f"/vendor/receipts/{receipt.id}/",
+            )
+    for fin_user in finance_users_for_po(po):
+        Notification.objects.create(
+            recipient=fin_user,
+            notification_type=Notification.TYPE_GOODS_RECEIVED,
+            title=f"Goods Received: {receipt.grn_number} (PO {po.po_number})",
+            message=message,
+            target_url=f"/receipts/{receipt.id}/",
+        )
+
+
+@transaction.atomic
+def acknowledge_receipt_service(*, receipt: GoodsReceipt, user: User) -> GoodsReceipt:
+    """
+    A vendor user acknowledges a goods receipt (what was accepted / rejected) for one of their
+    own purchase orders. Idempotent per receipt; audit-logged; the org's Finance/AP is told.
+    """
+    from apps.notifications.models import Notification
+
+    receipt = GoodsReceipt.objects.select_for_update().select_related("po").get(pk=receipt.pk)
+    if not getattr(user, "vendor_id", None) or receipt.po.vendor_id != user.vendor_id:
+        raise ValidationError("You can only acknowledge receipts of your own purchase orders.")
+    if receipt.acknowledged_at:
+        raise ValidationError("This receipt has already been acknowledged.")
+    receipt.acknowledged_by_vendor = user
+    receipt.acknowledged_at = timezone.now()
+    receipt.save(update_fields=["acknowledged_by_vendor", "acknowledged_at", "updated_at"])
+    AuditLog.objects.create(
+        actor=user,
+        action=AuditLog.ACTION_UPDATE,
+        target_model="GoodsReceipt",
+        target_object_id=str(receipt.id),
+        previous_state={"vendor_acknowledged": False},
+        new_state={"vendor_acknowledged": True, "action": "VENDOR_RECEIPT_ACKNOWLEDGED"},
+    )
+    for fin_user in finance_users_for_po(receipt.po):
+        Notification.objects.create(
+            recipient=fin_user,
+            notification_type=Notification.TYPE_RECEIPT_ACKNOWLEDGED,
+            title=f"Vendor Acknowledged Receipt: {receipt.grn_number}",
+            message=f"{user.email} acknowledged receipt {receipt.grn_number} for PO {receipt.po.po_number}.",
+            target_url=f"/receipts/{receipt.id}/",
+        )
     return receipt
 
 
@@ -246,12 +379,11 @@ def vendor_dispatch_delivery_service(
         raise ValidationError("Vendor user reference is mandatory.")
 
     # Backend IDOR protection
-    if not vendor_user.is_superuser:
-        user_vendor = getattr(vendor_user, "vendor", None)
-        if not user_vendor or user_vendor.id != po.vendor_id:
-            raise ValidationError(
-                "Access Denied: You cannot dispatch deliveries for a Purchase Order belonging to another vendor."
-            )
+    user_vendor = getattr(vendor_user, "vendor", None)
+    if not user_vendor or user_vendor.id != po.vendor_id:
+        raise ValidationError(
+            "Access Denied: You cannot dispatch deliveries for a Purchase Order belonging to another vendor."
+        )
 
     if po.status not in [
         PurchaseOrder.STATUS_ACKNOWLEDGED,
@@ -263,16 +395,16 @@ def vendor_dispatch_delivery_service(
         )
 
     if not delivery_items or not isinstance(delivery_items, list):
-        raise ValidationError("Delivery must contain at least one line item with quantity greater than zero.")
+        raise ValidationError(
+            "Delivery must contain at least one line item with quantity greater than zero."
+        )
 
     po = PurchaseOrder.objects.select_for_update().get(id=po.id)
 
     # Find designated stores receiver user for FK integrity
-    stores_user = User.objects.filter(
-        role__code=Role.STORES_RECEIVER, is_active=True
-    ).first()
+    stores_user = User.objects.filter(role__code=Role.STORES_RECEIVER, is_active=True).first()
     if not stores_user:
-        stores_user = User.objects.filter(is_superuser=True, is_active=True).first() or vendor_user
+        stores_user = vendor_user
 
     from apps.core.services import generate_document_number
     from apps.notifications.models import Notification
@@ -297,21 +429,30 @@ def vendor_dispatch_delivery_service(
         try:
             po_line = POLine.objects.select_for_update().get(id=po_line_id, po=po)
         except POLine.DoesNotExist:
-            raise ValidationError(f"Invalid PO line reference '{po_line_id}' for Purchase Order {po.po_number}.")
+            raise ValidationError(
+                f"Invalid PO line reference '{po_line_id}' for Purchase Order {po.po_number}."
+            )
 
         try:
             qty_delivering = Decimal(str(item.get("quantity", item.get("quantity_received", 0))))
         except Exception:
-            raise ValidationError(f"Quantity for '{po_line.item_description}' must be a valid numeric value.")
+            raise ValidationError(
+                f"Quantity for '{po_line.item_description}' must be a valid numeric value."
+            )
 
         if qty_delivering <= Decimal("0.00"):
             continue
 
         current_received = po_line.quantity_received or Decimal("0.00")
-        remaining_qty = max(Decimal("0.00"), po_line.quantity - current_received)
-        if qty_delivering > remaining_qty:
+        remaining_qty, allowed_qty, tolerance = _receivable_limit(po_line, po, current_received)
+        if qty_delivering > allowed_qty:
+            suffix = (
+                f" (including the {tolerance}% over-delivery tolerance = {allowed_qty})"
+                if tolerance > 0
+                else ""
+            )
             raise ValidationError(
-                f"Delivering quantity ({qty_delivering}) cannot exceed remaining order quantity ({remaining_qty}) for '{po_line.item_description}'."
+                f"Delivering quantity ({qty_delivering}) cannot exceed remaining order quantity ({remaining_qty}){suffix} for '{po_line.item_description}'."
             )
 
         ReceiptLine.objects.create(
@@ -326,11 +467,13 @@ def vendor_dispatch_delivery_service(
         po_line.save(update_fields=["quantity_received", "updated_at"])
         created_any_line = True
 
-
     if not created_any_line:
-        raise ValidationError("Please specify a dispatch quantity greater than 0 for at least one item.")
+        raise ValidationError(
+            "Please specify a dispatch quantity greater than 0 for at least one item."
+        )
 
     _update_po_completion_status(po)
+    _rematch_held_invoices(po)
 
     AuditLog.objects.create(
         actor=vendor_user,
@@ -347,7 +490,7 @@ def vendor_dispatch_delivery_service(
     )
 
     # Notify Stores Receiver team
-    stores_receivers = User.objects.filter(role__code=Role.STORES_RECEIVER, is_active=True)
+    stores_receivers = _org_users(po, role__code=Role.STORES_RECEIVER)
     for s_user in stores_receivers:
         Notification.objects.create(
             recipient=s_user,
@@ -361,7 +504,7 @@ def vendor_dispatch_delivery_service(
         )
 
     # Notify Procurement Executive
-    pe_users = User.objects.filter(role__code=Role.PROC_EXEC, is_active=True)
+    pe_users = _org_users(po, role__code=Role.PROC_EXEC)
     for pe in pe_users:
         Notification.objects.create(
             recipient=pe,
@@ -383,16 +526,13 @@ def vendor_dispatch_delivery_service(
     return receipt
 
 
-
 def _check_inspection_permission(user: User) -> None:
     role_code = getattr(user, "role_code", None) or (
         user.role.code if hasattr(user, "role") and user.role else None
     )
-    is_authorized = user.is_superuser or role_code in [Role.STORES_RECEIVER, Role.SUPER_ADMIN]
+    is_authorized = role_code == Role.STORES_RECEIVER
     if not is_authorized:
-        raise ValidationError(
-            "Unauthorized: Only Stores Receiver or Super Admin can perform quality inspections."
-        )
+        raise ValidationError("Unauthorized: Only Stores Receiver can perform quality inspections.")
 
 
 def _sync_rejection_record(
@@ -671,7 +811,7 @@ def record_inspection_service(
                 )
 
     # 1. Notify Finance & AP
-    finance_users = User.objects.filter(role__code=Role.FINANCE_AP, is_active=True)
+    finance_users = finance_users_for_po(po)
     for fin_user in finance_users:
         Notification.objects.create(
             recipient=fin_user,
@@ -705,9 +845,7 @@ def record_inspection_service(
             )
 
     # 3. Notify Procurement Executive & Manager
-    pe_pm_users = User.objects.filter(
-        role__code__in=[Role.PROC_EXEC, Role.PROC_MGR], is_active=True
-    )
+    pe_pm_users = _org_users(po, role__code__in=[Role.PROC_EXEC, Role.PROC_MGR])
     for staff_user in pe_pm_users:
         Notification.objects.create(
             recipient=staff_user,
@@ -846,7 +984,7 @@ def process_vendor_return_service(
     """
     Processes the physical return of rejected goods to the vendor.
     Ensures:
-    - Only authorized Stores Receiver or Super Admin can execute returns.
+    - Only the authorized Stores Receiver can execute returns.
     - Cannot return more than the rejected quantity.
     - Does NOT alter accepted stock (never increases inventory).
     - Preserves return dispatch reference and full audit log.

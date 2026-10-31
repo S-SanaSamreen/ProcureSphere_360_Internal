@@ -18,13 +18,15 @@ def generate_document_number(model_class, field_name: str, prefix: str, padding:
     if latest_obj:
         val = getattr(latest_obj, field_name, "")
         try:
-            suffix_num = int(val[len(base_prefix):])
+            suffix_num = int(val[len(base_prefix) :])
             next_num = suffix_num + 1
         except (ValueError, TypeError):
             next_num = model_class.objects.count() + 1
 
     # Guarantee uniqueness even in concurrent or deleted row edge cases
-    while model_class.objects.filter(**{field_name: f"{base_prefix}{next_num:0{padding}d}"}).exists():
+    while model_class.objects.filter(
+        **{field_name: f"{base_prefix}{next_num:0{padding}d}"}
+    ).exists():
         next_num += 1
 
     return f"{base_prefix}{next_num:0{padding}d}"

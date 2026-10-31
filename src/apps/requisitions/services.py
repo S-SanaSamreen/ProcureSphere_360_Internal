@@ -5,13 +5,16 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.accounts.models import Role, User
+from apps.accounts.permissions import forbid_non_transacting_actor
 from apps.approvals import engine
 from apps.approvals.models import ApprovalAction, ApprovalPolicy, ApprovalRequest
 from apps.approvals.services import record_approval_action_service
 from apps.audit.models import AuditLog
+from apps.budgets.models import BudgetReservation
 from apps.budgets.services import (
     BudgetOverrunException,
     check_and_reserve_budget_service,
+    pr_budget_position,
     release_budget_reservation_service,
 )
 from apps.core.validators import validate_pr_attachment
@@ -20,11 +23,39 @@ from apps.organization.models import CostCenter, Department
 
 from .models import PRAttachment, PRLine, PurchaseRequisition
 
+DEFAULT_PR_EXCEPTION_POLICY = "PR Budget Exception - Procurement Manager (built-in)"
+
 FULFILMENT_STATUSES = (
     PurchaseRequisition.STATUS_APPROVED,
     PurchaseRequisition.STATUS_SOURCING,
     PurchaseRequisition.STATUS_PO_ISSUED,
+    PurchaseRequisition.STATUS_COMPLETED,
 )
+
+
+def _is_fully_delivered_and_paid(requisition) -> bool:
+    """
+    The request is fulfilled when every live PO raised from it is fully received (COMPLETED) and
+    every invoice against those POs is settled: at least one PAID invoice per PO and nothing
+    still open (rejected invoices do not count).
+    """
+    from apps.invoices.models import SupplierInvoice
+    from apps.orders.models import PurchaseOrder
+
+    pos = list(
+        PurchaseOrder.objects.filter(requisition=requisition).exclude(
+            status=PurchaseOrder.STATUS_CANCELLED
+        )
+    )
+    if not pos or any(po.status != PurchaseOrder.STATUS_COMPLETED for po in pos):
+        return False
+    for po in pos:
+        invoices = SupplierInvoice.objects.filter(po=po).exclude(
+            status=SupplierInvoice.STATUS_REJECTED
+        )
+        if not invoices.exists() or invoices.exclude(status=SupplierInvoice.STATUS_PAID).exists():
+            return False
+    return True
 
 
 @transaction.atomic
@@ -33,6 +64,7 @@ def refresh_requisition_fulfilment_status(requisition, *, actor=None):
     Keeps an approved requisition's lifecycle state (PRD 4: ... APPROVED -> SOURCING / PO) in
     line with what actually exists, so it can never drift from the underlying documents:
 
+      * every PO fully received and every invoice paid       -> COMPLETED
       * any issued PO (not DRAFT / in approval / CANCELLED)  -> PO_ISSUED
       * else any non-cancelled sourcing event                -> SOURCING
       * else                                                 -> APPROVED
@@ -63,7 +95,9 @@ def refresh_requisition_fulfilment_status(requisition, *, actor=None):
         .exclude(status=SourcingEvent.STATUS_CANCELLED)
         .exists()
     )
-    if has_issued_po:
+    if has_issued_po and _is_fully_delivered_and_paid(requisition):
+        target = PurchaseRequisition.STATUS_COMPLETED
+    elif has_issued_po:
         target = PurchaseRequisition.STATUS_PO_ISSUED
     elif has_live_event:
         target = PurchaseRequisition.STATUS_SOURCING
@@ -80,7 +114,10 @@ def refresh_requisition_fulfilment_status(requisition, *, actor=None):
             target_model="PurchaseRequisition",
             target_object_id=str(requisition.id),
             previous_state={"status": previous},
-            new_state={"status": target, "reason": "fulfilment status follows POs / sourcing events"},
+            new_state={
+                "status": target,
+                "reason": "fulfilment status follows POs / sourcing events",
+            },
         )
     return requisition
 
@@ -100,6 +137,7 @@ def create_purchase_requisition_service(
     """
     Creates a new PurchaseRequisition in DRAFT status with atomic document number generation.
     """
+    forbid_non_transacting_actor(requester, "create purchase requisitions")
     if not line_items:
         raise ValidationError("Purchase Requisition must contain at least one line item.")
 
@@ -209,37 +247,31 @@ def create_purchase_requisition_service(
     return pr
 
 
-def _open_pr_requests(requisition, *, overrun_reason="", shortfall=None):
+def _open_pr_requests(requisition):
     """
-    Opens the approval request(s) for a submitted PR:
-      * the normal PR chain (cost center > department > global policy), bound to the policy
-        version selected right now;
-      * for a budget overrun, a BUDGET_EXCEPTION request that must be approved first.
+    Opens the normal PR approval chain (cost center > department > global policy), bound to
+    the policy version selected right now. The budget is only soft-checked at submit; a budget
+    exception request is raised later, by Finance's approval, if the PR is out of budget.
     """
-    maker = requisition.requester
-    pr_request = engine.open_approval_request(
+    return engine.open_approval_request(
         module=ApprovalPolicy.MODULE_PR,
         target=requisition,
         amount=requisition.total_amount,
-        maker=maker,
+        maker=requisition.requester,
         department=requisition.department,
         cost_center=requisition.cost_center,
-        exception_reason=overrun_reason,
         record_submission=False,
     )
-    exception_request = None
-    if overrun_reason:
-        exception_request = engine.open_approval_request(
-            module=ApprovalPolicy.MODULE_BUDGET_EXCEPTION,
-            target=requisition,
-            amount=shortfall if shortfall is not None else requisition.total_amount,
-            maker=maker,
-            department=requisition.department,
-            cost_center=requisition.cost_center,
-            exception_reason=overrun_reason,
-            record_submission=False,
-        )
-    return pr_request, exception_request
+
+
+def _status_for_step(step):
+    """
+    PR status implied by an approval step: Finance/AP's step is the Budget Review; every other
+    (department / escalation) step is the Manager Review.
+    """
+    if step and step.get("role_code") == Role.FINANCE_AP and not step.get("exception"):
+        return PurchaseRequisition.STATUS_BUDGET_REVIEW
+    return PurchaseRequisition.STATUS_MANAGER_REVIEW
 
 
 def _pending_request(requisition, module, *, amount=None):
@@ -290,38 +322,41 @@ def submit_purchase_requisition_service(
 ) -> PurchaseRequisition:
     """
     Submits a PR for approval:
-    1. Runs the pre-approval budget check & locks the reservation (an overrun is an exception).
+    1. Soft budget check only (WITHIN_BUDGET / OUT_OF_BUDGET + shortfall is recorded on the
+       submission action); nothing is reserved until Finance approves.
     2. Routes it through the approval engine, bound to the policy version in force right now.
-    3. Transitions PR status to MANAGER_REVIEW (or BUDGET_REVIEW for an overrun).
+    3. Transitions PR status to MANAGER_REVIEW (BUDGET_REVIEW if Finance is the first step).
     """
-    if requisition.status != PurchaseRequisition.STATUS_DRAFT:
+    forbid_non_transacting_actor(user, "submit purchase requisitions")
+    if requisition.status not in (
+        PurchaseRequisition.STATUS_DRAFT,
+        PurchaseRequisition.STATUS_RETURNED,
+    ):
         raise ValidationError(
-            f"Cannot submit requisition in status '{requisition.status}'. Must be DRAFT."
+            f"Cannot submit requisition in status '{requisition.status}'. "
+            "Must be DRAFT or RETURNED."
         )
 
     if requisition.total_amount <= Decimal("0.00"):
         raise ValidationError("Requisition total amount must be greater than zero.")
 
-    overrun_reason = ""
-    shortfall = None
-    try:
-        check_and_reserve_budget_service(requisition=requisition, requested_by_user=user)
-        requisition.status = PurchaseRequisition.STATUS_MANAGER_REVIEW
-    except BudgetOverrunException as exc:
-        requisition.status = PurchaseRequisition.STATUS_BUDGET_REVIEW
-        shortfall = exc.requested_amount - exc.budget.available_amount
-        overrun_reason = (
-            f"Budget overrun of ${shortfall:,.2f} on cost center {requisition.cost_center.code}"
+    position = pr_budget_position(requisition)
+    if position["budget"] is None:
+        raise ValidationError(
+            "No active fiscal period budget allocation found for Cost Center "
+            f"'{requisition.cost_center.code}'."
         )
 
-    # Fail closed: no matching policy rejects the submission (and rolls back the reservation).
-    pr_request, exception_request = _open_pr_requests(
-        requisition, overrun_reason=overrun_reason, shortfall=shortfall
-    )
+    # Fail closed: no matching policy rejects the submission.
+    pr_request = _open_pr_requests(requisition)
 
-    previous_status = PurchaseRequisition.STATUS_DRAFT
+    previous_status = requisition.status
+    requisition.status = _status_for_step(pr_request.active_step)
     requisition.save(update_fields=["status", "updated_at"])
 
+    budget_note = f"Budget check: {position['status']}"
+    if not position["within_budget"]:
+        budget_note += f" (shortfall ${position['shortfall']:,.2f})"
     record_approval_action_service(
         target_object_id=requisition.id,
         target_model_name="PurchaseRequisition",
@@ -331,31 +366,150 @@ def submit_purchase_requisition_service(
         new_state=requisition.status,
         comments=(
             f"PR submitted for approval workflow under policy '{pr_request.policy.name}' "
-            f"v{pr_request.policy.version}."
+            f"v{pr_request.policy.version}. {budget_note}."
         ),
         approval_request=pr_request,
     )
 
-    if requisition.status == PurchaseRequisition.STATUS_BUDGET_REVIEW:
-        title = f"Budget Alert: PR {requisition.pr_number} Exceeds Budget"
-        message = (
+    _notify_step_approvers(
+        requisition,
+        pr_request,
+        title=f"New PR Approval Request: {requisition.pr_number}",
+        message=(
+            f"Requisition {requisition.pr_number} ({requisition.title}) amounting to "
+            f"${requisition.total_amount:,.2f} requires your approval review."
+        ),
+    )
+    return requisition
+
+
+def _pr_budget_exception_policy(shortfall, requisition):
+    """
+    The chain that must approve an out-of-budget PR (PRD 14): the matching budget-exception
+    *exception-route* policy (budget-exception module, else PR module) when a Super Admin defined one, otherwise a built-in single
+    Procurement Manager step. The built-in policy is flagged as an exception route so it is
+    never picked as the normal budget-exception chain (e.g. for PO overruns).
+    """
+    from apps.approvals.services import add_approval_step_service, create_approval_policy_service
+
+    policy = engine.select_policy(
+        ApprovalPolicy.MODULE_BUDGET_EXCEPTION,
+        shortfall,
+        requisition.department,
+        requisition.cost_center,
+        exception=True,
+    )
+    if policy and policy.steps.exists():
+        return policy
+    policy = engine.select_policy(
+        ApprovalPolicy.MODULE_PR,
+        requisition.total_amount,
+        requisition.department,
+        requisition.cost_center,
+        exception=True,
+    )
+    if policy and policy.steps.exists():
+        return policy
+    proc_role = Role.objects.filter(code=Role.PROC_MGR).first()
+    if proc_role is None:
+        raise ValidationError(
+            "No budget exception policy is configured and the Procurement Manager role is "
+            "missing; the over-budget requisition cannot be routed."
+        )
+    policy = ApprovalPolicy.objects.filter(
+        module=ApprovalPolicy.MODULE_BUDGET_EXCEPTION,
+        is_exception_route=True,
+        is_active=True,
+        superseded_by__isnull=True,
+        name=DEFAULT_PR_EXCEPTION_POLICY,
+    ).first()
+    if policy is None:
+        policy = create_approval_policy_service(
+            name=DEFAULT_PR_EXCEPTION_POLICY,
+            module=ApprovalPolicy.MODULE_BUDGET_EXCEPTION,
+            min_amount=Decimal("0.00"),
+            is_exception_route=True,
+        )
+        add_approval_step_service(
+            policy=policy,
+            step_number=1,
+            approver_role=proc_role,
+            description="Budget Exception Approval",
+        )
+    return policy
+
+
+def _route_budget_exception(requisition, *, shortfall, actor):
+    """Finance cannot silently approve an out-of-budget PR: open the budget-exception chain."""
+    reason = f"Budget overrun of ${shortfall:,.2f} on cost center {requisition.cost_center.code}"
+    exception_request = engine.open_approval_request(
+        module=ApprovalPolicy.MODULE_BUDGET_EXCEPTION,
+        target=requisition,
+        amount=shortfall,
+        maker=requisition.requester,
+        department=requisition.department,
+        cost_center=requisition.cost_center,
+        record_submission=False,
+        policy=_pr_budget_exception_policy(shortfall, requisition),
+    )
+    exception_request.exception_reason = reason
+    exception_request.save(update_fields=["exception_reason", "updated_at"])
+    record_approval_action_service(
+        target_object_id=requisition.id,
+        target_model_name="PurchaseRequisition",
+        actor=actor,
+        action=ApprovalAction.ACTION_SUBMIT,
+        previous_state=PurchaseRequisition.STATUS_BUDGET_REVIEW,
+        new_state=PurchaseRequisition.STATUS_BUDGET_REVIEW,
+        comments=f"Out of budget at Finance approval: {reason}. Budget exception required.",
+        approval_request=exception_request,
+    )
+    _notify_step_approvers(
+        requisition,
+        exception_request,
+        title=f"Budget Alert: PR {requisition.pr_number} Exceeds Budget",
+        message=(
             f"Requisition {requisition.pr_number} (${requisition.total_amount:,.2f}) exceeds the "
             f"available budget for Cost Center {requisition.cost_center.code} and requires budget "
             "exception approval."
-        )
-        _notify_step_approvers(requisition, exception_request, title=title, message=message)
-    else:
-        _notify_step_approvers(
-            requisition,
-            pr_request,
-            title=f"New PR Approval Request: {requisition.pr_number}",
-            message=(
-                f"Requisition {requisition.pr_number} ({requisition.title}) amounting to "
-                f"${requisition.total_amount:,.2f} requires your approval review."
-            ),
-        )
+        ),
+    )
+    return exception_request
 
-    return requisition
+
+def _notify_requester_approved(requisition, approver):
+    if requisition.requester:
+        try:
+            Notification.objects.create(
+                recipient=requisition.requester,
+                notification_type=Notification.TYPE_APPROVAL_REQUIRED,
+                title=f"Requisition Approved: {requisition.pr_number}",
+                message=f"Your requisition {requisition.pr_number} has been fully approved and is progressing to sourcing/PO execution.",
+                target_url=f"/requisitions/{requisition.id}/",
+            )
+        except Exception:
+            pass
+    try:
+        proc_execs = User.objects.filter(role__code=Role.PROC_EXEC, is_active=True)
+        org_id = requisition.department.organization_id
+        if org_id:
+            proc_execs = proc_execs.filter(organization_id=org_id)
+        for pe in proc_execs:
+            Notification.objects.create(
+                recipient=pe,
+                notification_type=Notification.TYPE_APPROVAL_REQUIRED,
+                title="Approved PR Ready for Sourcing",
+                message=f"Requisition {requisition.pr_number} has been approved by {approver.email} and is ready on your Sourcing Intake.",
+                target_url=f"/requisitions/{requisition.id}/",
+            )
+    except Exception:
+        pass
+
+
+def _has_open_reservation(requisition) -> bool:
+    return BudgetReservation.objects.filter(
+        requisition=requisition, status=BudgetReservation.STATUS_RESERVED
+    ).exists()
 
 
 @transaction.atomic
@@ -363,11 +517,14 @@ def approve_purchase_requisition_service(
     *, requisition: PurchaseRequisition, approver: User, comments: str = ""
 ) -> PurchaseRequisition:
     """
-    Approves the next step of a PR's approval chain (SMK-PR-050). A PR in BUDGET_REVIEW first
-    needs its budget exception approved (Finance by default); only then does the normal chain
-    start. All authorisation - role / specific approver / delegation, department, organisation,
-    approval limit, maker-checker and four-eyes - is enforced by the approval engine.
+    Approves the next step of a PR's approval chain. Department level(s) keep the PR in
+    MANAGER_REVIEW; when Finance/AP's step becomes active it is BUDGET_REVIEW. Approving the
+    last step reserves the budget and makes the PR APPROVED - unless the PR is out of budget,
+    in which case a budget-exception request (exception policy, else Procurement Manager) must
+    be approved first. All authorisation - role / specific approver / delegation, department,
+    organisation, approval limit, maker-checker and four-eyes - is enforced by the engine.
     """
+    forbid_non_transacting_actor(approver, "approve purchase requisitions")
     allowed_statuses = [
         PurchaseRequisition.STATUS_SUBMITTED,
         PurchaseRequisition.STATUS_MANAGER_REVIEW,
@@ -383,10 +540,12 @@ def approve_purchase_requisition_service(
 
     previous_status = requisition.status
 
-    if previous_status == PurchaseRequisition.STATUS_BUDGET_REVIEW:
-        request = _pending_request(requisition, ApprovalPolicy.MODULE_BUDGET_EXCEPTION)
+    exception_request = engine.get_pending_request(
+        ApprovalPolicy.MODULE_BUDGET_EXCEPTION, requisition
+    )
+    if exception_request is not None:
         request = engine.approve_step(
-            request=request,
+            request=exception_request,
             actor=approver,
             comments=comments or "Budget exception step approved.",
             states=(previous_status, previous_status),
@@ -399,76 +558,90 @@ def approve_purchase_requisition_service(
                 message=f"Requisition {requisition.pr_number} needs the next budget exception approval.",
             )
             return requisition
-        # The overrun is authorised: take the reservation, then the normal chain begins.
-        check_and_reserve_budget_service(
-            requisition=requisition, requested_by_user=approver, force_overrun=True
-        )
-        requisition.status = PurchaseRequisition.STATUS_MANAGER_REVIEW
+        # The overrun is authorised: take the reservation (recorded as over budget).
+        if not _has_open_reservation(requisition):
+            check_and_reserve_budget_service(
+                requisition=requisition, requested_by_user=approver, force_overrun=True
+            )
+        request.consumed_at = timezone.now()
+        request.save(update_fields=["consumed_at", "updated_at"])
+        pr_request = engine.get_pending_request(ApprovalPolicy.MODULE_PR, requisition)
+        if pr_request is not None:
+            # In flight from before the Finance-first flow: the normal chain now begins.
+            requisition.status = _status_for_step(pr_request.active_step)
+            requisition.save(update_fields=["status", "updated_at"])
+            _notify_step_approvers(
+                requisition,
+                pr_request,
+                title=f"New PR Approval Request: {requisition.pr_number}",
+                message=(
+                    f"Requisition {requisition.pr_number} ({requisition.title}) passed budget "
+                    "exception review and now requires your approval."
+                ),
+            )
+            return requisition
+        requisition.status = PurchaseRequisition.STATUS_APPROVED
         requisition.save(update_fields=["status", "updated_at"])
-        pr_request = _pending_request(requisition, ApprovalPolicy.MODULE_PR)
-        _notify_step_approvers(
-            requisition,
-            pr_request,
-            title=f"New PR Approval Request: {requisition.pr_number}",
-            message=(
-                f"Requisition {requisition.pr_number} ({requisition.title}) passed budget exception "
-                "review and now requires your approval."
-            ),
-        )
+        _notify_requester_approved(requisition, approver)
         return requisition
 
     request = _pending_request(requisition, ApprovalPolicy.MODULE_PR)
     is_final_step = request.current_step + 1 >= len(request.steps)
-    next_status = (
-        PurchaseRequisition.STATUS_APPROVED
-        if is_final_step
-        else PurchaseRequisition.STATUS_MANAGER_REVIEW
-    )
-    request = engine.approve_step(
-        request=request,
-        actor=approver,
-        comments=comments,
-        states=(previous_status, next_status),
-    )
-    requisition.status = next_status
-    requisition.save(update_fields=["status", "updated_at"])
 
-    if requisition.status == PurchaseRequisition.STATUS_APPROVED:
-        if requisition.requester:
-            try:
-                Notification.objects.create(
-                    recipient=requisition.requester,
-                    notification_type=Notification.TYPE_APPROVAL_REQUIRED,
-                    title=f"Requisition Approved: {requisition.pr_number}",
-                    message=f"Your requisition {requisition.pr_number} has been fully approved and is progressing to sourcing/PO execution.",
-                    target_url=f"/requisitions/{requisition.id}/",
-                )
-            except Exception:
-                pass
-        try:
-            proc_execs = User.objects.filter(role__code=Role.PROC_EXEC, is_active=True)
-            for pe in proc_execs:
-                Notification.objects.create(
-                    recipient=pe,
-                    notification_type=Notification.TYPE_APPROVAL_REQUIRED,
-                    title="Approved PR Ready for Sourcing",
-                    message=f"Requisition {requisition.pr_number} has been approved by {approver.email} and is ready on your Sourcing Intake.",
-                    target_url=f"/requisitions/{requisition.id}/",
-                )
-        except Exception:
-            pass
-    else:
-        step = request.active_step
+    if not is_final_step:
+        next_status = _status_for_step(request.steps[request.current_step + 1])
+        approved = engine.approve_step(
+            request=request,
+            actor=approver,
+            comments=comments,
+            states=(previous_status, next_status),
+        )
+        requisition.status = next_status
+        requisition.save(update_fields=["status", "updated_at"])
+        step = approved.active_step
         _notify_step_approvers(
             requisition,
-            request,
+            approved,
             title=f"Approval Required: PR {requisition.pr_number} (Step {step['step_number']})",
             message=(
                 f"Requisition {requisition.pr_number} requires your approval for Step "
                 f"{step['step_number']} ({step['role_name']})."
             ),
         )
+        return requisition
 
+    # Final step (Finance / AP): re-check the budget now - it may have moved since submit.
+    position = pr_budget_position(requisition)
+    out_of_budget = not _has_open_reservation(requisition) and not position["within_budget"]
+    shortfall = position["shortfall"]
+    engine.approve_step(
+        request=request,
+        actor=approver,
+        comments=comments,
+        states=(
+            previous_status,
+            (
+                PurchaseRequisition.STATUS_BUDGET_REVIEW
+                if out_of_budget
+                else PurchaseRequisition.STATUS_APPROVED
+            ),
+        ),
+    )
+    if not out_of_budget and not _has_open_reservation(requisition):
+        try:
+            check_and_reserve_budget_service(requisition=requisition, requested_by_user=approver)
+        except BudgetOverrunException as exc:  # lost a race with another reservation
+            out_of_budget = True
+            shortfall = exc.requested_amount - exc.budget.available_amount
+    if out_of_budget:
+        requisition.status = PurchaseRequisition.STATUS_BUDGET_REVIEW
+        requisition.save(update_fields=["status", "updated_at"])
+        _route_budget_exception(requisition, shortfall=shortfall, actor=approver)
+        return requisition
+
+    requisition.status = PurchaseRequisition.STATUS_APPROVED
+    requisition.save(update_fields=["status", "updated_at"])
+    _notify_requester_approved(requisition, approver)
     return requisition
 
 
@@ -476,6 +649,7 @@ def approve_purchase_requisition_service(
 def reject_purchase_requisition_service(
     *, requisition: PurchaseRequisition, approver: User, comments: str
 ) -> PurchaseRequisition:
+    forbid_non_transacting_actor(approver, "reject purchase requisitions")
     allowed_statuses = [
         PurchaseRequisition.STATUS_SUBMITTED,
         PurchaseRequisition.STATUS_MANAGER_REVIEW,
@@ -491,7 +665,7 @@ def reject_purchase_requisition_service(
     previous_status = requisition.status
     module = (
         ApprovalPolicy.MODULE_BUDGET_EXCEPTION
-        if previous_status == PurchaseRequisition.STATUS_BUDGET_REVIEW
+        if engine.get_pending_request(ApprovalPolicy.MODULE_BUDGET_EXCEPTION, requisition)
         else ApprovalPolicy.MODULE_PR
     )
     try:
@@ -543,4 +717,105 @@ def reject_purchase_requisition_service(
         except Exception:
             pass
 
+    return requisition
+
+
+@transaction.atomic
+def return_purchase_requisition_service(
+    *, requisition: PurchaseRequisition, approver: User, comments: str
+) -> PurchaseRequisition:
+    """
+    An approver on the active step (Department Approver / Finance-AP) returns
+    the PR to its requester for clarification. A comment is mandatory. The open approval
+    request is closed as RETURNED (history kept, ApprovalAction RETURNED recorded), any budget
+    reservation is released and the requester is notified. The requester then edits and
+    resubmits, which opens a new approval request bound to the policy version then in force.
+    """
+    forbid_non_transacting_actor(approver, "return purchase requisitions")
+    allowed_statuses = [
+        PurchaseRequisition.STATUS_SUBMITTED,
+        PurchaseRequisition.STATUS_MANAGER_REVIEW,
+        PurchaseRequisition.STATUS_BUDGET_REVIEW,
+    ]
+    requisition = PurchaseRequisition.objects.select_for_update().get(id=requisition.id)
+    if requisition.status not in allowed_statuses:
+        raise ValidationError(f"Cannot return requisition in status '{requisition.status}'.")
+    if not comments or not comments.strip():
+        raise ValidationError("A comment explaining what needs clarification is mandatory.")
+
+    previous_status = requisition.status
+    module = (
+        ApprovalPolicy.MODULE_BUDGET_EXCEPTION
+        if engine.get_pending_request(ApprovalPolicy.MODULE_BUDGET_EXCEPTION, requisition)
+        else ApprovalPolicy.MODULE_PR
+    )
+    request = _pending_request(requisition, module)
+    engine.return_request(
+        request=request,
+        actor=approver,
+        comments=comments,
+        states=(previous_status, PurchaseRequisition.STATUS_RETURNED),
+    )
+    for other in (ApprovalPolicy.MODULE_PR, ApprovalPolicy.MODULE_BUDGET_EXCEPTION):
+        engine.cancel_pending_request(
+            other, requisition, actor=approver, reason="Requisition returned for clarification"
+        )
+
+    requisition.status = PurchaseRequisition.STATUS_RETURNED
+    requisition.save(update_fields=["status", "updated_at"])
+    release_budget_reservation_service(
+        requisition=requisition, user=approver, reason=f"PR returned: {comments.strip()}"
+    )
+
+    if requisition.requester:
+        Notification.objects.create(
+            recipient=requisition.requester,
+            notification_type=Notification.TYPE_PR_RETURNED,
+            title=f"Requisition Returned for Clarification: {requisition.pr_number}",
+            message=(
+                f"Your requisition {requisition.pr_number} was returned by {approver.email}. "
+                f"Comment: {comments.strip()}. Please update it and resubmit."
+            ),
+            target_url=f"/requisitions/{requisition.id}/",
+        )
+    return requisition
+
+
+@transaction.atomic
+def withdraw_purchase_requisition_service(
+    *, requisition: PurchaseRequisition, user: User, reason: str = ""
+) -> PurchaseRequisition:
+    """
+    The requester withdraws a PR before final approval (in review or returned): it becomes
+    CANCELLED, the reservation is released, pending approval requests are closed and the
+    withdrawal is audit-logged.
+    """
+    requisition = PurchaseRequisition.objects.select_for_update().get(id=requisition.id)
+    if requisition.requester_id != user.id:
+        raise ValidationError("Only the requester can withdraw this requisition.")
+    if requisition.status not in (
+        PurchaseRequisition.STATUS_SUBMITTED,
+        PurchaseRequisition.STATUS_MANAGER_REVIEW,
+        PurchaseRequisition.STATUS_BUDGET_REVIEW,
+        PurchaseRequisition.STATUS_RETURNED,
+    ):
+        raise ValidationError(f"Cannot withdraw requisition in status '{requisition.status}'.")
+    previous = requisition.status
+    requisition.status = PurchaseRequisition.STATUS_CANCELLED
+    requisition.save(update_fields=["status", "updated_at"])
+    release_budget_reservation_service(
+        requisition=requisition, user=user, reason=reason or "PR withdrawn by requester"
+    )
+    for module in (ApprovalPolicy.MODULE_PR, ApprovalPolicy.MODULE_BUDGET_EXCEPTION):
+        engine.cancel_pending_request(
+            module, requisition, actor=user, reason="Requisition withdrawn by requester"
+        )
+    AuditLog.objects.create(
+        actor=user,
+        action=AuditLog.ACTION_CANCEL,
+        target_model="PurchaseRequisition",
+        target_object_id=str(requisition.id),
+        previous_state={"status": previous},
+        new_state={"status": requisition.status, "reason": reason or "withdrawn by requester"},
+    )
     return requisition

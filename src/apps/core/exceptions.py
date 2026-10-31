@@ -102,6 +102,7 @@ def custom_exception_handler(exc, context):
 
         if "ErrorDetail(" in message:
             import re
+
             m = re.search(r"""ErrorDetail\(string=['"](.*?)['"]""", message)
             if m:
                 message = m.group(1)

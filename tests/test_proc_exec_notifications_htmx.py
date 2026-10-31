@@ -6,7 +6,10 @@ HTMX feed + pending-actions fragments, mark-as-read mutation with RBAC
 (positive and negative), and sealed visibility (no cross-user leakage).
 """
 
+from datetime import timedelta
+
 import pytest
+from django.utils import timezone
 
 from apps.accounts.models import Role
 from apps.notifications.models import Notification
@@ -44,8 +47,11 @@ def _make_notification(recipient, ntype=Notification.TYPE_BID_DEADLINE, title="B
 
 def test_service_returns_top10_newest_unread(procurement_world):
     user = procurement_world["exec"]
+    base = timezone.now()
     for i in range(12):
-        _make_notification(user, title=f"N-{i:02d}")
+        n = _make_notification(user, title=f"N-{i:02d}")
+        # explicit, strictly increasing timestamps: back-to-back inserts can share a clock tick
+        Notification.objects.filter(pk=n.pk).update(created_at=base + timedelta(seconds=i))
     top = get_top_unread_for_user(user=user, limit=10)
     assert len(top) == 10
     titles = [n.title for n in top]

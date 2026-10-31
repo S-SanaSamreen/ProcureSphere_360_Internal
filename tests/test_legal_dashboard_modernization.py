@@ -14,6 +14,7 @@ from apps.contracts.services import (
 )
 from apps.vendors.models import VendorCategory
 from apps.vendors.services import register_vendor_service
+from tests.org_helpers import create_org_user
 
 
 @pytest.fixture
@@ -21,7 +22,7 @@ def legal_modern_env(db):
     legal_role, _ = Role.objects.get_or_create(
         code=Role.LEGAL_MGR, defaults={"name": "Legal / Contract Manager"}
     )
-    legal_user = User.objects.create_user(
+    legal_user = create_org_user(
         email="legal.designer@hpe.com", password="Password123!", role=legal_role
     )
 
@@ -317,9 +318,7 @@ def test_pending_vendor_verifications_prefetch_efficiency(db):
     from apps.vendors.services import register_vendor_service
 
     admin_role, _ = Role.objects.get_or_create(code=Role.SUPER_ADMIN, defaults={"name": "Admin"})
-    admin_user = User.objects.create_user(
-        email="admin.kyc@hpe.com", password="pass", role=admin_role
-    )
+    admin_user = create_org_user(email="admin.kyc@hpe.com", password="pass", role=admin_role)
 
     cat = VendorCategory.objects.create(name="Prefetch Test Cat", code="CAT-PREFETCH")
     v = register_vendor_service(

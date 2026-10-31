@@ -16,6 +16,18 @@ class GoodsReceipt(TimeStampedModel):
     received_date = models.DateTimeField()
     delivery_note_number = models.CharField(max_length=100, blank=True)
     remarks = models.TextField(blank=True)
+    acknowledged_by_vendor = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="vendor_acknowledged_grns",
+    )
+    acknowledged_at = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def is_vendor_acknowledged(self):
+        return self.acknowledged_at is not None
 
     def __str__(self):
         return f"{self.grn_number} for {self.po.po_number}"

@@ -26,9 +26,68 @@ class Organization(TimeStampedModel):
         return f"{self.name} ({self.code})"
 
 
+class Location(TimeStampedModel):
+    """A physical site (plant, office, warehouse) belonging to one organization."""
+
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE, related_name="locations"
+    )
+    name = models.CharField(max_length=150)
+    code = models.CharField(max_length=50)
+    address = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "code"], name="uniq_location_code_per_org"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.name} [{self.code}]"
+
+
+class BusinessUnit(TimeStampedModel):
+    """A business unit / division of one organization; may nest under a parent unit."""
+
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE, related_name="business_units"
+    )
+    name = models.CharField(max_length=150)
+    code = models.CharField(max_length=50)
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="children",
+    )
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "code"], name="uniq_business_unit_code_per_org"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.name} [{self.code}]"
+
+
 class Department(TimeStampedModel):
     organization = models.ForeignKey(
         Organization, on_delete=models.CASCADE, related_name="departments"
+    )
+    business_unit = models.ForeignKey(
+        BusinessUnit,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="departments",
     )
     name = models.CharField(max_length=150)
     code = models.CharField(max_length=50, unique=True)
@@ -50,6 +109,13 @@ class CostCenter(TimeStampedModel):
         null=True,
         blank=True,
         related_name="managed_cost_centers",
+    )
+    location = models.ForeignKey(
+        Location,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="cost_centers",
     )
 
     def __str__(self):

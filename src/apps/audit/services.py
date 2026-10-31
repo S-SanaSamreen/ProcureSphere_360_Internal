@@ -91,6 +91,7 @@ def detect_entity_type(identifier: str) -> str:
 def get_transaction_lifecycle_service(  # noqa: C901
     entity_type: Optional[str] = None,
     entity_identifier: str = "",
+    user=None,
 ) -> Dict[str, Any]:
     """
     Constructs an end-to-end Source-to-Pay (S2P) lifecycle graph from any starting node:
@@ -98,6 +99,11 @@ def get_transaction_lifecycle_service(  # noqa: C901
     Purchase Order -> Receipts -> Inspections -> Invoice -> 3-Way Match -> Payment ->
     Contract -> Vendor Governance & Complete Immutable Audit Trail.
     """
+    from apps.receipts.selectors import scoped_receipts
+
+    from .selectors import _Scope
+
+    S = _Scope(user)
     raw_ident = entity_identifier.strip()
     if not entity_type or entity_type.upper() == "AUTO" or entity_type.upper() == "UNKNOWN":
         entity_type = detect_entity_type(raw_ident)
@@ -161,7 +167,7 @@ def get_transaction_lifecycle_service(  # noqa: C901
         if val_uuid:
             pr_query |= Q(id=val_uuid)
         pr_obj = (
-            PurchaseRequisition.objects.filter(pr_query)
+            S.prs.filter(pr_query)
             .select_related("requester", "department", "cost_center")
             .prefetch_related("lines", "attachments")
             .first()
@@ -175,7 +181,7 @@ def get_transaction_lifecycle_service(  # noqa: C901
         if val_uuid:
             po_query |= Q(id=val_uuid)
         po_first = (
-            PurchaseOrder.objects.filter(po_query)
+            S.pos.filter(po_query)
             .select_related(
                 "vendor", "requisition", "sourcing_event", "cost_center", "acknowledged_by"
             )
@@ -192,7 +198,7 @@ def get_transaction_lifecycle_service(  # noqa: C901
         if val_uuid:
             src_query |= Q(id=val_uuid)
         src_obj = (
-            SourcingEvent.objects.filter(src_query)
+            S.events.filter(src_query)
             .select_related("requisition")
             .prefetch_related(
                 "invitations__vendor",
@@ -213,7 +219,7 @@ def get_transaction_lifecycle_service(  # noqa: C901
         if val_uuid:
             inv_query |= Q(id=val_uuid)
         inv_first = (
-            SupplierInvoice.objects.filter(inv_query)
+            S.invoices.filter(inv_query)
             .select_related("vendor", "po", "po__requisition")
             .prefetch_related("lines", "exceptions__resolved_by", "match_results__performed_by")
             .first()
@@ -228,7 +234,8 @@ def get_transaction_lifecycle_service(  # noqa: C901
         if val_uuid:
             grn_query |= Q(id=val_uuid)
         grn_first = (
-            GoodsReceipt.objects.filter(grn_query)
+            scoped_receipts(user)
+            .filter(grn_query)
             .select_related("po", "po__vendor", "received_by")
             .prefetch_related("lines__inspection", "lines__rejections")
             .first()
@@ -243,7 +250,7 @@ def get_transaction_lifecycle_service(  # noqa: C901
         if val_uuid:
             con_query |= Q(id=val_uuid)
         con_first = (
-            Contract.objects.filter(con_query)
+            S.contracts.filter(con_query)
             .select_related("vendor", "sourcing_event", "po", "contract_owner")
             .prefetch_related("versions", "milestones", "alerts", "obligations", "documents")
             .first()
@@ -260,7 +267,7 @@ def get_transaction_lifecycle_service(  # noqa: C901
         if val_uuid:
             vend_query |= Q(id=val_uuid)
         vendor_obj = (
-            Vendor.objects.filter(vend_query)
+            S.vendors.filter(vend_query)
             .select_related("category")
             .prefetch_related("contacts", "documents", "risk_records", "scorecards")
             .first()
@@ -534,7 +541,7 @@ def get_transaction_lifecycle_service(  # noqa: C901
                 }
             )
 
-        if pr_obj.status in ["APPROVED", "SOURCING", "PO_ISSUED"]:
+        if pr_obj.status in ["APPROVED", "SOURCING", "PO_ISSUED", "COMPLETED"]:
             lifecycle["stage_status"]["approval"] = "APPROVED"
         elif pr_obj.status == "REJECTED":
             lifecycle["stage_status"]["approval"] = "REJECTED"
@@ -811,9 +818,7 @@ def get_transaction_lifecycle_service(  # noqa: C901
     # 4. Aggregated Chronological Audit Trail Across All Graph Nodes
     if tracked_object_ids:
         audit_query = Q(target_object_id__in=tracked_object_ids)
-        logs = (
-            AuditLog.objects.filter(audit_query).select_related("actor").order_by("timestamp")[:100]
-        )
+        logs = S.audit.filter(audit_query).select_related("actor").order_by("timestamp")[:100]
         for log in logs:
             lifecycle["audit_logs"].append(
                 {
@@ -869,6 +874,7 @@ def export_auditor_data_service(  # noqa: C901
 
     if export_type == "audit_logs":
         logs_res = get_audit_logs(
+            user=actor,
             action=filters.get("action"),
             target_model=filters.get("target_model"),
             search_term=filters.get("search"),
@@ -900,6 +906,7 @@ def export_auditor_data_service(  # noqa: C901
 
     elif export_type == "vendor_compliance":
         vc_res = get_vendor_compliance_audit(
+            user=actor,
             status=filters.get("status"),
             kyc_status=filters.get("kyc_status"),
             search=filters.get("search"),
@@ -933,6 +940,7 @@ def export_auditor_data_service(  # noqa: C901
 
     elif export_type == "approval_history":
         app_res = get_approval_history_audit(
+            user=actor,
             target_model=filters.get("target_model"),
             action=filters.get("action"),
             search=filters.get("search"),
@@ -964,6 +972,7 @@ def export_auditor_data_service(  # noqa: C901
 
     elif export_type == "sourcing_activity":
         src_res = get_sourcing_activity_audit(
+            user=actor,
             status=filters.get("status"),
             event_type=filters.get("event_type"),
             search=filters.get("search"),
@@ -997,6 +1006,7 @@ def export_auditor_data_service(  # noqa: C901
 
     elif export_type == "po_changes":
         po_res = get_po_changes_audit(
+            user=actor,
             status=filters.get("status"),
             search=filters.get("search"),
             limit=500,
@@ -1027,6 +1037,7 @@ def export_auditor_data_service(  # noqa: C901
 
     elif export_type == "invoice_exceptions":
         exc_res = get_invoice_exceptions_audit(
+            user=actor,
             status=filters.get("status"),
             exception_type=filters.get("exception_type"),
             search=filters.get("search"),
@@ -1058,6 +1069,7 @@ def export_auditor_data_service(  # noqa: C901
 
     elif export_type == "contract_changes":
         con_res = get_contract_changes_audit(
+            user=actor,
             status=filters.get("status"),
             search=filters.get("search"),
             limit=500,
@@ -1092,6 +1104,7 @@ def export_auditor_data_service(  # noqa: C901
 
     elif export_type == "security_events":
         sec_res = get_security_events_audit(
+            user=actor,
             action=filters.get("action"),
             search=filters.get("search"),
             limit=500,
@@ -1125,6 +1138,7 @@ def export_auditor_data_service(  # noqa: C901
         lifecycle_data = get_transaction_lifecycle_service(
             entity_type=filters.get("entity_type", "AUTO"),
             entity_identifier=ident,
+            user=actor,
         )
         headers = [
             "Timestamp",

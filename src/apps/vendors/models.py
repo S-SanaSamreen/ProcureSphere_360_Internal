@@ -50,9 +50,7 @@ class Vendor(TimeStampedModel):
     pan_number = models.CharField(
         max_length=10, blank=True, default="", validators=[validate_pan_number]
     )
-    gstin = models.CharField(
-        max_length=15, blank=True, default="", validators=[validate_gstin]
-    )
+    gstin = models.CharField(max_length=15, blank=True, default="", validators=[validate_gstin])
     registration_number = models.CharField(max_length=100, blank=True)
 
     category = models.ForeignKey(VendorCategory, on_delete=models.PROTECT, related_name="vendors")
@@ -424,3 +422,53 @@ class VendorCredentialDispatch(TimeStampedModel):
 
     def __str__(self):
         return f"{self.vendor_id} -> {self.sent_to} [{self.status}]"
+
+
+class VendorChangeRequest(TimeStampedModel):
+    """
+    Pending change to the bank / tax fields of an ACTIVE vendor. The vendor record keeps its
+    old values until the Procurement Manager approves the request.
+    """
+
+    SENSITIVE_FIELDS = (
+        "bank_name",
+        "bank_account_number",
+        "bank_routing_code",
+        "pan_number",
+        "gstin",
+    )
+
+    STATUS_PENDING = "PENDING"
+    STATUS_APPROVED = "APPROVED"
+    STATUS_REJECTED = "REJECTED"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending Approval"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name="change_requests")
+    changes = models.JSONField(
+        default=dict, help_text="{field: {'old': ..., 'new': ...}} for each requested change"
+    )
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="vendor_change_requests"
+    )
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="vendor_change_decisions",
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_comments = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Change request for {self.vendor.vendor_number} [{self.status}]"

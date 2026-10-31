@@ -12,7 +12,7 @@
                 <th>Reviewed By</th>
                 <th>Date</th>
                 <th class="text-end">Prior Snapshot</th>
-                {% if role_code == "PROC_MGR" or role_code == "SUPER_ADMIN" %}
+                {% if role_code == "PROC_MGR" %}
                 <th class="text-end">Actions</th>
                 {% endif %}
             </tr>
@@ -52,7 +52,7 @@
                 <td class="text-end">
                     <code class="small">V{{ a.previous_version_snapshot.version }} · ${{ a.previous_version_snapshot.total_amount }}</code>
                 </td>
-                {% if role_code == "PROC_MGR" or role_code == "SUPER_ADMIN" %}
+                {% if role_code == "PROC_MGR" %}
                 <td class="text-end">
                     {% if a.status == "PENDING" %}
                     <div class="btn-group btn-group-sm">

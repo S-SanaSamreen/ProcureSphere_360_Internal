@@ -4,6 +4,11 @@ from . import views
 
 urlpatterns = [
     path("vendors/", views.vendor_list_view, name="vendor_list"),
+    path(
+        "vendors/change-requests/",
+        views.vendor_change_requests_view,
+        name="vendor_change_requests",
+    ),
     path("vendors/governance/", views.vendor_governance_view, name="vendor_governance"),
     path("vendors/onboarding/", views.vendor_onboarding_view, name="vendor_onboarding"),
     path("vendors/create/", views.vendor_create_view, name="vendor_create"),

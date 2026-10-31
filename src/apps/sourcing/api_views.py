@@ -6,6 +6,8 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
+from apps.core.tenancy import scope_sourcing_events
+
 from . import services
 from .models import BidEvaluation, Clarification, SourcingEvent, VendorBid
 from .permissions import (
@@ -225,6 +227,7 @@ class SourcingEventViewSet(
             event,
             category_id=request.query_params.get("category"),
             q=request.query_params.get("q", ""),
+            user=request.user,
         )
         page = self.paginate_queryset(vendors)
         rows = [
@@ -350,7 +353,16 @@ class SourcingEventViewSet(
         payload.is_valid(raise_exception=True)
         event = self.get_object()
         cc_id = payload.validated_data.get("cost_center_id")
-        cost_center = get_object_or_404(CostCenter, pk=cc_id) if cc_id else None
+        cost_center = (
+            get_object_or_404(
+                CostCenter.objects.filter(
+                    department__organization=getattr(request.user, "effective_organization", None)
+                ),
+                pk=cc_id,
+            )
+            if cc_id
+            else None
+        )
         po = services.generate_po_from_award_service(
             event=event, user=request.user, cost_center=cost_center
         )
@@ -380,6 +392,7 @@ class VendorBidViewSet(viewsets.ReadOnlyModelViewSet):
             return qs.filter(vendor_id=user.vendor_id) if user.vendor_id else qs.none()
         if not can_read_bids(user):
             return qs.none()
+        qs = qs.filter(event__in=scope_sourcing_events(SourcingEvent.objects.all(), user))
         return qs.exclude(
             event__status__in=[
                 SourcingEvent.STATUS_DRAFT,
@@ -432,6 +445,7 @@ class ClarificationViewSet(viewsets.ReadOnlyModelViewSet):
         qs = Clarification.objects.select_related("event", "vendor").order_by("-created_at")
         if user.is_vendor:
             return qs.filter(vendor_id=user.vendor_id) if user.vendor_id else qs.none()
+        qs = qs.filter(event__in=scope_sourcing_events(SourcingEvent.objects.all(), user))
         event_id = self.request.query_params.get("event")
         if event_id:
             qs = qs.filter(event_id=event_id)
@@ -465,5 +479,6 @@ class BidEvaluationViewSet(viewsets.ReadOnlyModelViewSet):
         qs = BidEvaluation.objects.select_related("event", "bid", "evaluator").order_by(
             "-created_at"
         )
+        qs = qs.filter(event__in=scope_sourcing_events(SourcingEvent.objects.all(), user))
         event_id = self.request.query_params.get("event")
         return qs.filter(event_id=event_id) if event_id else qs

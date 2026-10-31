@@ -40,7 +40,9 @@ class PRLineAdmin(RoleBasedModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
-            return qs.filter(requisition__department__organization=request.user.effective_organization)
+            return qs.filter(
+                requisition__department__organization=request.user.effective_organization
+            )
         return qs
 
 
@@ -48,11 +50,12 @@ class PRAttachmentAdmin(RoleBasedModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
-            return qs.filter(requisition__department__organization=request.user.effective_organization)
+            return qs.filter(
+                requisition__department__organization=request.user.effective_organization
+            )
         return qs
 
 
 register_model(PurchaseRequisition, PurchaseRequisitionAdmin)
 register_model(PRLine, PRLineAdmin)
 register_model(PRAttachment, PRAttachmentAdmin)
-

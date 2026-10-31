@@ -144,21 +144,15 @@ def test_superadmin_dashboard_organization_isolation(client, org_isolation_setup
     assert res_create.status_code == 403
 
     # 3. Prevent tenant admin from editing HPE's organization (403)
-    res_edit_hpe = client.get(
-        reverse("superadmin:org_edit", args=[data["org_hpe"].id])
-    )
+    res_edit_hpe = client.get(reverse("superadmin:org_edit", args=[data["org_hpe"].id]))
     assert res_edit_hpe.status_code == 403
 
     # 4. Prevent tenant admin from editing HPE's department (403)
-    res_edit_dept = client.get(
-        reverse("superadmin:dept_edit", args=[data["dept_hpe"].id])
-    )
+    res_edit_dept = client.get(reverse("superadmin:dept_edit", args=[data["dept_hpe"].id]))
     assert res_edit_dept.status_code == 403
 
     # 5. Prevent tenant admin from editing HPE's cost center (403)
-    res_edit_cc = client.get(
-        reverse("superadmin:cost_center_edit", args=[data["cc_hpe"].id])
-    )
+    res_edit_cc = client.get(reverse("superadmin:cost_center_edit", args=[data["cc_hpe"].id]))
     assert res_edit_cc.status_code == 403
 
     # 6. User list: Nova admin only sees Nova users
@@ -169,9 +163,7 @@ def test_superadmin_dashboard_organization_isolation(client, org_isolation_setup
     assert "admin@hpe.com" not in users_content
 
     # 7. Prevent modifying HPE user (403)
-    res_edit_user = client.get(
-        reverse("superadmin:user_edit", args=[data["admin_hpe"].id])
-    )
+    res_edit_user = client.get(reverse("superadmin:user_edit", args=[data["admin_hpe"].id]))
     assert res_edit_user.status_code == 403
 
 
@@ -343,10 +335,9 @@ def test_vendor_management_organization_isolation(client, org_isolation_setup):
     # 4. Django Admin vendor changelist: /admin/vendors/vendor/
     admin_vendor_url = reverse("admin:vendors_vendor_changelist")
     res_admin_vendors = client.get(admin_vendor_url)
-    assert res_admin_vendors.status_code == 200
-    admin_vendors_html = res_admin_vendors.content.decode()
-    assert "Nova Cyber Systems LLC" in admin_vendors_html
-    assert "Acme Technology Solutions Inc" not in admin_vendors_html
+    # Tenant business data is not exposed in the Django admin at all (platform console only)
+    assert res_admin_vendors.status_code == 403
+    assert "Acme Technology Solutions Inc" not in res_admin_vendors.content.decode()
 
     # 5. Global platform superuser sees both vendors
     client.force_login(global_superuser)
@@ -377,7 +368,7 @@ def test_hpe_admin_sees_only_hpe_organization_and_no_add_button(client, org_isol
     # Must contain HPE data
     assert "Hewlett Packard Enterprise" in content
     assert "HPE-GLOBAL" in content
-    assert ("HPE Compliance & Audit" in content or "HPE Compliance &amp; Audit" in content)
+    assert "HPE Compliance & Audit" in content or "HPE Compliance &amp; Audit" in content
     assert "HPE-AUDIT" in content
     assert "HPE-CC-001" in content
 
@@ -389,5 +380,3 @@ def test_hpe_admin_sees_only_hpe_organization_and_no_add_button(client, org_isol
 
     # The '+ Add Organization' button must NOT be visible
     assert "+ Add Organization" not in content
-
-

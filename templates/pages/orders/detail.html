@@ -47,7 +47,7 @@
                 <i class="fa-solid fa-paper-plane me-2"></i>Submit for Approval
             </button>
         </form>
-        {% elif po.status == 'APPROVAL' and role_code in 'SUPER_ADMIN,PROC_MGR' %}
+        {% elif po.status == 'APPROVAL' and role_code == 'PROC_MGR' %}
         <form method="POST" action="{% url 'order_approve' po.id %}" class="d-inline">
             {% csrf_token %}
             <button type="submit" class="btn btn-success rounded-pill px-4 fw-semibold shadow-sm">

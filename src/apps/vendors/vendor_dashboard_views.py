@@ -44,7 +44,7 @@ from apps.sourcing.services import (
     withdraw_vendor_bid_service,
 )
 from apps.vendors.forms import VendorContactForm, VendorProfileUpdateForm
-from apps.vendors.models import Vendor, VendorContact, VendorDocument
+from apps.vendors.models import VendorContact, VendorDocument
 from apps.vendors.selectors import (
     get_vendor_dashboard_metrics,
     get_vendor_onboarding_progress,
@@ -74,20 +74,16 @@ def vendor_required(view_func):
             return redirect(f"/login/?next={request.path}")
 
         role_code = getattr(request.user, "role_code", None)
-        if not (request.user.is_superuser or role_code == Role.VENDOR_USER):
+        if role_code != Role.VENDOR_USER or request.user.is_superuser:
             raise PermissionDenied(
                 "Access restricted: Only registered Vendor Portal users are permitted."
             )
 
         vendor = getattr(request.user, "vendor", None)
-        if not vendor and not request.user.is_superuser:
+        if not vendor:
             raise PermissionDenied(
                 "Vendor user account is not linked to an active Vendor company entity."
             )
-
-        # For superuser testing without vendor, retrieve or attach first active vendor if exists
-        if not vendor and request.user.is_superuser:
-            vendor = Vendor.objects.first()
 
         request.vendor = vendor
         return view_func(request, *args, **kwargs)
@@ -131,13 +127,15 @@ def vendor_dashboard_overview_view(request):
     )
 
     # Section B: Upcoming Bid Deadlines (Events closing within 7 days)
-    upcoming_events = SourcingEvent.objects.exclude(
-        status=SourcingEvent.STATUS_DRAFT
-    ).filter(
-        invitations__vendor=vendor,
-        status__in=[SourcingEvent.STATUS_BID_WINDOW, SourcingEvent.STATUS_PUBLISHED],
-        bid_end_date__gte=now,
-    ).order_by("bid_end_date")[:5]
+    upcoming_events = (
+        SourcingEvent.objects.exclude(status=SourcingEvent.STATUS_DRAFT)
+        .filter(
+            invitations__vendor=vendor,
+            status__in=[SourcingEvent.STATUS_BID_WINDOW, SourcingEvent.STATUS_PUBLISHED],
+            bid_end_date__gte=now,
+        )
+        .order_by("bid_end_date")[:5]
+    )
 
     # Section C: Recent Bid Activity
     recent_bids = (
@@ -232,10 +230,21 @@ def vendor_profile_view(request):
                     # Enforce document-only upload restrictions (reject image formats)
                     file_name = getattr(doc_file, "name", "")
                     ext = os.path.splitext(file_name)[1][1:].lower() if "." in file_name else ""
-                    raw_content_type = (getattr(doc_file, "content_type", "") or "").split(";")[0].strip().lower()
+                    raw_content_type = (
+                        (getattr(doc_file, "content_type", "") or "").split(";")[0].strip().lower()
+                    )
 
                     DISALLOWED_IMAGE_EXTENSIONS = {
-                        "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "tiff", "ico", "avif"
+                        "png",
+                        "jpg",
+                        "jpeg",
+                        "gif",
+                        "webp",
+                        "bmp",
+                        "svg",
+                        "tiff",
+                        "ico",
+                        "avif",
                     }
                     SUPPORTED_DOCUMENT_EXTENSIONS = {"pdf", "doc", "docx", "xlsx", "csv"}
 
@@ -1355,21 +1364,17 @@ def vendor_purchase_order_detail_view(request, po_id):
     total_accepted_grn_qty = sum(rl.quantity_accepted for rl in all_receipt_lines)
 
     # Calculate total prior invoiced quantity for this PO across all invoices
-    prior_invoiced_qty = (
-        InvoiceLine.objects.filter(
-            po_line__po=po,
-            invoice__status__in=[
-                SupplierInvoice.STATUS_MATCHING,
-                SupplierInvoice.STATUS_EXCEPTION,
-                SupplierInvoice.STATUS_APPROVAL,
-                SupplierInvoice.STATUS_READY_FOR_PAYMENT,
-                SupplierInvoice.STATUS_PAID,
-                SupplierInvoice.STATUS_RECEIVED,
-            ],
-        )
-        .aggregate(total_prior=Sum("quantity"))["total_prior"]
-        or Decimal("0.00")
-    )
+    prior_invoiced_qty = InvoiceLine.objects.filter(
+        po_line__po=po,
+        invoice__status__in=[
+            SupplierInvoice.STATUS_MATCHING,
+            SupplierInvoice.STATUS_EXCEPTION,
+            SupplierInvoice.STATUS_APPROVAL,
+            SupplierInvoice.STATUS_READY_FOR_PAYMENT,
+            SupplierInvoice.STATUS_PAID,
+            SupplierInvoice.STATUS_RECEIVED,
+        ],
+    ).aggregate(total_prior=Sum("quantity"))["total_prior"] or Decimal("0.00")
 
     remaining_to_invoice = max(Decimal("0.00"), total_accepted_grn_qty - prior_invoiced_qty)
 
@@ -1526,11 +1531,13 @@ def vendor_purchase_order_deliver_view(request, po_id):
             try:
                 qty = Decimal(qty_str)
                 if qty > Decimal("0.00"):
-                    delivery_items.append({
-                        "po_line_id": str(po_line.id),
-                        "quantity": qty,
-                        "notes": notes_str,
-                    })
+                    delivery_items.append(
+                        {
+                            "po_line_id": str(po_line.id),
+                            "quantity": qty,
+                            "notes": notes_str,
+                        }
+                    )
             except Exception:
                 messages.error(
                     request, f"Invalid delivery quantity for item: {po_line.item_description}"
@@ -1560,13 +1567,13 @@ def vendor_purchase_order_deliver_view(request, po_id):
         )
     except ValidationError as ve:
         messages.error(
-            request, f"Delivery Dispatch Failed: {ve.message if hasattr(ve, 'message') else str(ve)}"
+            request,
+            f"Delivery Dispatch Failed: {ve.message if hasattr(ve, 'message') else str(ve)}",
         )
     except Exception as e:
         messages.error(request, f"System Error recording delivery: {str(e)}")
 
     return redirect("vendor_purchase_order_detail", po_id=po.id)
-
 
 
 # ==============================================================================
@@ -1617,11 +1624,13 @@ def vendor_invoices_view(request):
     vendor = request.vendor
     invoices = SupplierInvoice.objects.filter(vendor=vendor).order_by("-created_at")
     from django.db.models import Q
-    eligible_pos = PurchaseOrder.objects.filter(
-        vendor=vendor
-    ).filter(
-        Q(status__in=ELIGIBLE_INVOICE_STATUSES) | Q(receipts__isnull=False)
-    ).distinct().order_by("-created_at")
+
+    eligible_pos = (
+        PurchaseOrder.objects.filter(vendor=vendor)
+        .filter(Q(status__in=ELIGIBLE_INVOICE_STATUSES) | Q(receipts__isnull=False))
+        .distinct()
+        .order_by("-created_at")
+    )
 
     context = {
         "vendor": vendor,
@@ -1651,21 +1660,17 @@ def vendor_invoice_submit_view(request, po_id=None):
     if po:
         all_receipt_lines = [rl for r in po.receipts.all() for rl in r.lines.all()]
         total_accepted_grn_qty = sum(rl.quantity_accepted for rl in all_receipt_lines)
-        prior_invoiced_qty = (
-            InvoiceLine.objects.filter(
-                po_line__po=po,
-                invoice__status__in=[
-                    SupplierInvoice.STATUS_MATCHING,
-                    SupplierInvoice.STATUS_EXCEPTION,
-                    SupplierInvoice.STATUS_APPROVAL,
-                    SupplierInvoice.STATUS_READY_FOR_PAYMENT,
-                    SupplierInvoice.STATUS_PAID,
-                    SupplierInvoice.STATUS_RECEIVED,
-                ],
-            )
-            .aggregate(total_prior=Sum("quantity"))["total_prior"]
-            or Decimal("0.00")
-        )
+        prior_invoiced_qty = InvoiceLine.objects.filter(
+            po_line__po=po,
+            invoice__status__in=[
+                SupplierInvoice.STATUS_MATCHING,
+                SupplierInvoice.STATUS_EXCEPTION,
+                SupplierInvoice.STATUS_APPROVAL,
+                SupplierInvoice.STATUS_READY_FOR_PAYMENT,
+                SupplierInvoice.STATUS_PAID,
+                SupplierInvoice.STATUS_RECEIVED,
+            ],
+        ).aggregate(total_prior=Sum("quantity"))["total_prior"] or Decimal("0.00")
         remaining_to_invoice = max(Decimal("0.00"), total_accepted_grn_qty - prior_invoiced_qty)
         if total_accepted_grn_qty > Decimal("0.00") and remaining_to_invoice <= Decimal("0.00"):
             messages.info(
@@ -1675,11 +1680,13 @@ def vendor_invoice_submit_view(request, po_id=None):
             return redirect("vendor_purchase_order_detail", po_id=po.id)
 
     from django.db.models import Q
-    eligible_pos = PurchaseOrder.objects.filter(
-        vendor=vendor
-    ).filter(
-        Q(status__in=ELIGIBLE_INVOICE_STATUSES) | Q(receipts__isnull=False)
-    ).distinct().order_by("-created_at")
+
+    eligible_pos = (
+        PurchaseOrder.objects.filter(vendor=vendor)
+        .filter(Q(status__in=ELIGIBLE_INVOICE_STATUSES) | Q(receipts__isnull=False))
+        .distinct()
+        .order_by("-created_at")
+    )
 
     if request.method == "GET":
         if not po and eligible_pos.exists():
@@ -1719,18 +1726,24 @@ def vendor_invoice_submit_view(request, po_id=None):
                 qty = Decimal(str(qty_str))
                 price = Decimal(str(price_str))
                 if qty > 0:
-                    line_items.append({
-                        "po_line": po_line,
-                        "quantity": qty,
-                        "unit_price": price,
-                        "item_description": po_line.item_description,
-                    })
+                    line_items.append(
+                        {
+                            "po_line": po_line,
+                            "quantity": qty,
+                            "unit_price": price,
+                            "item_description": po_line.item_description,
+                        }
+                    )
             except Exception:
-                messages.error(request, f"Invalid quantity or price for line item: {po_line.item_description}")
+                messages.error(
+                    request, f"Invalid quantity or price for line item: {po_line.item_description}"
+                )
                 return redirect("vendor_purchase_order_detail", po_id=po.id)
 
     if not line_items:
-        messages.error(request, "You must include at least one line item with a quantity greater than 0.")
+        messages.error(
+            request, "You must include at least one line item with a quantity greater than 0."
+        )
         return redirect("vendor_purchase_order_detail", po_id=po.id)
 
     try:
@@ -1742,7 +1755,7 @@ def vendor_invoice_submit_view(request, po_id=None):
             due_date=due_date,
             line_items=line_items,
             notes=notes,
-            created_by_user=request.user
+            created_by_user=request.user,
         )
         try:
             from apps.invoices.services import run_3_way_match_service
@@ -1755,9 +1768,7 @@ def vendor_invoice_submit_view(request, po_id=None):
         err_msg = (
             e.message
             if hasattr(e, "message")
-            else "; ".join(e.messages)
-            if hasattr(e, "messages")
-            else str(e)
+            else "; ".join(e.messages) if hasattr(e, "messages") else str(e)
         )
         messages.error(request, f"Invoice validation error: {err_msg}")
     except Exception as e:
@@ -1874,9 +1885,11 @@ def vendor_document_download_view(request, doc_type, doc_id):
     AuditLog.objects.create(
         actor=request.user,
         action=AuditLog.ACTION_EXPORT,
-        target_model="PRAttachment"
-        if doc_type == "event"
-        else ("BidAttachment" if doc_type == "bid" else "VendorDocument"),
+        target_model=(
+            "PRAttachment"
+            if doc_type == "event"
+            else ("BidAttachment" if doc_type == "bid" else "VendorDocument")
+        ),
         target_object_id=str(doc_id),
         new_state={
             "document_type": doc_type,
@@ -2182,3 +2195,62 @@ def vendor_grn_detail_view(request, grn_id):
         "lines": grn.lines.all(),
     }
     return render(request, "pages/vendor/grn_detail.html", context)
+
+
+@vendor_required
+@require_POST
+def vendor_grn_acknowledge_view(request, grn_id):
+    """A vendor acknowledges a goods receipt of one of its own purchase orders."""
+    from apps.receipts.models import GoodsReceipt
+    from apps.receipts.services import acknowledge_receipt_service
+
+    grn = get_object_or_404(GoodsReceipt, id=grn_id, po__vendor=request.vendor)
+    try:
+        acknowledge_receipt_service(receipt=grn, user=request.user)
+        messages.success(request, f"Receipt {grn.grn_number} acknowledged.")
+    except ValidationError as exc:
+        messages.error(request, " ".join(exc.messages))
+    return redirect("vendor_grn_detail", grn_id=grn.id)
+
+
+@vendor_required
+def vendor_invoice_revise_view(request, invoice_id):
+    """Vendor answers a Finance credit-note / revised-invoice request."""
+    from apps.invoices.models import MatchException
+    from apps.invoices.services import submit_revised_invoice_service
+
+    invoice = get_object_or_404(
+        SupplierInvoice.objects.select_related("po"), pk=invoice_id, vendor=request.vendor
+    )
+    requests_open = invoice.exceptions.filter(status=MatchException.STATUS_AWAITING_VENDOR)
+    if request.method == "POST":
+        items = [
+            {
+                "line_id": str(line.pk),
+                "quantity": request.POST.get(f"qty_{line.pk}", line.quantity),
+                "unit_price": request.POST.get(f"price_{line.pk}", line.unit_price),
+            }
+            for line in invoice.lines.all()
+        ]
+        try:
+            submit_revised_invoice_service(
+                invoice=invoice,
+                vendor_user=request.user,
+                line_items=items,
+                notes=request.POST.get("notes", ""),
+            )
+            messages.success(request, "Revised invoice submitted and re-matched.")
+            return redirect("vendor_invoices")
+        except ValidationError as exc:
+            messages.error(request, " ".join(exc.messages))
+    return render(
+        request,
+        "pages/vendor/invoice_revise.html",
+        {
+            "vendor": request.vendor,
+            "active_nav": "invoices",
+            "invoice": invoice,
+            "lines": invoice.lines.all(),
+            "requests_open": requests_open,
+        },
+    )

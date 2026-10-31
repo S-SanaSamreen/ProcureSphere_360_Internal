@@ -5,6 +5,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.accounts.models import Role, User
+from apps.accounts.permissions import forbid_non_transacting_actor
 from apps.audit.models import AuditLog
 from apps.audit.services import create_audit_log_service
 from apps.core.validators import validate_file_upload
@@ -12,15 +13,18 @@ from apps.notifications.models import Notification
 from apps.notifications.services import notify_role_users, notify_vendor_users
 from apps.vendors.models import Vendor
 
+from .controls import event_organization, get_controls
 from .models import (
     AwardDecision,
     BidAttachment,
+    BidDeadlineExtension,
     BidEvaluation,
     BidInvite,
     BidLine,
     BidVersion,
     Clarification,
     NegotiationNote,
+    SourcingDeviation,
     SourcingEvent,
     VendorBid,
 )
@@ -173,6 +177,7 @@ def create_sourcing_event_service(
     """
     Creates a new RFQ/RFP sourcing event in DRAFT status.
     """
+    forbid_non_transacting_actor(created_by_user, "create sourcing events")
     tech_w = _parse_weight(technical_weight, "Technical weight")
     comm_w = _parse_weight(commercial_weight, "Commercial weight")
     _validate_event_fields(
@@ -261,6 +266,7 @@ def update_draft_sourcing_event_service(*, event: SourcingEvent, user: User, dat
     """
     Edits a DRAFT event. Published events are immutable (vendors may already be bidding).
     """
+    forbid_non_transacting_actor(user, "edit sourcing events")
     _lock_and_refresh(event)
     if event.status != SourcingEvent.STATUS_DRAFT:
         raise ValidationError(f"Only DRAFT events can be edited (current: {event.status}).")
@@ -338,7 +344,7 @@ def get_publish_validation_errors(event: SourcingEvent) -> list:
         errors.append("Bid deadline is in the past; adjust the bid window before publishing.")
     if event.technical_weight + event.commercial_weight != Decimal("100"):
         errors.append("Technical and commercial weights must add up to 100.")
-    return errors + _invitation_errors(event)
+    return errors + _invitation_errors(event) + control_errors_for_publish(event)
 
 
 def _invitation_errors(event: SourcingEvent) -> list:
@@ -381,6 +387,7 @@ def publish_sourcing_event_service(*, event: SourcingEvent, user: User) -> Sourc
     Validates and publishes a DRAFT event (DRAFT -> PUBLISHED), notifies invited vendors and
     opens the bid window immediately when the bid start time has already been reached.
     """
+    forbid_non_transacting_actor(user, "publish sourcing events")
     _lock_and_refresh(event)
     errors = get_publish_validation_errors(event)
     if errors:
@@ -451,10 +458,12 @@ def close_bid_window_service(*, event: SourcingEvent, user: User) -> SourcingEve
     Can be manually closed by authorized users (e.g. Procurement Executive/Manager)
     at any time while the bid window is open, or automatically when the deadline passes.
     """
+    forbid_non_transacting_actor(user, "close bid windows")
     _lock_and_refresh(event)
     if event.status != SourcingEvent.STATUS_BID_WINDOW:
         raise ValidationError(f"Bid window is not open (current: {event.status}).")
 
+    _assert_min_bids_for_close(event)
     now = timezone.now()
     early_close = now < event.bid_end_date
     if early_close:
@@ -504,6 +513,7 @@ def invite_vendors_to_event_service(
     Rejects ineligible vendors (draft/KYC/rejected/on hold/suspended) and duplicate invitations.
     Vendors invited after publication are notified immediately.
     """
+    forbid_non_transacting_actor(invited_by, "invite vendors")
     _lock_and_refresh(event)
     if event.status not in (
         SourcingEvent.STATUS_DRAFT,
@@ -547,6 +557,7 @@ def invite_vendors_to_event_service(
 @transaction.atomic
 def revoke_invitation_service(*, invite: BidInvite, user: User):
     """Removes an invitation while the event is still a DRAFT (nothing has been sent yet)."""
+    forbid_non_transacting_actor(user, "revoke invitations")
     if invite.event.status != SourcingEvent.STATUS_DRAFT:
         raise ValidationError("Invitations can only be removed while the event is DRAFT.")
     snapshot = {"event_number": invite.event.event_number, "vendor": invite.vendor.legal_name}
@@ -1281,6 +1292,7 @@ def _parse_score(value, label):
 def record_technical_evaluation_service(
     *, event: SourcingEvent, bid: VendorBid, evaluator: User, score, comments: str = ""
 ) -> BidEvaluation:
+    forbid_non_transacting_actor(evaluator, "evaluate bids")
     if event.status != SourcingEvent.STATUS_TECHNICAL_REVIEW:
         raise ValidationError("Technical scores can only be recorded during TECHNICAL REVIEW.")
     _get_evaluable_bid(event, bid)
@@ -1315,6 +1327,7 @@ def record_technical_evaluation_service(
 def record_commercial_evaluation_service(
     *, event: SourcingEvent, bid: VendorBid, evaluator: User, score, comments: str = ""
 ) -> BidEvaluation:
+    forbid_non_transacting_actor(evaluator, "evaluate bids")
     if event.status != SourcingEvent.STATUS_COMMERCIAL_REVIEW:
         raise ValidationError("Commercial scores can only be recorded during COMMERCIAL REVIEW.")
     _get_evaluable_bid(event, bid)
@@ -1352,6 +1365,7 @@ def advance_to_commercial_review_service(*, event: SourcingEvent, user: User) ->
     TECHNICAL_REVIEW -> COMMERCIAL_REVIEW. Requires every evaluable bid to have a technical score;
     only after this transition is pricing (the commercial envelope) unsealed to evaluators.
     """
+    forbid_non_transacting_actor(user, "advance sourcing events")
     _lock_and_refresh(event)
     bids = list(event.bids.filter(status__in=EVALUABLE_BID_STATUSES))
     if not bids:
@@ -1373,6 +1387,7 @@ def advance_to_commercial_review_service(*, event: SourcingEvent, user: User) ->
 def add_negotiation_note_service(
     *, event: SourcingEvent, bid: VendorBid, author: User, note: str
 ) -> NegotiationNote:
+    forbid_non_transacting_actor(author, "negotiate bids")
     if event.status not in (
         SourcingEvent.STATUS_COMMERCIAL_REVIEW,
         SourcingEvent.STATUS_AWARD_APPROVAL,
@@ -1394,6 +1409,283 @@ def add_negotiation_note_service(
         new_state={"event_number": event.event_number, "bid_number": bid.bid_number},
     )
     return entry
+
+
+# ==============================================================================
+# SOURCING CONTROLS (deadline extension, minimum bidders, sole source, high value)
+# ==============================================================================
+
+DEVIATION_APPROVER_ROLES = {Role.PROC_MGR}
+EXTENSION_ROLES = {Role.PROC_EXEC, Role.PROC_MGR}
+
+
+def _role_code(user):
+    return getattr(user, "role_code", None) if user else None
+
+
+def _same_org(user, event) -> bool:
+    """Internal users act only inside the organization that owns the event."""
+    user_org = getattr(user, "effective_organization", None)
+    if user_org is None:
+        return False
+    event_org = event_organization(event)
+    return event_org is not None and event_org.pk == user_org.pk
+
+
+def _approved_deviation(event, kind) -> bool:
+    return event.deviations.filter(kind=kind, status=SourcingDeviation.STATUS_APPROVED).exists()
+
+
+def _estimated_value(event) -> Decimal:
+    req = event.requisition
+    return Decimal(str(req.total_amount)) if req is not None else Decimal("0.00")
+
+
+def control_errors_for_publish(event: SourcingEvent) -> list:
+    """Gates applied only when flagged/configured; an empty list keeps the happy path."""
+    errors = []
+    controls = get_controls(event_organization(event))
+    if event.is_sole_source:
+        if not (event.sole_source_justification or "").strip():
+            errors.append("Sole-source events require a written justification.")
+        if not _approved_deviation(event, SourcingDeviation.KIND_SOLE_SOURCE):
+            errors.append("Sole-source event needs Procurement Manager approval before publishing.")
+    elif controls.enforce_min_bidders:
+        invited = event.invitations.count()
+        if invited < controls.min_bidders and not _approved_deviation(
+            event, SourcingDeviation.KIND_MIN_BIDDERS_PUBLISH
+        ):
+            errors.append(
+                f"Only {invited} vendor(s) invited; the minimum is {controls.min_bidders}. "
+                "Invite more vendors or obtain an approved deviation from the Procurement Manager."
+            )
+    threshold = controls.publish_approval_threshold
+    if (
+        threshold is not None
+        and _estimated_value(event) >= threshold
+        and not _approved_deviation(event, SourcingDeviation.KIND_HIGH_VALUE_PUBLISH)
+    ):
+        errors.append(
+            f"Events valued at or above {threshold:,.2f} need Procurement Manager approval "
+            "before publishing."
+        )
+    return errors
+
+
+def _min_bids_error(event: SourcingEvent):
+    controls = get_controls(event_organization(event))
+    if not controls.enforce_min_bidders or event.is_sole_source:
+        return None
+    submitted = event.bids.filter(status__in=EVALUABLE_BID_STATUSES).count()
+    if submitted < controls.min_bidders and not _approved_deviation(
+        event, SourcingDeviation.KIND_MIN_BIDDERS_AWARD
+    ):
+        return (
+            f"Only {submitted} bid(s) submitted; the minimum is {controls.min_bidders}. "
+            "A deviation approved by the Procurement Manager is required."
+        )
+    return None
+
+
+def _assert_min_bids_for_close(event: SourcingEvent):
+    error = _min_bids_error(event)
+    if error:
+        raise ValidationError(f"Cannot close the bid window: {error}")
+
+
+def _assert_award_controls(event: SourcingEvent):
+    error = _min_bids_error(event)
+    if error:
+        raise ValidationError(f"Cannot award: {error}")
+    if event.is_sole_source and not _approved_deviation(event, SourcingDeviation.KIND_SOLE_SOURCE):
+        raise ValidationError("Cannot award: sole-source event needs Procurement Manager approval.")
+
+
+@transaction.atomic
+def extend_bid_deadline_service(
+    *, event: SourcingEvent, user: User, new_deadline, reason: str
+) -> SourcingEvent:
+    """Extends the bid deadline before close; mandatory reason, vendors notified, audited."""
+    forbid_non_transacting_actor(user, "extend bid deadlines")
+    _lock_and_refresh(event)
+    if _role_code(user) not in EXTENSION_ROLES or not _same_org(user, event):
+        raise PermissionDenied(
+            "Only the Procurement Executive/Manager of the event's organization can extend "
+            "a bid deadline."
+        )
+    if not (reason or "").strip():
+        raise ValidationError("A reason is required to extend the bid deadline.")
+    if event.status not in (SourcingEvent.STATUS_PUBLISHED, SourcingEvent.STATUS_BID_WINDOW):
+        raise ValidationError(
+            f"The deadline can only be extended while the event is open (current: {event.status})."
+        )
+    if timezone.now() >= event.bid_end_date:
+        raise ValidationError("The bid deadline has already passed and cannot be extended.")
+    if new_deadline is None or new_deadline <= event.bid_end_date:
+        raise ValidationError("The new deadline must be later than the current deadline.")
+
+    previous = event.bid_end_date
+    event.bid_end_date = new_deadline
+    event.save(update_fields=["bid_end_date", "updated_at"])
+    BidDeadlineExtension.objects.create(
+        event=event,
+        previous_deadline=previous,
+        new_deadline=new_deadline,
+        reason=reason.strip(),
+        extended_by=user,
+        created_by=user,
+    )
+    create_audit_log_service(
+        actor=user,
+        action=AuditLog.ACTION_UPDATE,
+        target_model="SourcingEvent",
+        target_object_id=event.id,
+        previous_state={"bid_end_date": previous.isoformat()},
+        new_state={
+            "bid_end_date": new_deadline.isoformat(),
+            "event_number": event.event_number,
+            "action": "DEADLINE_EXTENDED",
+            "reason": reason.strip(),
+        },
+    )
+    for invite in event.invitations.select_related("vendor"):
+        notify_vendor_users(
+            vendor=invite.vendor,
+            notification_type=Notification.TYPE_BID_DEADLINE,
+            title=f"Deadline extended: {event.event_number}",
+            message=(
+                f"The bid deadline for {event.event_number} moved from {previous:%Y-%m-%d %H:%M} "
+                f"to {new_deadline:%Y-%m-%d %H:%M}. Reason: {reason.strip()[:300]}"
+            ),
+            target_url=f"/vendor/sourcing/{event.id}/",
+        )
+    return event
+
+
+@transaction.atomic
+def set_sole_source_service(
+    *, event: SourcingEvent, user: User, justification: str, is_sole_source: bool = True
+) -> SourcingEvent:
+    """Flags a DRAFT event as sole source (justification mandatory) and files the approval."""
+    forbid_non_transacting_actor(user, "set sole source")
+    _lock_and_refresh(event)
+    if _role_code(user) not in EXTENSION_ROLES or not _same_org(user, event):
+        raise PermissionDenied("Only procurement staff of the event's organization may do this.")
+    if event.status != SourcingEvent.STATUS_DRAFT:
+        raise ValidationError("Sole-source status can only be changed while the event is DRAFT.")
+    justification = (justification or "").strip()
+    if is_sole_source and not justification:
+        raise ValidationError("A written justification is required for a sole-source event.")
+    event.is_sole_source = is_sole_source
+    event.sole_source_justification = justification if is_sole_source else ""
+    event.save(update_fields=["is_sole_source", "sole_source_justification", "updated_at"])
+    create_audit_log_service(
+        actor=user,
+        action=AuditLog.ACTION_UPDATE,
+        target_model="SourcingEvent",
+        target_object_id=event.id,
+        new_state={"is_sole_source": is_sole_source, "justification": justification[:500]},
+    )
+    if is_sole_source:
+        request_deviation_service(
+            event=event,
+            user=user,
+            kind=SourcingDeviation.KIND_SOLE_SOURCE,
+            reason=justification,
+        )
+    return event
+
+
+@transaction.atomic
+def request_deviation_service(
+    *, event: SourcingEvent, user: User, kind: str, reason: str
+) -> SourcingDeviation:
+    """Raises a deviation for Procurement Manager approval (one pending per kind)."""
+    forbid_non_transacting_actor(user, "request sourcing deviations")
+    if kind not in dict(SourcingDeviation.KIND_CHOICES):
+        raise ValidationError(f"Unknown deviation type '{kind}'.")
+    if _role_code(user) not in EXTENSION_ROLES or not _same_org(user, event):
+        raise PermissionDenied("Only procurement staff of the event's organization may do this.")
+    if not (reason or "").strip():
+        raise ValidationError("A reason is required for a deviation request.")
+    if event.deviations.filter(kind=kind, status=SourcingDeviation.STATUS_PENDING).exists():
+        raise ValidationError("A deviation of this type is already awaiting approval.")
+    deviation = SourcingDeviation.objects.create(
+        event=event, kind=kind, reason=reason.strip(), requested_by=user, created_by=user
+    )
+    create_audit_log_service(
+        actor=user,
+        action=AuditLog.ACTION_SUBMIT,
+        target_model="SourcingDeviation",
+        target_object_id=deviation.id,
+        new_state={"event_number": event.event_number, "kind": kind, "reason": reason.strip()},
+    )
+    org = event_organization(event)
+    approvers = User.objects.filter(
+        role__code=Role.PROC_MGR, is_active=True, organization=org
+    ).exclude(pk=user.pk)
+    from apps.notifications.services import notify_users
+
+    notify_users(
+        users=list(approvers),
+        notification_type=Notification.TYPE_APPROVAL_REQUIRED,
+        title=f"Sourcing deviation approval: {event.event_number}",
+        message=f"{deviation.get_kind_display()}. Reason: {deviation.reason[:300]}",
+        target_url=f"/sourcing-events/{event.id}/",
+    )
+    return deviation
+
+
+@transaction.atomic
+def decide_deviation_service(
+    *, deviation: SourcingDeviation, approver: User, approve: bool, comments: str = ""
+) -> SourcingDeviation:
+    """Procurement Manager (same org, not the requester) approves or rejects a deviation."""
+    forbid_non_transacting_actor(approver, "decide sourcing deviations")
+    deviation = SourcingDeviation.objects.select_for_update().get(pk=deviation.pk)
+    event = deviation.event
+    if _role_code(approver) not in DEVIATION_APPROVER_ROLES or not _same_org(approver, event):
+        raise PermissionDenied(
+            "Only the Procurement Manager of the event's organization can decide deviations."
+        )
+    if deviation.status != SourcingDeviation.STATUS_PENDING:
+        raise ValidationError(f"This deviation is already {deviation.status.lower()}.")
+    if deviation.requested_by_id == approver.id:
+        raise ValidationError(
+            "Separation of duties violation: you cannot approve your own deviation request."
+        )
+    if not approve and not (comments or "").strip():
+        raise ValidationError("A reason is required to reject a deviation.")
+    deviation.status = (
+        SourcingDeviation.STATUS_APPROVED if approve else SourcingDeviation.STATUS_REJECTED
+    )
+    deviation.decided_by = approver
+    deviation.decided_at = timezone.now()
+    deviation.decision_comments = (comments or "").strip()
+    deviation.save()
+    create_audit_log_service(
+        actor=approver,
+        action=AuditLog.ACTION_APPROVE if approve else AuditLog.ACTION_REJECT,
+        target_model="SourcingDeviation",
+        target_object_id=deviation.id,
+        previous_state={"status": SourcingDeviation.STATUS_PENDING},
+        new_state={
+            "status": deviation.status,
+            "event_number": event.event_number,
+            "kind": deviation.kind,
+            "comments": deviation.decision_comments,
+        },
+    )
+    from apps.notifications.services import notify_users
+
+    notify_users(
+        users=[deviation.requested_by],
+        notification_type=Notification.TYPE_APPROVAL_REQUIRED,
+        title=f"Deviation {deviation.status.lower()}: {event.event_number}",
+        message=f"{deviation.get_kind_display()} was {deviation.status.lower()}.",
+        target_url=f"/sourcing-events/{event.id}/",
+    )
+    return deviation
 
 
 # ==============================================================================
@@ -1421,6 +1713,7 @@ def recommend_award_service(
     *, event: SourcingEvent, winning_bid: VendorBid, recommended_by: User, award_reason: str
 ) -> AwardDecision:
     """COMMERCIAL_REVIEW -> AWARD_APPROVAL with a PENDING AwardDecision."""
+    forbid_non_transacting_actor(recommended_by, "recommend awards")
     _lock_and_refresh(event)
     if event.status != SourcingEvent.STATUS_COMMERCIAL_REVIEW:
         raise ValidationError("An award can only be recommended during COMMERCIAL REVIEW.")
@@ -1428,6 +1721,7 @@ def recommend_award_service(
     _assert_vendor_awardable(winning_bid.vendor)
     if not (award_reason or "").strip():
         raise ValidationError("Award justification is required.")
+    _assert_award_controls(event)
     if not BidEvaluation.objects.filter(
         bid=winning_bid, commercial_evaluated_at__isnull=False
     ).exists():
@@ -1535,6 +1829,7 @@ def approve_award_service(
     *, event: SourcingEvent, approver: User, comments: str = ""
 ) -> AwardDecision:
     """AWARD_APPROVAL -> AWARDED. Re-checks vendor eligibility at decision time."""
+    forbid_non_transacting_actor(approver, "approve sourcing awards")
     _lock_and_refresh(event)
     if event.status != SourcingEvent.STATUS_AWARD_APPROVAL:
         raise ValidationError("Event is not awaiting award approval.")
@@ -1610,6 +1905,7 @@ def approve_award_service(
 @transaction.atomic
 def reject_award_service(*, event: SourcingEvent, approver: User, comments: str) -> AwardDecision:
     """AWARD_APPROVAL -> COMMERCIAL_REVIEW; the rejected decision is retained as history."""
+    forbid_non_transacting_actor(approver, "reject sourcing awards")
     _lock_and_refresh(event)
     if event.status != SourcingEvent.STATUS_AWARD_APPROVAL:
         raise ValidationError("Event is not awaiting award approval.")
@@ -1671,6 +1967,7 @@ def evaluate_and_award_sourcing_event_service(
     approval in one transaction. Same guards as the two-step path except the commercial-score
     requirement, which the approver explicitly takes responsibility for.
     """
+    forbid_non_transacting_actor(approved_by_user, "approve sourcing awards")
     if winning_bid.event_id != event.id:
         raise ValidationError("Winning bid does not belong to target sourcing event.")
     _lock_and_refresh(event)
@@ -1678,9 +1975,10 @@ def evaluate_and_award_sourcing_event_service(
     _assert_vendor_awardable(winning_bid.vendor)
     if not (award_reason or "").strip():
         raise ValidationError("Award justification is required.")
+    _assert_award_controls(event)
 
     recommender = recommended_by or event.created_by or approved_by_user
-    if recommender.id == approved_by_user.id and not getattr(approved_by_user, "is_superuser", False):
+    if recommender.id == approved_by_user.id:
         raise ValidationError(
             "Separation of duties violation: Award approver cannot be the same user who recommended or created the event without independent recommendation."
         )
@@ -1724,6 +2022,7 @@ def evaluate_and_award_sourcing_event_service(
 def cancel_sourcing_event_service(
     *, event: SourcingEvent, user: User, reason: str
 ) -> SourcingEvent:
+    forbid_non_transacting_actor(user, "cancel sourcing events")
     _lock_and_refresh(event)
     if not (reason or "").strip():
         raise ValidationError("A cancellation reason is required.")
@@ -1769,6 +2068,7 @@ def generate_po_from_award_service(*, event: SourcingEvent, user: User, cost_cen
     Creates the Purchase Order for an AWARDED event from the approved winning bid lines,
     reusing orders.generate_purchase_order_service (budget commitment, audit, numbering).
     """
+    forbid_non_transacting_actor(user, "generate purchase orders")
     from apps.orders.models import PurchaseOrder
     from apps.orders.services import generate_purchase_order_service
 

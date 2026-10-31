@@ -533,6 +533,8 @@ def test_prod_and_staging_settings_work_behind_render_proxy(monkeypatch, module)
     import importlib
 
     monkeypatch.setenv("DJANGO_ALLOWED_HOSTS", "procure.onrender.com,.example.com")
+    # prod/staging now refuse to start without a real SECRET_KEY
+    monkeypatch.setattr("config.settings.base.SECRET_KEY", "x" * 64)
     monkeypatch.delenv("CSRF_TRUSTED_ORIGINS", raising=False)
     monkeypatch.setenv("RENDER_EXTERNAL_HOSTNAME", "procure-abc.onrender.com")
     mod = importlib.reload(importlib.import_module(module))

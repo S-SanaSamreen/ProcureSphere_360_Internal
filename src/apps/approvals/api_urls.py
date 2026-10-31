@@ -173,7 +173,9 @@ class ApprovalPolicyViewSet(viewsets.ModelViewSet):
     filterset_fields = ["module", "is_active", "is_exception_route", "department", "cost_center"]
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        from apps.core.tenancy import scope_approval_policies
+
+        qs = scope_approval_policies(super().get_queryset(), self.request.user)
         if self.request.query_params.get("current", "").lower() in ("1", "true", "yes"):
             qs = qs.filter(superseded_by__isnull=True)
         return qs
@@ -249,6 +251,11 @@ class ApprovalActionViewSet(viewsets.ReadOnlyModelViewSet):
     filterset_class = ApprovalActionFilter
     search_fields = ["target_model_name", "comments", "actor__email"]
     ordering_fields = ["created_at", "action"]
+
+    def get_queryset(self):
+        from apps.core.tenancy import scope_approval_actions
+
+        return scope_approval_actions(super().get_queryset(), self.request.user)
 
     def _decide(self, request, action_name, comment):
         action_obj = self.get_object()

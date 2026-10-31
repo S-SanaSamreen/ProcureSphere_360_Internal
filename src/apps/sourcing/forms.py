@@ -57,11 +57,14 @@ class SourcingEventForm(forms.Form):
         widget=forms.NumberInput(attrs={"class": "form-control", "step": "0.01"}),
     )
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, user=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["requisition"].queryset = PurchaseRequisition.objects.filter(
-            status="APPROVED"
-        ).order_by("-created_at")
+        from apps.requisitions.selectors import scope_requisitions_to_org
+
+        prs = PurchaseRequisition.objects.filter(status="APPROVED")
+        # Tenant isolation: only requisitions of the caller's organisation can be sourced.
+        prs = scope_requisitions_to_org(prs, user) if user is not None else prs.none()
+        self.fields["requisition"].queryset = prs.order_by("-created_at")
 
     def clean(self):
         cleaned = super().clean()

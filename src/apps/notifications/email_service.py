@@ -79,7 +79,9 @@ def send_user_welcome_email_direct(
             import requests
 
             sender_name = getattr(settings, "BREVO_SENDER_NAME", "ProcureSphere 360")
-            sender_email = getattr(settings, "BREVO_SENDER_EMAIL", "") or getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@procuresphere.com")
+            sender_email = getattr(settings, "BREVO_SENDER_EMAIL", "") or getattr(
+                settings, "DEFAULT_FROM_EMAIL", "no-reply@procuresphere.com"
+            )
             if "<" in str(sender_email) and ">" in str(sender_email):
                 sender_email = str(sender_email).split("<")[1].split(">")[0].strip()
 
@@ -107,7 +109,9 @@ def send_user_welcome_email_direct(
 
             if not response.ok:
                 err_msg = f"Brevo API error {response.status_code}: {response.text[:300]}"
-                logger.error("Failed to send welcome email to %s via Brevo API: %s", user.email, err_msg)
+                logger.error(
+                    "Failed to send welcome email to %s via Brevo API: %s", user.email, err_msg
+                )
                 if response.status_code in (401, 403):
                     smtp_status, smtp_error = _send_welcome_via_smtp(
                         user=user,
@@ -125,16 +129,22 @@ def send_user_welcome_email_direct(
                 user.last_welcome_email_sent_at = timezone.now()
                 user.save(update_fields=["last_welcome_email_sent_at"])
             except Exception as db_err:
-                logger.warning("Could not update last_welcome_email_sent_at for %s: %s", user.email, db_err)
+                logger.warning(
+                    "Could not update last_welcome_email_sent_at for %s: %s", user.email, db_err
+                )
 
             logger.info("Welcome email successfully sent to %s via Brevo API", user.email)
             return "SENT", None
 
         except Exception as exc:
-            logger.error("Failed to send welcome email to %s via Brevo API: %s", user.email, str(exc))
+            logger.error(
+                "Failed to send welcome email to %s via Brevo API: %s", user.email, str(exc)
+            )
             return "FAILED", str(exc)
 
-    from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "ProcureSphere 360 <noreply@procuresphere.com>")
+    from_email = getattr(
+        settings, "DEFAULT_FROM_EMAIL", "ProcureSphere 360 <noreply@procuresphere.com>"
+    )
 
     try:
         msg = EmailMultiAlternatives(
@@ -151,7 +161,9 @@ def send_user_welcome_email_direct(
             user.last_welcome_email_sent_at = timezone.now()
             user.save(update_fields=["last_welcome_email_sent_at"])
         except Exception as db_err:
-            logger.warning("Could not update last_welcome_email_sent_at for %s: %s", user.email, db_err)
+            logger.warning(
+                "Could not update last_welcome_email_sent_at for %s: %s", user.email, db_err
+            )
 
         logger.info("Welcome email successfully sent to %s", user.email)
         return "SENT", None
@@ -176,7 +188,9 @@ def _send_welcome_via_smtp(*, user, subject, text_content, html_content, passwor
     if not smtp_login or not password:
         return "FAILED", "Brevo SMTP login is not configured."
 
-    from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(settings, "BREVO_SENDER_EMAIL", smtp_login)
+    from_email = getattr(settings, "DEFAULT_FROM_EMAIL", None) or getattr(
+        settings, "BREVO_SENDER_EMAIL", smtp_login
+    )
     try:
         connection = get_connection(
             backend="django.core.mail.backends.smtp.EmailBackend",
@@ -200,7 +214,9 @@ def _send_welcome_via_smtp(*, user, subject, text_content, html_content, passwor
             user.last_welcome_email_sent_at = timezone.now()
             user.save(update_fields=["last_welcome_email_sent_at"])
         except Exception as db_err:
-            logger.warning("Could not update last_welcome_email_sent_at for %s: %s", user.email, db_err)
+            logger.warning(
+                "Could not update last_welcome_email_sent_at for %s: %s", user.email, db_err
+            )
         logger.info("Welcome email successfully sent to %s via SMTP", user.email)
         return "SENT", None
     except Exception as exc:
@@ -234,6 +250,7 @@ def send_user_welcome_email(
     if async_delivery:
         try:
             from apps.notifications.tasks import send_user_welcome_email_task
+
             send_user_welcome_email_task.delay(
                 user_id=str(user.id),
                 temporary_password=temporary_password,
@@ -242,7 +259,11 @@ def send_user_welcome_email(
             logger.info("Welcome email queued for delivery via Celery for %s", user.email)
             return "QUEUED", None
         except Exception as queue_err:
-            logger.warning("Celery enqueue failed for %s, falling back to direct delivery: %s", user.email, queue_err)
+            logger.warning(
+                "Celery enqueue failed for %s, falling back to direct delivery: %s",
+                user.email,
+                queue_err,
+            )
             return send_user_welcome_email_direct(
                 user=user,
                 temporary_password=temporary_password,

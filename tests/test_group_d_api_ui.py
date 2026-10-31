@@ -59,13 +59,18 @@ def pending_po(w, amount=1000):
 
 @pytest.fixture
 def superadmin(db, db_roles, world):  # noqa: F811
-    return User.objects.create_superuser(
+    # an organization has exactly one Super Admin: reuse the world's if it already has one
+    existing = User.objects.filter(role__code=Role.SUPER_ADMIN, organization=world["org"]).first()
+    if existing:
+        return existing
+    return User.objects.create_user(
         email="root@d.test",
         password="Password123!",
         first_name="R",
         last_name="T",
         role=db_roles[Role.SUPER_ADMIN],
         organization=world["org"],
+        is_staff=True,
     )
 
 

@@ -29,6 +29,7 @@ from apps.vendors.services import (
     legal_validate_vendor_credentials_service,
     register_vendor_service,
 )
+from tests.org_helpers import create_org_user
 
 pytestmark = pytest.mark.django_db
 
@@ -50,21 +51,21 @@ def _temp_password(body):
 @pytest.fixture
 def workflow_setup(db, db_roles):
     """Sets up users across roles and a registered vendor with KYC document."""
-    exec_user = User.objects.create_user(
+    exec_user = create_org_user(
         email="proc.exec@test.local",
         password="Password123!",
         first_name="Proc",
         last_name="Exec",
         role=db_roles[Role.PROC_EXEC],
     )
-    legal_user = User.objects.create_user(
+    legal_user = create_org_user(
         email="legal.mgr@test.local",
         password="Password123!",
         first_name="Legal",
         last_name="Manager",
         role=db_roles[Role.LEGAL_MGR],
     )
-    stores_user = User.objects.create_user(
+    stores_user = create_org_user(
         email="stores@test.local",
         password="Password123!",
         first_name="Stores",
@@ -147,7 +148,11 @@ def test_procurement_executive_issues_credentials_sets_pending_legal_verificatio
     # Vendor logs in immediately without waiting for Legal Manager approval
     login_resp = client.post("/login/", {"email": vendor_user.email, "password": temp_pass})
     assert login_resp.status_code == 302
-    assert login_resp.url in ("/vendor/", "/accounts/change-password/", reverse("accounts:change_password"))
+    assert login_resp.url in (
+        "/vendor/",
+        "/accounts/change-password/",
+        reverse("accounts:change_password"),
+    )
 
     # Vendor is redirected to forced password change on first access
     portal_first_resp = client.get("/vendor/")
@@ -264,13 +269,22 @@ def test_legal_manager_validates_and_approves_vendor_credentials_end_to_end(clie
 
     # 2. Legal Manager verifies documents via authorized service
     verify_vendor_document_decision_service(
-        document=doc_cert, reviewer=legal_user, decision="VERIFY", reviewer_notes="Valid incorporation"
+        document=doc_cert,
+        reviewer=legal_user,
+        decision="VERIFY",
+        reviewer_notes="Valid incorporation",
     )
     verify_vendor_document_decision_service(
-        document=doc_tax, reviewer=legal_user, decision="VERIFY", reviewer_notes="Valid tax clearance"
+        document=doc_tax,
+        reviewer=legal_user,
+        decision="VERIFY",
+        reviewer_notes="Valid tax clearance",
     )
     verify_vendor_document_decision_service(
-        document=doc_bank, reviewer=legal_user, decision="VERIFY", reviewer_notes="Valid bank details"
+        document=doc_bank,
+        reviewer=legal_user,
+        decision="VERIFY",
+        reviewer_notes="Valid bank details",
     )
 
     # 3. Now Legal Manager validates and approves credentials via dashboard POST
@@ -316,7 +330,11 @@ def test_legal_manager_validates_and_approves_vendor_credentials_end_to_end(clie
     client.logout()
     login_resp = client.post("/login/", {"email": vendor_user.email, "password": temp_pass})
     assert login_resp.status_code == 302
-    assert login_resp.url in ("/vendor/", "/accounts/change-password/", reverse("accounts:change_password"))
+    assert login_resp.url in (
+        "/vendor/",
+        "/accounts/change-password/",
+        reverse("accounts:change_password"),
+    )
 
     # First request to protected page is redirected to forced password change by middleware
     portal_first_resp = client.get("/vendor/")
@@ -387,4 +405,8 @@ def test_legal_manager_rejects_vendor_credentials_workflow(client, workflow_setu
     client.logout()
     login_resp = client.post("/login/", {"email": vendor_user.email, "password": temp_pass})
     assert login_resp.status_code == 302
-    assert login_resp.url in ("/vendor/", "/accounts/change-password/", reverse("accounts:change_password"))
+    assert login_resp.url in (
+        "/vendor/",
+        "/accounts/change-password/",
+        reverse("accounts:change_password"),
+    )

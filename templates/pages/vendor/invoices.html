@@ -90,6 +90,9 @@
                                 {% else %}
                                     <span class="badge bg-warning bg-opacity-25 text-dark border border-warning rounded-pill px-2 py-1">{{ invoice.get_status_display }}</span>
                                 {% endif %}
+                                {% for exc in invoice.exceptions.all %}{% if exc.status == 'AWAITING_VENDOR' %}
+                                    <a href="{% url 'vendor_invoice_revise' invoice.id %}" class="btn btn-sm btn-outline-primary ms-2">Submit revised invoice</a>
+                                {% endif %}{% endfor %}
                             </td>
                         </tr>
                         {% empty %}

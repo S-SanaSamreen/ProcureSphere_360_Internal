@@ -33,12 +33,14 @@ def stock_handoff_setup(db, db_roles):
     )
 
     receiver = User.objects.create_user(
+        organization=org,
         email="receiver_stock@hpe.com",
         password="Password123!",
         role=db_roles[Role.STORES_RECEIVER],
     )
 
     buyer = User.objects.create_user(
+        organization=org,
         email="buyer_stock@hpe.com",
         password="Password123!",
         role=db_roles[Role.PROC_EXEC],
@@ -401,19 +403,21 @@ def test_7_unauthorized_roles_cannot_perform_stock_handoff(stock_handoff_setup, 
         assert resp.status_code == 302
         assert resp.url == reverse("receipt_detail", kwargs={"grn_id": grn.id})
 
-    # Super Admin can perform stock handoff
+    # PRD 3.6: Super Admin cannot perform stock handoff
     admin = User.objects.create_user(
         email="admin_handoff_ok@hpe.com",
         password="Password123!",
         role=db_roles[Role.SUPER_ADMIN],
         is_superuser=True,
     )
-    rec_admin = handoff_goods_to_stock_service(
-        receipt=grn,
-        handed_off_by=admin,
-        storage_location="ADMIN-BAY",
-    )
-    assert rec_admin.stock_handoff_status == "HANDED_OFF"
+    with pytest.raises(ValidationError):
+        handoff_goods_to_stock_service(
+            receipt=grn,
+            handed_off_by=admin,
+            storage_location="ADMIN-BAY",
+        )
+    grn.refresh_from_db()
+    assert grn.stock_handoff_status != "HANDED_OFF"
 
 
 @pytest.mark.django_db

@@ -26,6 +26,7 @@ def inspection_setup(db, db_roles):
     )
 
     receiver = User.objects.create_user(
+        organization=org,
         email="receiver_insp@hpe.com",
         password="Password123!",
         role=db_roles[Role.STORES_RECEIVER],
@@ -406,27 +407,27 @@ def test_unauthorized_roles_cannot_perform_inspection(inspection_setup, db_roles
                     }
                 ],
             )
-        assert "Unauthorized: Only Stores Receiver or Super Admin" in str(exc.value)
+        assert "Unauthorized: Only Stores Receiver" in str(exc.value)
 
-    # Super Admin can perform quality inspections
+    # PRD 3.6: Super Admin cannot perform quality inspections
     admin = User.objects.create_user(
         email="admin_insp_ok@hpe.com",
         password="Password123!",
         role=db_roles[Role.SUPER_ADMIN],
         is_superuser=True,
     )
-    rec = record_inspection_service(
-        receipt=grn,
-        inspected_by=admin,
-        inspection_items=[
-            {
-                "receipt_line_id": str(line1.id),
-                "passed": True,
-                "inspection_notes": "Super admin inspection passed",
-            }
-        ],
-    )
-    assert rec.overall_inspection_status in ["PASSED", "INSPECTED", "PARTIALLY_INSPECTED"]
+    with pytest.raises(ValidationError):
+        record_inspection_service(
+            receipt=grn,
+            inspected_by=admin,
+            inspection_items=[
+                {
+                    "receipt_line_id": str(line1.id),
+                    "passed": True,
+                    "inspection_notes": "Super admin inspection passed",
+                }
+            ],
+        )
 
 
 @pytest.mark.django_db
@@ -436,14 +437,18 @@ def test_auditor_and_unauthorized_roles_blocked_from_inspection_view(
     """RBAC View: Unauthorized roles and ordinary staff accessing /receipts/<id>/inspect/ are blocked."""
     grn = inspection_setup["grn"]
     line1 = grn.lines.first()
+    org = grn.po.cost_center.department.organization
 
     auditor = User.objects.create_user(
         email="auditor_view@hpe.com",
+        organization=org,
         password="Password123!",
         role=db_roles[Role.AUDITOR],
     )
     staff_ordinary = User.objects.create_user(
         email="staff_view_insp@hpe.com",
+        organization=org,
+        department=grn.po.cost_center.department,
         password="Password123!",
         role=db_roles[Role.REQUESTER],
         is_staff=True,
@@ -456,7 +461,7 @@ def test_auditor_and_unauthorized_roles_blocked_from_inspection_view(
         response = client.get(f"/receipts/{grn.id}/inspect/", follow=True)
         assert response.status_code == 200
         assert any(
-            "Only Stores Receiver or Super Admin can perform quality inspections" in m.message
+            "Only the Stores Receiver can perform quality inspections" in m.message
             for m in response.context["messages"]
         )
 
@@ -468,7 +473,7 @@ def test_auditor_and_unauthorized_roles_blocked_from_inspection_view(
         response_post = client.post(f"/receipts/{grn.id}/inspect/", post_data, follow=True)
         assert response_post.status_code == 200
         assert any(
-            "Only Stores Receiver or Super Admin can perform quality inspections" in m.message
+            "Only the Stores Receiver can perform quality inspections" in m.message
             for m in response_post.context["messages"]
         )
 

@@ -1,9 +1,12 @@
 from celery import shared_task
 
+from apps.core.job_runs import record_job_run
+
 from .services import scan_contract_expirations_and_milestones_service
 
 
 @shared_task(name="contracts.tasks.scan_contract_expirations_and_milestones")
+@record_job_run("contracts.tasks.scan_contract_expirations_and_milestones")
 def scan_contract_expirations_and_milestones_task():
     """
     Celery Beat scheduled task scanning active contracts and upcoming milestones.

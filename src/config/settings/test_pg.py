@@ -3,6 +3,7 @@ PostgreSQL Test Settings for ProcureSphere 360.
 Used in CI to run the full test suite against a real PostgreSQL 15 instance,
 exercising select_for_update, constraints, and rollback behaviour.
 """
+
 import os
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.test_pg")
@@ -10,6 +11,10 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.test_pg")
 from .base import *  # noqa: F403, F405
 
 DEBUG = False
+REST_FRAMEWORK = {
+    **REST_FRAMEWORK,  # noqa: F405
+    "DEFAULT_THROTTLE_RATES": {"anon": "100000/min", "user": "100000/min", "login": "100000/min"},
+}
 SECRET_KEY = "test-pg-secret-key-not-for-production-use-procuresphere"
 
 DATABASES = {

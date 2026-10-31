@@ -20,4 +20,3 @@ urlpatterns = [
     path("<str:invoice_id>/", views.invoice_detail_view, name="invoice_detail"),
     path("grn/<str:grn_id>/", views.finance_receipt_detail_view, name="finance_grn_detail"),
 ]
-

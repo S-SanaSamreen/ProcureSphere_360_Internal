@@ -347,14 +347,9 @@ class VendorViewSet(viewsets.ModelViewSet):
             else:
                 return qs.none()
         elif not user.is_superuser:
-            scoped_org = getattr(user, "effective_organization", None)
-            if scoped_org:
-                qs = qs.filter(
-                    Q(organization=scoped_org)
-                    | Q(organization__isnull=True)
-                    | Q(created_by__organization=scoped_org)
-                    | Q(created_by__department__organization=scoped_org)
-                )
+            from .selectors import scope_vendors_queryset
+
+            qs = scope_vendors_queryset(qs, user)
 
         filterset = VendorFilter(self.request.query_params, queryset=qs)
         if not filterset.is_valid():

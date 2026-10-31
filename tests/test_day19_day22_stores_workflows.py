@@ -51,6 +51,7 @@ def batch4_setup(db, db_roles):
         email="receiver_batch4@hpe.com",
         password="Password123!",
         role=db_roles[Role.STORES_RECEIVER],
+        organization=org,
     )
     admin_user = User.objects.create_user(
         email="admin_batch4@hpe.com",
@@ -67,16 +68,19 @@ def batch4_setup(db, db_roles):
         email="proc_exec_batch4@hpe.com",
         password="Password123!",
         role=db_roles[Role.PROC_EXEC],
+        organization=org,
     )
     finance = User.objects.create_user(
         email="finance_batch4@hpe.com",
         password="Password123!",
         role=db_roles[Role.FINANCE_AP],
+        organization=org,
     )
     auditor = User.objects.create_user(
         email="auditor_batch4@hpe.com",
         password="Password123!",
         role=db_roles[Role.AUDITOR],
+        organization=org,
     )
     vendor_user = User.objects.create_user(
         email="vendor_user_batch4@esl.com",
@@ -429,14 +433,15 @@ def test_day20_unauthorized_roles_blocked_from_stores_services(batch4_setup):
                     }
                 ],
             )
-        assert "Unauthorized: Only Stores Receiver or Super Admin" in str(exc.value)
+        assert "Unauthorized: Only Stores Receiver" in str(exc.value)
 
 
 @pytest.mark.django_db
 def test_day20_vendor_user_blocked_from_all_stores_queues_and_views(client, batch4_setup):
     """
     Day 20: Vendor Portal User attempting to access internal Stores receipts,
-    queues, or dashboards is blocked and redirected to vendor dashboard.
+    queues, or dashboards is blocked. The vendor-isolation middleware (DEF-001) refuses the
+    request outright (403) instead of redirecting.
     """
     vendor_user = batch4_setup["vendor_user"]
     po = batch4_setup["po"]
@@ -451,8 +456,7 @@ def test_day20_vendor_user_blocked_from_all_stores_queues_and_views(client, batc
         f"/receipts/create/{po.id}/",
     ]:
         resp = client.get(path, follow=False)
-        assert resp.status_code == 302
-        assert "/vendor" in resp.url or "/login/" in resp.url or "/orders/" in resp.url
+        assert resp.status_code == 403, path
 
 
 @pytest.mark.django_db
@@ -492,10 +496,19 @@ def test_day20_drf_api_rbac_stores_vs_unauthorized_roles(batch4_setup):
     resp_receiver = api_client.get("/api/v1/receipts/")
     assert resp_receiver.status_code == 200
 
-    # 3. Vendor User -> 403
+    # 3. Vendor User. At the API-permission layer (docs/rbac_matrix.md, DEF-024) a vendor may READ
+    #    receipts of its OWN POs only - this vendor user is linked to none, so it sees nothing -
+    #    and can never write.
     api_client.force_authenticate(user=vendor_user)
     resp_vendor = api_client.get("/api/v1/receipts/")
-    assert resp_vendor.status_code == 403
+    assert resp_vendor.status_code == 200
+    assert resp_vendor.data["count"] == 0
+    assert api_client.post("/api/v1/receipts/", {}, format="json").status_code == 403
+    # ...and a real vendor SESSION never reaches the internal API at all (vendor-isolation
+    # middleware, DEF-001): refused with 403.
+    session_client = Client()
+    session_client.force_login(vendor_user)
+    assert session_client.get("/api/v1/receipts/").status_code == 403
 
     # 4. Auditor -> 200
     api_client.force_authenticate(user=auditor)

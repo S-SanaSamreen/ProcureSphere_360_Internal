@@ -24,6 +24,21 @@ class ContractCreateForm(forms.ModelForm):
         required=False,
     )
 
+    def __init__(self, *args, user=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if user is not None:
+            from apps.core.tenancy import scope_sourcing_events
+            from apps.orders.selectors import scope_purchase_orders_queryset
+            from apps.vendors.selectors import scope_vendors_queryset
+
+            self.fields["vendor"].queryset = scope_vendors_queryset(Vendor.objects.all(), user)
+            self.fields["sourcing_event"].queryset = scope_sourcing_events(
+                SourcingEvent.objects.all(), user
+            )
+            self.fields["po"].queryset = scope_purchase_orders_queryset(
+                PurchaseOrder.objects.all(), user
+            )
+
     class Meta:
         model = Contract
         fields = [

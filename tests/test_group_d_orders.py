@@ -82,10 +82,10 @@ def test_without_a_po_policy_pos_are_issued_immediately_as_before(world):  # noq
     assert not ApprovalRequest.objects.filter(module=PO).exists()
 
 
-def test_without_a_po_policy_a_draft_po_still_needs_a_manager_or_super_admin(world):  # noqa: F811
+def test_without_a_po_policy_a_draft_po_still_needs_a_manager(world):  # noqa: F811
     w = world
     po = make_po(w, initial_status=PurchaseOrder.STATUS_DRAFT)
-    with pytest.raises(ValidationError, match="Only Procurement Managers or Super Admin"):
+    with pytest.raises(ValidationError, match="Only Procurement Managers can approve"):
         approve_purchase_order_service(po=po, approver=w["pe"])
     assert (
         approve_purchase_order_service(po=po, approver=w["mgr"]).status

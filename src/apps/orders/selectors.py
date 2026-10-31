@@ -40,12 +40,14 @@ def scope_purchase_orders_queryset(qs, user):
         return qs.filter(
             Q(cost_center__department__organization=scoped_org)
             | Q(requisition__department__organization=scoped_org)
-            | Q(cost_center__isnull=True, requisition__isnull=True)
+            | Q(
+                cost_center__isnull=True,
+                requisition__isnull=True,
+                created_by__organization=scoped_org,
+            )
         )
 
-    if getattr(user, "is_staff", False):
-        return qs
-
+    # Every internal user belongs to an organization; without one they see nothing.
     return qs.none()
 
 

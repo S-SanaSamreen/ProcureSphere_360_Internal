@@ -3,6 +3,7 @@ Isolated Test Settings for ProcureSphere 360.
 Uses a fast, local SQLite database and memory caches.
 Completely isolated from remote Supabase / PostgreSQL.
 """
+
 import os
 
 # Signal to base settings that this is an isolated test environment
@@ -37,7 +38,12 @@ PASSWORD_HASHERS = [
     "django.contrib.auth.hashers.MD5PasswordHasher",
 ]
 
+# Keep DRF throttling out of the way (the locmem cache is shared across tests)
+REST_FRAMEWORK = {
+    **REST_FRAMEWORK,  # noqa: F405
+    "DEFAULT_THROTTLE_RATES": {"anon": "100000/min", "user": "100000/min", "login": "100000/min"},
+}
+
 # Ensure Celery runs in-memory/eagerly without connecting to Redis
 CELERY_TASK_ALWAYS_EAGER = True
 CELERY_TASK_EAGER_PROPAGATES = True
-

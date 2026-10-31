@@ -27,8 +27,8 @@ class CanManageSupplierInvoice(BasePermission):
     - Safe methods (GET, HEAD, OPTIONS): Authenticated users (vendor-scoped).
     - Auditors: Strictly read-only (SAFE_METHODS).
     - Vendors: Cannot pay invoices or resolve exceptions.
-    - Payment: Restricted to FINANCE_AP and SUPER_ADMIN.
-    - Write/Create: FINANCE_AP, PROC_MGR, PROC_EXEC, SUPER_ADMIN.
+    - Payment: Restricted to FINANCE_AP.
+    - Write/Create: FINANCE_AP, PROC_MGR, PROC_EXEC (Super Admin is read-only).
     """
 
     def has_permission(self, request, view):
@@ -49,7 +49,7 @@ class CanManageSupplierInvoice(BasePermission):
             user_role = getattr(request.user, "role_code", None) or (
                 request.user.role.code if getattr(request.user, "role", None) else None
             )
-            if request.user.is_superuser or user_role in [Role.SUPER_ADMIN, Role.FINANCE_AP]:
+            if not request.user.is_superuser and user_role == Role.FINANCE_AP:
                 return True
             # other roles named by the INVOICE (match exception) approval policy
             if view.action in ["resolve_exception", "resolve"]:
@@ -60,6 +60,13 @@ class CanManageSupplierInvoice(BasePermission):
 
         if is_vendor:
             return request.method in SAFE_METHODS or view.action in ["create"]
+
+        if not request.user.is_superuser and getattr(request.user, "role_code", None) in (
+            None,
+            "",
+            Role.STORES_RECEIVER,
+        ):
+            return False
 
         role_code = getattr(request.user, "role_code", None) or (
             request.user.role.code if getattr(request.user, "role", None) else None
@@ -74,8 +81,7 @@ class CanManageSupplierInvoice(BasePermission):
         if request.method in SAFE_METHODS:
             return True
 
-        return request.user.is_superuser or request.user.role_code in [
-            Role.SUPER_ADMIN,
+        return not request.user.is_superuser and request.user.role_code in [
             Role.FINANCE_AP,
             Role.PROC_MGR,
             Role.PROC_EXEC,
@@ -96,9 +102,7 @@ class InvoiceLineSerializer(serializers.ModelSerializer):
 
     def validate_unit_price(self, value):
         if value < Decimal("0.00"):
-            raise serializers.ValidationError(
-                "Unit price cannot be less than zero or negative."
-            )
+            raise serializers.ValidationError("Unit price cannot be less than zero or negative.")
         return value
 
 
@@ -133,7 +137,9 @@ class SupplierInvoiceSerializer(serializers.ModelSerializer):
             clean_inv_num = str(invoice_number).strip()
             attrs["invoice_number"] = clean_inv_num
             if vendor:
-                qs = SupplierInvoice.objects.filter(vendor=vendor, invoice_number__iexact=clean_inv_num)
+                qs = SupplierInvoice.objects.filter(
+                    vendor=vendor, invoice_number__iexact=clean_inv_num
+                )
                 if self.instance:
                     qs = qs.exclude(pk=self.instance.pk)
                 if qs.exists():
@@ -333,6 +339,10 @@ class MatchExceptionViewSet(viewsets.ModelViewSet):
     serializer_class = MatchExceptionSerializer
     permission_classes = [IsAuthenticated, CanManageSupplierInvoice]
     http_method_names = ["get", "post", "head", "options"]
+
+    def get_queryset(self):
+        invoices = scope_invoices_queryset(SupplierInvoice.objects.all(), self.request.user)
+        return self.queryset.filter(invoice__in=invoices)
 
     @action(detail=True, methods=["post"], url_path="resolve")
     def resolve_exception(self, request, pk=None):

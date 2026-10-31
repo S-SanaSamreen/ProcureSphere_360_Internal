@@ -62,14 +62,21 @@ def create_organization_with_admin_service(
         norm_email = admin_email.strip().lower()
         role, _ = Role.objects.get_or_create(
             code=Role.SUPER_ADMIN,
-            defaults={"name": "Super Admin", "description": "System and Organization Administrator"},
+            defaults={
+                "name": "Super Admin",
+                "description": "System and Organization Administrator",
+            },
         )
 
         admin_user = User.objects.filter(email__iexact=norm_email).first()
         is_new = False
         if not admin_user:
             is_new = True
-            raw_password = admin_password.strip() if admin_password and admin_password.strip() else generate_secure_password()
+            raw_password = (
+                admin_password.strip()
+                if admin_password and admin_password.strip()
+                else generate_secure_password()
+            )
             admin_user = User(
                 email=norm_email,
                 username=norm_email,
@@ -108,7 +115,11 @@ def create_organization_with_admin_service(
         # Audit log for user creation
         from apps.audit.services import create_audit_log_service
 
-        effective_actor = actor or (request.user if request and getattr(request, "user", None) and request.user.is_authenticated else None)
+        effective_actor = actor or (
+            request.user
+            if request and getattr(request, "user", None) and request.user.is_authenticated
+            else None
+        )
 
         create_audit_log_service(
             actor=effective_actor,
@@ -138,7 +149,11 @@ def create_organization_with_admin_service(
     # Audit log for Organization creation
     from apps.audit.services import create_audit_log_service
 
-    effective_actor = actor or (request.user if request and getattr(request, "user", None) and request.user.is_authenticated else None)
+    effective_actor = actor or (
+        request.user
+        if request and getattr(request, "user", None) and request.user.is_authenticated
+        else None
+    )
 
     create_audit_log_service(
         actor=effective_actor,
@@ -211,7 +226,9 @@ def create_fiscal_period_service(
 
 
 @transaction.atomic
-def delete_organization_service(*, organization: Organization, actor=None, request=None) -> Tuple[bool, str]:
+def delete_organization_service(
+    *, organization: Organization, actor=None, request=None
+) -> Tuple[bool, str]:
     """
     Safely deletes an Organization after ensuring:
     1. The actor is not deleting their own active assigned organization.
@@ -225,7 +242,11 @@ def delete_organization_service(*, organization: Organization, actor=None, reque
     from apps.orders.models import PurchaseOrder
     from apps.requisitions.models import PurchaseRequisition
 
-    effective_actor = actor or (request.user if request and getattr(request, "user", None) and request.user.is_authenticated else None)
+    effective_actor = actor or (
+        request.user
+        if request and getattr(request, "user", None) and request.user.is_authenticated
+        else None
+    )
 
     # Prevent deleting user's own active organization
     if effective_actor and getattr(effective_actor, "effective_organization", None) == organization:
@@ -233,10 +254,16 @@ def delete_organization_service(*, organization: Organization, actor=None, reque
 
     # Check for active transactional records that are protected
     if PurchaseRequisition.objects.filter(department__organization=organization).exists():
-        return False, f"Cannot delete organization '{organization.name}' because purchase requisitions are linked to its departments. You may deactivate it instead."
+        return (
+            False,
+            f"Cannot delete organization '{organization.name}' because purchase requisitions are linked to its departments. You may deactivate it instead.",
+        )
 
     if PurchaseOrder.objects.filter(cost_center__department__organization=organization).exists():
-        return False, f"Cannot delete organization '{organization.name}' because purchase orders are linked to its cost centers. You may deactivate it instead."
+        return (
+            False,
+            f"Cannot delete organization '{organization.name}' because purchase orders are linked to its cost centers. You may deactivate it instead.",
+        )
 
     # Record AuditLog before deletion
     prev_state = {
@@ -265,7 +292,9 @@ def delete_organization_service(*, organization: Organization, actor=None, reque
     try:
         organization.delete()
     except ProtectedError as err:
-        return False, f"Cannot delete organization '{org_name}' due to protected database dependencies: {str(err)}"
+        return (
+            False,
+            f"Cannot delete organization '{org_name}' due to protected database dependencies: {str(err)}",
+        )
 
     return True, f"Organization '{org_name}' ({org_code}) has been deleted successfully."
-

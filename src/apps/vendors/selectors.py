@@ -13,34 +13,22 @@ def scope_vendors_queryset(qs, user=None):
         return qs
     role_code = getattr(user, "role_code", None)
     from apps.accounts.models import Role
+
     if role_code == Role.VENDOR_USER:
-        # Vendor portal users are scoped by their own vendor record in vendor_dashboard_views
-        return qs
+        # Vendor portal users only ever see their own vendor record
+        vendor_id = getattr(user, "vendor_id", None)
+        return qs.filter(pk=vendor_id) if vendor_id else qs.none()
     scoped_org = getattr(user, "effective_organization", None)
     if scoped_org:
-        # Vendors explicitly assigned to this org, OR vendors with no org (global/legacy)
+        # Vendors assigned to this org, org-less vendors created by this org's users, and
+        # genuinely unowned vendors (self-registered, no creator) awaiting onboarding.
         return qs.filter(
             Q(organization=scoped_org)
-            | Q(organization__isnull=True)
-            | Q(created_by__organization=scoped_org)
-            | Q(created_by__department__organization=scoped_org)
-            | Q(organization__isnull=True)
+            | Q(organization__isnull=True, created_by__isnull=True)
+            | Q(organization__isnull=True, created_by__organization=scoped_org)
+            | Q(organization__isnull=True, created_by__department__organization=scoped_org)
         )
-    if user.is_superuser or getattr(user, "is_staff", False):
-        return qs
-    from apps.accounts.models import Role
-
-    role_code = getattr(user, "role_code", None) or (
-        user.role.code if getattr(user, "role", None) else None
-    )
-    if role_code in [
-        Role.PROC_MGR,
-        Role.PROC_EXEC,
-        Role.AUDITOR,
-        Role.SUPER_ADMIN,
-        Role.FINANCE_AP,
-    ]:
-        return qs
+    # Tenant isolation is fail-closed: an internal user with no organisation sees no vendors.
     return qs.none()
 
 
@@ -230,9 +218,7 @@ def get_governance_metrics(user=None) -> dict:
     high_risk = annotated.filter(latest_risk_level=VendorRiskRecord.RISK_LEVEL_HIGH)
     perf_issues = annotated.filter(latest_composite_score__lt=PERFORMANCE_ISSUE_THRESHOLD)
     today = timezone.now().date()
-    expired_docs = base_qs.filter(
-        status=Vendor.STATUS_ACTIVE, documents__expiry_date__lt=today
-    )
+    expired_docs = base_qs.filter(status=Vendor.STATUS_ACTIVE, documents__expiry_date__lt=today)
     attention_ids = (
         set(high_risk.values_list("id", flat=True))
         | set(perf_issues.values_list("id", flat=True))
@@ -428,7 +414,9 @@ def get_vendor_onboarding_progress(vendor):
             else (
                 "Changes Required"
                 if vendor.status == Vendor.STATUS_CHANGES_REQUIRED
-                else ("Rejected" if vendor.status == Vendor.STATUS_REJECTED else "Pending Submission")
+                else (
+                    "Rejected" if vendor.status == Vendor.STATUS_REJECTED else "Pending Submission"
+                )
             )
         )
     )
@@ -532,7 +520,9 @@ def get_vendor_kyc_summary(vendor) -> dict:
         elif status == Vendor.STATUS_CHANGES_REQUIRED:
             blockers.append("Corrections were requested; the vendor must resubmit.")
         else:
-            blockers.append(f"Vendor cannot be activated from status {vendor.get_status_display()}.")
+            blockers.append(
+                f"Vendor cannot be activated from status {vendor.get_status_display()}."
+            )
     if not docs:
         blockers.append("No KYC documents have been uploaded.")
     if missing_mandatory:

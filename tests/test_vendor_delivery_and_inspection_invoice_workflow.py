@@ -1,8 +1,8 @@
 from decimal import Decimal
 
 import pytest
-from django.utils import timezone
 from django.urls import reverse
+from django.utils import timezone
 
 from apps.accounts.models import Role, User
 from apps.invoices.models import MatchException, SupplierInvoice
@@ -16,12 +16,17 @@ from apps.vendors.models import Vendor, VendorCategory
 @pytest.fixture
 def workflow_setup(db, db_roles):
     org = Organization.objects.create(name="HPE Tech Corporation", code="HPE-ORG-01")
-    dept = Department.objects.create(organization=org, name="Network Engineering", code="DEPT-NET-01")
-    cost_center = CostCenter.objects.create(department=dept, code="CC-NET-01", name="Data Center Operations")
+    dept = Department.objects.create(
+        organization=org, name="Network Engineering", code="DEPT-NET-01"
+    )
+    cost_center = CostCenter.objects.create(
+        department=dept, code="CC-NET-01", name="Data Center Operations"
+    )
     from django.utils import timezone
 
     from apps.budgets.models import Budget
     from apps.organization.models import FiscalPeriod
+
     fiscal_period = FiscalPeriod.objects.create(
         organization=org,
         year=2026,
@@ -54,6 +59,7 @@ def workflow_setup(db, db_roles):
     )
 
     stores_receiver = User.objects.create_user(
+        organization=org,
         email="stores_dock@hpe.com",
         password="Password123!",
         role=db_roles[Role.STORES_RECEIVER],
@@ -63,18 +69,21 @@ def workflow_setup(db, db_roles):
         email="finance_officer@hpe.com",
         password="Password123!",
         role=db_roles[Role.FINANCE_AP],
+        organization=org,
     )
 
     proc_exec = User.objects.create_user(
         email="proc_exec@hpe.com",
         password="Password123!",
         role=db_roles[Role.PROC_EXEC],
+        organization=org,
     )
 
     proc_mgr = User.objects.create_user(
         email="proc_mgr@hpe.com",
         password="Password123!",
         role=db_roles[Role.PROC_MGR],
+        organization=org,
     )
 
     po = PurchaseOrder.objects.create(
@@ -149,7 +158,9 @@ def test_complete_vendor_delivery_stores_inspection_invoice_workflow(client, wor
     # -------------------------------------------------------------------------
     client.force_login(vendor_user)
     ack_url = reverse("vendor_purchase_order_acknowledge", kwargs={"po_id": po.id})
-    ack_response = client.post(ack_url, {"acknowledgement_notes": "Accepted terms and scheduled for dispatch."})
+    ack_response = client.post(
+        ack_url, {"acknowledgement_notes": "Accepted terms and scheduled for dispatch."}
+    )
     assert ack_response.status_code == 302
 
     po.refresh_from_db()
@@ -262,7 +273,10 @@ def test_complete_vendor_delivery_stores_inspection_invoice_workflow(client, wor
     client.force_login(vendor_user)
     vendor_detail_resp = client.get(detail_url)
     assert vendor_detail_resp.status_code == 200
-    assert "Inspection Passed" in vendor_detail_resp.content.decode() or "PASSED" in vendor_detail_resp.content.decode()
+    assert (
+        "Inspection Passed" in vendor_detail_resp.content.decode()
+        or "PASSED" in vendor_detail_resp.content.decode()
+    )
 
     # Vendor submits invoice for the passed quantities (5 of Line 1, 8 of Line 2)
     invoice_submit_url = reverse("vendor_invoice_submit", kwargs={"po_id": po.id})
@@ -283,7 +297,6 @@ def test_complete_vendor_delivery_stores_inspection_invoice_workflow(client, wor
     invoice = SupplierInvoice.objects.filter(invoice_number="INV-ESI-2026-901").first()
     assert invoice is not None
     assert invoice.subtotal == Decimal("24000.00")  # (5 * 4000) + (8 * 500) = 20000 + 4000 = 24000
-
 
     # -------------------------------------------------------------------------
     # 7. Invoice notifications sent to Finance, Proc Exec, and Proc Mgr
@@ -358,7 +371,10 @@ def test_complete_vendor_delivery_stores_inspection_invoice_workflow(client, wor
     if invoice.status == SupplierInvoice.STATUS_EXCEPTION:
         for exc in invoice.exceptions.filter(status=MatchException.STATUS_OPEN):
             resolve_url = reverse("resolve_exception", kwargs={"exception_id": exc.id})
-            client.post(resolve_url, {"action": "RESOLVE", "resolution_notes": "Accepted tolerance variance"})
+            client.post(
+                resolve_url,
+                {"action": "RESOLVE", "resolution_notes": "Accepted tolerance variance"},
+            )
         invoice.refresh_from_db()
 
     # Transition to ready for payment if needed
@@ -367,11 +383,14 @@ def test_complete_vendor_delivery_stores_inspection_invoice_workflow(client, wor
         invoice.save()
 
     # Finance pays invoice
-    fin_pay_resp = client.post(pay_url, {
-        'payment_reference': 'UTR-2026-TEST-9999',
-        'payment_method': 'ACH_TRANSFER',
-        'payment_date': timezone.now().date().isoformat(),
-    })
+    fin_pay_resp = client.post(
+        pay_url,
+        {
+            "payment_reference": "UTR-2026-TEST-9999",
+            "payment_method": "ACH_TRANSFER",
+            "payment_date": timezone.now().date().isoformat(),
+        },
+    )
     assert fin_pay_resp.status_code == 302
 
     invoice.refresh_from_db()
@@ -405,4 +424,3 @@ def test_complete_vendor_delivery_stores_inspection_invoice_workflow(client, wor
     assert pe_inv_list_resp.context["is_proc"] is True
     assert "Read-Only View" in pe_inv_list_resp.content.decode()
     assert invoice.invoice_number in pe_inv_list_resp.content.decode()
-

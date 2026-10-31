@@ -34,6 +34,12 @@ backfill_pan_and_gstin = migration_0008.backfill_pan_and_gstin
 pytestmark = [pytest.mark.django_db, pytest.mark.regression]
 
 
+def _test_org():
+    from apps.organization.models import Organization
+
+    return Organization.objects.get_or_create(code="HPE-T", defaults={"name": "HPE Test Org"})[0]
+
+
 # ==============================================================================
 # 1. CENTRALIZED VALIDATOR TESTS (PAN, GSTIN, NORMALIZATION, EMBEDDED PAN)
 # ==============================================================================
@@ -58,13 +64,13 @@ def test_valid_pan_values(valid_pan):
 @pytest.mark.parametrize(
     "invalid_pan",
     [
-        "ABCD1234F",      # 9 chars (short)
-        "ABCDEF1234F",    # 11 chars (long)
-        "1BCDE1234F",     # Starts with digit
-        "ABCD11234F",     # 5th char digit instead of letter
-        "ABCDE12345",     # Ends with digit
-        "ABCDE-1234F",    # Contains hyphen
-        "ABCDE1234!",     # Special character
+        "ABCD1234F",  # 9 chars (short)
+        "ABCDEF1234F",  # 11 chars (long)
+        "1BCDE1234F",  # Starts with digit
+        "ABCD11234F",  # 5th char digit instead of letter
+        "ABCDE12345",  # Ends with digit
+        "ABCDE-1234F",  # Contains hyphen
+        "ABCDE1234!",  # Special character
     ],
 )
 def test_invalid_pan_values(invalid_pan):
@@ -93,12 +99,12 @@ def test_valid_gstin_values(valid_gstin):
 @pytest.mark.parametrize(
     "invalid_gstin",
     [
-        "29ABCDE1234F1Z",     # 14 chars (short)
-        "29ABCDE1234F1Z55",   # 16 chars (long)
-        "ABABCDE1234F1Z5",    # First 2 chars not digits
-        "29ABCDE123451Z5",    # Embedded PAN invalid (10th char digit)
-        "29ABCDE1234F1A5",    # 14th char not 'Z'
-        "29ABCDE-1234F1Z",    # Special chars
+        "29ABCDE1234F1Z",  # 14 chars (short)
+        "29ABCDE1234F1Z55",  # 16 chars (long)
+        "ABABCDE1234F1Z5",  # First 2 chars not digits
+        "29ABCDE123451Z5",  # Embedded PAN invalid (10th char digit)
+        "29ABCDE1234F1A5",  # 14th char not 'Z'
+        "29ABCDE-1234F1Z",  # Special chars
     ],
 )
 def test_invalid_gstin_values(invalid_gstin):
@@ -321,9 +327,7 @@ def test_data_migration_backfills_pan_and_gstin(db):
 
 def test_vendor_profile_update_service_persists_pan_and_gstin(db):
     cat = VendorCategory.objects.create(name="Services", code="SRV")
-    user = User.objects.create_user(
-        email="vendor.user@profile.test", password="Password123!"
-    )
+    user = User.objects.create_user(email="vendor.user@profile.test", password="Password123!")
     vendor = Vendor.objects.create(
         legal_name="Services Enterprise",
         vendor_number="VND-2026-S01",
@@ -368,7 +372,7 @@ def test_kyc_reviewer_screens_display_pan_and_gstin(client, db, db_roles):
     )
 
     pe_user = User.objects.create_user(
-        email="exec@procure.test", password="Password123!", role=pe_role
+        email="exec@procure.test", password="Password123!", role=pe_role, organization=_test_org()
     )
     v_user = User.objects.create_user(
         email="vendor@alphatech.test", password="Password123!", role=vendor_role, vendor=vendor

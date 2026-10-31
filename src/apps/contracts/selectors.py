@@ -1,9 +1,15 @@
 from django.db.models import Q, Sum
 from django.utils import timezone
 
-from apps.accounts.models import Role
+from apps.core import tenancy
 
 from .models import Contract, ContractAlert, ContractMilestone, ContractObligation
+
+
+def _scope_children(qs, user):
+    """Scope obligations / milestones / alerts / documents through their parent contract."""
+    parents = tenancy.scope_contracts(Contract.objects.all(), user).values("pk")
+    return qs.filter(contract_id__in=parents)
 
 
 def get_contracts_qs(user=None, status=None, search=None):
@@ -15,12 +21,7 @@ def get_contracts_qs(user=None, status=None, search=None):
     ).prefetch_related("milestones", "obligations", "documents", "alerts", "versions")
 
     if user:
-        role_code = getattr(user, "role_code", None) or (
-            user.role.code if getattr(user, "role", None) else None
-        )
-        if role_code == Role.VENDOR_USER:
-            vendor = getattr(user, "vendor", None)
-            qs = qs.filter(vendor=vendor) if vendor else qs.none()
+        qs = tenancy.scope_contracts(qs, user)
 
     if status:
         qs = qs.filter(status=status)
@@ -39,8 +40,8 @@ def get_all_contracts():
     return get_contracts_qs()
 
 
-def get_contract_by_id(contract_id):
-    return (
+def get_contract_by_id(contract_id, user=None):
+    qs = (
         Contract.objects.select_related("vendor", "contract_owner", "sourcing_event", "po")
         .prefetch_related(
             "milestones",
@@ -52,8 +53,10 @@ def get_contract_by_id(contract_id):
             "documents__uploaded_by",
         )
         .filter(id=contract_id)
-        .first()
     )
+    if user is not None:
+        qs = tenancy.scope_contracts(qs, user)
+    return qs.first()
 
 
 def get_contracts_pending_legal_review():
@@ -68,12 +71,7 @@ def get_expiring_contracts(days=30, user=None):
         end_date__lte=future_date,
     )
     if user:
-        role_code = getattr(user, "role_code", None) or (
-            user.role.code if getattr(user, "role", None) else None
-        )
-        if role_code == Role.VENDOR_USER:
-            vendor = getattr(user, "vendor", None)
-            qs = qs.filter(vendor=vendor) if vendor else qs.none()
+        qs = tenancy.scope_contracts(qs, user)
     return qs.order_by("end_date")
 
 
@@ -82,12 +80,7 @@ def get_pending_obligations(user=None):
         is_fulfilled=False
     )
     if user:
-        role_code = getattr(user, "role_code", None) or (
-            user.role.code if getattr(user, "role", None) else None
-        )
-        if role_code == Role.VENDOR_USER:
-            vendor = getattr(user, "vendor", None)
-            qs = qs.filter(contract__vendor=vendor) if vendor else qs.none()
+        qs = _scope_children(qs, user)
     return qs.order_by("due_date")
 
 
@@ -106,12 +99,7 @@ def get_contract_obligations_qs(
     qs = ContractObligation.objects.select_related("contract", "contract__vendor")
 
     if user:
-        role_code = getattr(user, "role_code", None) or (
-            user.role.code if getattr(user, "role", None) else None
-        )
-        if role_code == Role.VENDOR_USER:
-            vendor = getattr(user, "vendor", None)
-            qs = qs.filter(contract__vendor=vendor) if vendor else qs.none()
+        qs = _scope_children(qs, user)
 
     if due_status:
         st = str(due_status).upper().strip()
@@ -147,12 +135,7 @@ def get_pending_milestones(user=None):
         is_completed=False
     )
     if user:
-        role_code = getattr(user, "role_code", None) or (
-            user.role.code if getattr(user, "role", None) else None
-        )
-        if role_code == Role.VENDOR_USER:
-            vendor = getattr(user, "vendor", None)
-            qs = qs.filter(contract__vendor=vendor) if vendor else qs.none()
+        qs = _scope_children(qs, user)
     return qs.order_by("due_date")
 
 
@@ -161,12 +144,7 @@ def get_active_contract_alerts(user=None):
         is_processed=False
     )
     if user:
-        role_code = getattr(user, "role_code", None) or (
-            user.role.code if getattr(user, "role", None) else None
-        )
-        if role_code == Role.VENDOR_USER:
-            vendor = getattr(user, "vendor", None)
-            qs = qs.filter(contract__vendor=vendor) if vendor else qs.none()
+        qs = _scope_children(qs, user)
     return qs.order_by("-triggered_at")
 
 
@@ -174,12 +152,7 @@ def get_legal_dashboard_metrics(user=None):
     today = timezone.now().date()
     qs = Contract.objects.all()
     if user:
-        role_code = getattr(user, "role_code", None) or (
-            user.role.code if getattr(user, "role", None) else None
-        )
-        if role_code == Role.VENDOR_USER:
-            vendor = getattr(user, "vendor", None)
-            qs = qs.filter(vendor=vendor) if vendor else qs.none()
+        qs = tenancy.scope_contracts(qs, user)
 
     total_contracts = qs.count()
     active_contracts = qs.filter(
@@ -196,17 +169,8 @@ def get_legal_dashboard_metrics(user=None):
     obligations_qs = ContractObligation.objects.all()
     milestones_qs = ContractMilestone.objects.all()
     if user:
-        role_code = getattr(user, "role_code", None) or (
-            user.role.code if getattr(user, "role", None) else None
-        )
-        if role_code == Role.VENDOR_USER:
-            vendor = getattr(user, "vendor", None)
-            obligations_qs = (
-                obligations_qs.filter(contract__vendor=vendor) if vendor else obligations_qs.none()
-            )
-            milestones_qs = (
-                milestones_qs.filter(contract__vendor=vendor) if vendor else milestones_qs.none()
-            )
+        obligations_qs = _scope_children(obligations_qs, user)
+        milestones_qs = _scope_children(milestones_qs, user)
 
     open_obligations = obligations_qs.filter(is_fulfilled=False).count()
     overdue_obligations = obligations_qs.filter(is_fulfilled=False, due_date__lt=today).count()
@@ -214,9 +178,17 @@ def get_legal_dashboard_metrics(user=None):
 
     from apps.vendors.models import VendorCredentialDispatch
 
-    pending_vendor_verifications = VendorCredentialDispatch.objects.filter(
+    pending_dispatches = VendorCredentialDispatch.objects.filter(
         legal_verification_status=VendorCredentialDispatch.LEGAL_STATUS_PENDING
-    ).count()
+    )
+    if user:
+        from apps.vendors.models import Vendor
+        from apps.vendors.selectors import scope_vendors_queryset
+
+        pending_dispatches = pending_dispatches.filter(
+            vendor__in=scope_vendors_queryset(Vendor.objects.all(), user)
+        )
+    pending_vendor_verifications = pending_dispatches.count()
 
     return {
         "total_contracts": total_contracts,
@@ -231,7 +203,7 @@ def get_legal_dashboard_metrics(user=None):
     }
 
 
-def get_pending_vendor_verifications_qs():
+def get_pending_vendor_verifications_qs(user=None):
     """
     Returns list of records pending Legal Manager verification with pre-evaluated KYC compliance reports.
     Includes:
@@ -251,10 +223,16 @@ def get_pending_vendor_verifications_qs():
         ).prefetch_related("review_history"),
     )
 
+    from apps.vendors.selectors import scope_vendors_queryset
+
+    visible_vendors = (
+        scope_vendors_queryset(Vendor.objects.all(), user) if user is not None else None
+    )
     dispatches = list(
         VendorCredentialDispatch.objects.filter(
             legal_verification_status=VendorCredentialDispatch.LEGAL_STATUS_PENDING
         )
+        .filter(**({"vendor__in": visible_vendors} if visible_vendors is not None else {}))
         .select_related("vendor", "vendor__category", "user", "created_by")
         .prefetch_related(doc_prefetch)
         .order_by("-created_at")
@@ -276,7 +254,8 @@ def get_pending_vendor_verifications_qs():
 
     # Include vendors that have pending documents but no pending credential dispatch
     vendors_with_pending_docs = (
-        Vendor.objects.filter(documents__status=VendorDocument.STATUS_PENDING)
+        (Vendor.objects.all() if visible_vendors is None else visible_vendors)
+        .filter(documents__status=VendorDocument.STATUS_PENDING)
         .exclude(id__in=seen_vendor_ids)
         .select_related("category", "created_by")
         .prefetch_related(vendor_doc_prefetch, vendor_dispatch_prefetch)
@@ -310,14 +289,16 @@ def get_pending_vendor_verifications_qs():
     return all_items
 
 
-def get_pending_documents_for_review_qs():
+def get_pending_documents_for_review_qs(user=None):
     """
     Returns QuerySet of VendorDocument records with status STATUS_PENDING awaiting Legal review.
     """
-    from apps.vendors.models import VendorDocument
+    from apps.vendors.models import Vendor, VendorDocument
+    from apps.vendors.selectors import scope_vendors_queryset
 
-    return (
-        VendorDocument.objects.filter(status=VendorDocument.STATUS_PENDING)
-        .select_related("vendor", "vendor__category", "replaces_document")
-        .order_by("-created_at")
+    qs = VendorDocument.objects.filter(status=VendorDocument.STATUS_PENDING)
+    if user is not None:
+        qs = qs.filter(vendor__in=scope_vendors_queryset(Vendor.objects.all(), user))
+    return qs.select_related("vendor", "vendor__category", "replaces_document").order_by(
+        "-created_at"
     )

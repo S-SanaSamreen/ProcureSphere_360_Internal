@@ -18,6 +18,12 @@ from apps.vendors.services import (
 )
 
 
+def _test_org():
+    from apps.organization.models import Organization
+
+    return Organization.objects.get_or_create(code="HPE-T", defaults={"name": "HPE Test Org"})[0]
+
+
 @pytest.fixture
 def vendor_category(db):
     return VendorCategory.objects.create(name="IT Services", code="IT-001")
@@ -69,7 +75,9 @@ def vendor_role(db):
 
 @pytest.fixture
 def proc_exec_role(db):
-    role, _ = Role.objects.get_or_create(code=Role.PROC_EXEC, defaults={"name": "Procurement Executive"})
+    role, _ = Role.objects.get_or_create(
+        code=Role.PROC_EXEC, defaults={"name": "Procurement Executive"}
+    )
     return role
 
 
@@ -107,6 +115,7 @@ def proc_exec_user(db, proc_exec_role):
         email="proc_exec@hpe.com",
         password="Password123!",
         role=proc_exec_role,
+        organization=_test_org(),
     )
 
 
@@ -116,6 +125,7 @@ def requester_user(db, requester_role):
         email="requester@hpe.com",
         password="Password123!",
         role=requester_role,
+        organization=_test_org(),
     )
 
 
@@ -181,7 +191,10 @@ def test_onboarding_progress_selector_calculation(vendor_a):
     )
     # Add KYC doc
     from django.core.files.uploadedfile import SimpleUploadedFile
-    test_file = SimpleUploadedFile("cert.pdf", b"%PDF-dummy-content", content_type="application/pdf")
+
+    test_file = SimpleUploadedFile(
+        "cert.pdf", b"%PDF-dummy-content", content_type="application/pdf"
+    )
     VendorDocument.objects.create(
         vendor=vendor_a,
         document_type=VendorDocument.DOC_TYPE_CERT,
@@ -365,12 +378,13 @@ def test_submit_for_review_requires_kyc_document(client, vendor_user_a, vendor_a
 
 
 @pytest.mark.django_db
-def test_changes_required_workflow_end_to_end(
-    client, vendor_user_a, proc_exec_user, vendor_a
-):
+def test_changes_required_workflow_end_to_end(client, vendor_user_a, proc_exec_user, vendor_a):
     # 1. Vendor uploads document and submits for review
     from django.core.files.uploadedfile import SimpleUploadedFile
-    test_file = SimpleUploadedFile("cert.pdf", b"%PDF-dummy-content", content_type="application/pdf")
+
+    test_file = SimpleUploadedFile(
+        "cert.pdf", b"%PDF-dummy-content", content_type="application/pdf"
+    )
     VendorDocument.objects.create(
         vendor=vendor_a,
         document_type=VendorDocument.DOC_TYPE_CERT,
@@ -385,7 +399,9 @@ def test_changes_required_workflow_end_to_end(
     client.force_login(proc_exec_user)
     res_request = client.post(
         f"/vendors/{vendor_a.id}/kyc/request-changes/",
-        {"notes": "Please provide your updated GST registration certificate and correct IFSC code."},
+        {
+            "notes": "Please provide your updated GST registration certificate and correct IFSC code."
+        },
     )
     assert res_request.status_code == 302
     vendor_a.refresh_from_db()

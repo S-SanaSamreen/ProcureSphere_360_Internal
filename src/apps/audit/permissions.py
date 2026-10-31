@@ -28,16 +28,15 @@ class AuditorReadOnlyPermission(BasePermission):
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
             return False
-        if request.user.is_superuser:
-            return True
         role_code = getattr(request.user, "role_code", None) or (
             request.user.role.code if getattr(request.user, "role", None) else None
         )
-        if role_code == Role.SUPER_ADMIN:
-            return True
-        if role_code == Role.AUDITOR:
+        # Audit logs are immutable for everyone; Super Admin may read and export them (PRD 3.1).
+        if request.user.is_superuser or role_code in (Role.SUPER_ADMIN, Role.AUDITOR):
             action = getattr(view, "action", None)
-            if action in ["export_data", "export"] or getattr(request, "path", "").endswith("/export/"):
+            if action in ["export_data", "export"] or getattr(request, "path", "").endswith(
+                "/export/"
+            ):
                 return True
             return request.method in SAFE_METHODS
         return True

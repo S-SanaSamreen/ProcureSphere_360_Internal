@@ -36,7 +36,9 @@ class SupplierInvoiceAdmin(RoleBasedModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
-            return qs.filter(po__cost_center__department__organization=request.user.effective_organization)
+            return qs.filter(
+                po__cost_center__department__organization=request.user.effective_organization
+            )
         return qs
 
 
@@ -55,11 +57,12 @@ class MatchExceptionAdmin(RoleBasedModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
-            return qs.filter(invoice__po__cost_center__department__organization=request.user.effective_organization)
+            return qs.filter(
+                invoice__po__cost_center__department__organization=request.user.effective_organization
+            )
         return qs
 
 
 register_model(SupplierInvoice, SupplierInvoiceAdmin)
 register_model(InvoiceLine)
 register_model(MatchException, MatchExceptionAdmin)
-

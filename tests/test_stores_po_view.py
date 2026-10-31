@@ -65,6 +65,7 @@ def test_stores_receiver_po_list_filtering(client, db_roles):
         email="receiver_test@hpe.com",
         password="Password123!",
         role=db_roles[Role.STORES_RECEIVER],
+        organization=org,
     )
 
     # 1. Unauthenticated request redirects to login
@@ -147,6 +148,7 @@ def test_stores_receiver_po_detail_view(client, db_roles):
         email="receiver_detail@hpe.com",
         password="Password123!",
         role=db_roles[Role.STORES_RECEIVER],
+        organization=org,
     )
 
     client.force_login(stores_user)

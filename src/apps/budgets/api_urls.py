@@ -18,7 +18,7 @@ class CanManageBudget(BasePermission):
     - Vendor users: BLOCKED completely (read & write -> 403).
     - Internal users: Can view budgets (GET, HEAD, OPTIONS).
     - Requesters & Auditors: Strictly read-only (mutations -> 403).
-    - Finance / AP & Super Admin: Full management (create, update, delete).
+    - Finance / AP: management (budgets are Finance-owned); Super Admin is read-only.
     """
 
     def has_permission(self, request, view):
@@ -44,10 +44,7 @@ class CanManageBudget(BasePermission):
         if getattr(request.user, "role_code", None) in [Role.AUDITOR, Role.REQUESTER]:
             return False
 
-        return request.user.is_superuser or request.user.role_code in [
-            Role.SUPER_ADMIN,
-            Role.FINANCE_AP,
-        ]
+        return (not request.user.is_superuser) and request.user.role_code == Role.FINANCE_AP
 
 
 class BudgetSerializer(serializers.ModelSerializer):
@@ -104,7 +101,13 @@ class BudgetViewSet(viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs)
 
     def get_queryset(self):
-        qs = self.queryset if self.queryset is not None else Budget.objects.select_related("cost_center", "fiscal_period").order_by("-created_at")
+        qs = (
+            self.queryset
+            if self.queryset is not None
+            else Budget.objects.select_related("cost_center", "fiscal_period").order_by(
+                "-created_at"
+            )
+        )
         return scope_budgets_queryset(qs, self.request.user)
 
 

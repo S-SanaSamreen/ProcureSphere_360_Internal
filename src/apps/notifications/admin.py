@@ -14,6 +14,7 @@ class NotificationAdmin(admin.ModelAdmin):
         qs = super().get_queryset(request)
         if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
             org = request.user.effective_organization
-            return qs.filter(Q(recipient__organization=org) | Q(recipient__department__organization=org))
+            return qs.filter(
+                Q(recipient__organization=org) | Q(recipient__department__organization=org)
+            )
         return qs
-

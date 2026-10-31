@@ -37,6 +37,7 @@ from apps.contracts.services import (
 )
 from apps.vendors.models import VendorCategory
 from apps.vendors.services import register_vendor_service
+from tests.org_helpers import create_org_user
 
 
 @pytest.fixture
@@ -54,13 +55,13 @@ def legal_test_environment(db):
         code=Role.REQUESTER, defaults={"name": "Requester"}
     )
 
-    legal_user = User.objects.create_user(
+    legal_user = create_org_user(
         email="legal.mgr.suite@hpe.com", password="Password123!", role=legal_role
     )
-    proc_user = User.objects.create_user(
+    proc_user = create_org_user(
         email="proc.mgr.suite@hpe.com", password="Password123!", role=proc_role
     )
-    requester_user = User.objects.create_user(
+    requester_user = create_org_user(
         email="requester.suite@hpe.com", password="Password123!", role=requester_role
     )
 

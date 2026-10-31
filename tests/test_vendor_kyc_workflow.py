@@ -33,6 +33,12 @@ pytestmark = [pytest.mark.django_db, pytest.mark.regression]
 PDF = b"%PDF-1.4 kyc"
 
 
+def _test_org():
+    from apps.organization.models import Organization
+
+    return Organization.objects.get_or_create(code="HPE-T", defaults={"name": "HPE Test Org"})[0]
+
+
 def _pdf(name="doc.pdf"):
     return SimpleUploadedFile(name, PDF, content_type="application/pdf")
 
@@ -62,7 +68,10 @@ def world(procurement_world, db_roles):
     """procurement_world + a Legal Manager and a submitted vendor with one pending document."""
     w = dict(procurement_world)
     w["legal"] = User.objects.create_user(
-        email="legal@test.local", password="Password123!", role=db_roles[Role.LEGAL_MGR]
+        email="legal@test.local",
+        password="Password123!",
+        role=db_roles[Role.LEGAL_MGR],
+        organization=_test_org(),
     )
     w["vendor_user_draft"] = User.objects.create_user(
         email="rep@draft.test",
@@ -493,9 +502,19 @@ def test_tc_kyc_012_and_013_full_authorised_workflow_with_audit_and_replay(
     # TC-KYC-013: reviewer, action, timestamp, decision are all recorded.
     entry = approvals.get()
     assert entry.actor == world["exec"]
+    # PRD lifecycle: KYC_REVIEW -> APPROVED is the approval; APPROVED -> ACTIVE is recorded as a
+    # separate transition (both by the same reviewer), so the trail shows the APPROVED stage.
     assert entry.previous_state["status"] == Vendor.STATUS_KYC_REVIEW
-    assert entry.new_state["status"] == Vendor.STATUS_ACTIVE
+    assert entry.new_state["status"] == Vendor.STATUS_APPROVED
     assert entry.timestamp >= before - timedelta(seconds=5)
+    activation = AuditLog.objects.get(
+        target_model="Vendor",
+        target_object_id=str(vendor.id),
+        action=AuditLog.ACTION_UPDATE,
+        previous_state__status=Vendor.STATUS_APPROVED,
+    )
+    assert activation.actor == world["exec"]
+    assert activation.new_state["status"] == Vendor.STATUS_ACTIVE
     verify_entry = AuditLog.objects.get(
         target_model="VendorDocument", target_object_id=str(doc.id), action="VERIFY"
     )
@@ -752,6 +771,7 @@ def test_kyc_approval_gating_preserves_rules_without_silent_mandatory_enforcemen
     )
     verify_vendor_document_service(document=doc2, verifier=world["legal"])
     # Approval blocked because mandatory BANK_LETTER is missing
-    with pytest.raises(ValidationError, match="Mandatory documents missing: Bank Verification Document"):
+    with pytest.raises(
+        ValidationError, match="Mandatory documents missing: Bank Verification Document"
+    ):
         approve_vendor_service(vendor=vendor2, manager=world["mgr"], notes="Approve")
-

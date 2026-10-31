@@ -15,6 +15,54 @@ from apps.sourcing.models import SourcingEvent, VendorBid
 from apps.vendors.models import Vendor
 
 
+class _Scope:
+    """Per-user tenant-scoped querysets (``user=None`` means an unscoped internal call)."""
+
+    def __init__(self, user=None):
+        from apps.core import tenancy
+        from apps.invoices.selectors import scope_invoices_queryset
+        from apps.orders.selectors import scope_purchase_orders_queryset
+        from apps.requisitions.selectors import scope_requisitions_to_org
+        from apps.vendors.selectors import scope_vendors_queryset
+
+        def sc(model, fn):
+            qs = model.objects.all()
+            return qs if user is None else fn(qs, user)
+
+        def children(model, path):
+            qs = model.objects.all()
+            if user is None:
+                return qs
+            parents = tenancy.scope_contracts(Contract.objects.all(), user).values("pk")
+            return qs.filter(**{f"{path}__in": parents})
+
+        self.audit = sc(AuditLog, tenancy.scope_audit_logs)
+        self.exceptions = sc(MatchException, tenancy.scope_match_exceptions)
+        self.vendors = sc(Vendor, scope_vendors_queryset)
+        self.contracts = sc(Contract, tenancy.scope_contracts)
+        self.obligations = children(ContractObligation, "contract_id")
+        self.alerts = children(ContractAlert, "contract_id")
+        self.actions = sc(
+            ApprovalAction,
+            lambda qs, u: tenancy.scope_to_org(
+                qs,
+                u,
+                "actor__organization",
+                "actor__department__organization",
+                "approval_request__department__organization",
+            ),
+        )
+        self.prs = sc(PurchaseRequisition, scope_requisitions_to_org)
+        self.events = sc(SourcingEvent, tenancy.scope_sourcing_events)
+        self.bids = (
+            VendorBid.objects.all()
+            if user is None
+            else VendorBid.objects.filter(event_id__in=self.events.values("pk"))
+        )
+        self.pos = sc(PurchaseOrder, scope_purchase_orders_queryset)
+        self.invoices = sc(SupplierInvoice, scope_invoices_queryset)
+
+
 def get_audit_logs(
     actor_id: Optional[str] = None,
     action: Optional[str] = None,
@@ -26,11 +74,13 @@ def get_audit_logs(
     request_id: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
+    user=None,
 ) -> Dict[str, Any]:
     """
     Retrieves filtered and paginated immutable AuditLog records with actor prefetching.
     """
-    qs = AuditLog.objects.select_related("actor").all()
+    S = _Scope(user)
+    qs = S.audit.select_related("actor").all()
 
     if actor_id:
         qs = qs.filter(actor_id=actor_id)
@@ -74,16 +124,17 @@ def get_audit_logs(
     }
 
 
-def get_audit_metrics(period_days: int = 30) -> Dict[str, Any]:
+def get_audit_metrics(period_days: int = 30, user=None) -> Dict[str, Any]:
     """
     Computes statistical and distribution metrics over AuditLog records for compliance auditing.
     """
+    S = _Scope(user)
     now = timezone.now()
     since_date = now - timedelta(days=period_days)
-    base_qs = AuditLog.objects.filter(timestamp__gte=since_date)
+    base_qs = S.audit.filter(timestamp__gte=since_date)
 
     total_logs_period = base_qs.count()
-    total_logs_all_time = AuditLog.objects.count()
+    total_logs_all_time = S.audit.count()
 
     # Action counts breakdown
     action_counts_raw = base_qs.values("action").annotate(count=Count("id")).order_by("-count")
@@ -148,59 +199,58 @@ def get_audit_metrics(period_days: int = 30) -> Dict[str, Any]:
     }
 
 
-def get_auditor_dashboard_data(period_days: int = 30) -> Dict[str, Any]:
+def get_auditor_dashboard_data(period_days: int = 30, user=None) -> Dict[str, Any]:
     """
     Aggregates full data bundle for the Compliance Auditor Dashboard:
     KPI cards, compliance exceptions, recent audit feed, approval feed, and charts.
     """
-    metrics = get_audit_metrics(period_days=period_days)
+    S = _Scope(user)
+    metrics = get_audit_metrics(period_days=period_days, user=user)
 
     # 1. High-Priority Compliance Warnings
     open_exceptions = list(
-        MatchException.objects.filter(status="OPEN")
+        S.exceptions.filter(status="OPEN")
         .select_related("invoice", "invoice__vendor")
         .order_by("-created_at")[:10]
     )
 
     suspended_vendors = list(
-        Vendor.objects.filter(status__in=[Vendor.STATUS_ON_HOLD, Vendor.STATUS_SUSPENDED])
+        S.vendors.filter(status__in=[Vendor.STATUS_ON_HOLD, Vendor.STATUS_SUSPENDED])
         .select_related("category")
         .order_by("-updated_at")[:10]
     )
 
     overdue_obligations = list(
-        ContractObligation.objects.filter(is_fulfilled=False, due_date__lt=timezone.now().date())
+        S.obligations.filter(is_fulfilled=False, due_date__lt=timezone.now().date())
         .select_related("contract", "contract__vendor")
         .order_by("due_date")[:10]
     )
 
     active_contract_alerts = list(
-        ContractAlert.objects.filter(is_processed=False)
+        S.alerts.filter(is_processed=False)
         .select_related("contract")
         .order_by("-triggered_at")[:10]
     )
 
     # 2. Activity Feeds
-    recent_logs = list(AuditLog.objects.select_related("actor").order_by("-timestamp")[:25])
+    recent_logs = list(S.audit.select_related("actor").order_by("-timestamp")[:25])
 
     recent_approvals = list(
-        ApprovalAction.objects.select_related("actor", "policy_step").order_by("-created_at")[:15]
+        S.actions.select_related("actor", "policy_step").order_by("-created_at")[:15]
     )
 
     # 3. Domain totals for auditor context
     domain_counts = {
-        "total_prs": PurchaseRequisition.objects.count(),
-        "total_sourcing_events": SourcingEvent.objects.count(),
-        "total_bids": VendorBid.objects.count(),
-        "total_pos": PurchaseOrder.objects.count(),
-        "total_invoices": SupplierInvoice.objects.count(),
-        "total_contracts": Contract.objects.count(),
-        "total_vendors": Vendor.objects.count(),
-        "open_exceptions_count": MatchException.objects.filter(status="OPEN").count(),
-        "suspended_vendors_count": Vendor.objects.filter(
-            status__in=["ON_HOLD", "SUSPENDED"]
-        ).count(),
-        "overdue_obligations_count": ContractObligation.objects.filter(
+        "total_prs": S.prs.count(),
+        "total_sourcing_events": S.events.count(),
+        "total_bids": S.bids.count(),
+        "total_pos": S.pos.count(),
+        "total_invoices": S.invoices.count(),
+        "total_contracts": S.contracts.count(),
+        "total_vendors": S.vendors.count(),
+        "open_exceptions_count": S.exceptions.filter(status="OPEN").count(),
+        "suspended_vendors_count": S.vendors.filter(status__in=["ON_HOLD", "SUSPENDED"]).count(),
+        "overdue_obligations_count": S.obligations.filter(
             is_fulfilled=False, due_date__lt=timezone.now().date()
         ).count(),
     }
@@ -219,12 +269,13 @@ def get_auditor_dashboard_data(period_days: int = 30) -> Dict[str, Any]:
     }
 
 
-def get_entity_audit_trail(target_model: str, target_object_id: str) -> Dict[str, Any]:
+def get_entity_audit_trail(target_model: str, target_object_id: str, user=None) -> Dict[str, Any]:
     """
     Retrieves complete chronological audit log and approval actions for a specific entity.
     """
+    S = _Scope(user)
     logs = list(
-        AuditLog.objects.filter(
+        S.audit.filter(
             target_model__iexact=target_model,
             target_object_id=str(target_object_id),
         )
@@ -241,7 +292,7 @@ def get_entity_audit_trail(target_model: str, target_object_id: str) -> Dict[str
 
     if target_uuid:
         approvals = list(
-            ApprovalAction.objects.filter(
+            S.actions.filter(
                 target_object_id=target_uuid,
             )
             .select_related("actor", "policy_step")
@@ -264,11 +315,13 @@ def get_vendor_compliance_audit(
     search: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    user=None,
 ) -> Dict[str, Any]:
     """
     Audits vendor onboarding, verification, KYC statuses, and risk profiles.
     """
-    qs = Vendor.objects.select_related("category").prefetch_related("documents", "contracts").all()
+    S = _Scope(user)
+    qs = S.vendors.select_related("category").prefetch_related("documents", "contracts").all()
 
     if status:
         qs = qs.filter(status=status)
@@ -292,12 +345,12 @@ def get_vendor_compliance_audit(
     vendors_page = list(qs.order_by("-created_at")[offset : offset + limit])
 
     # Compute overall compliance statistics
-    total_vendors = Vendor.objects.count()
-    active_vendors = Vendor.objects.filter(status=Vendor.STATUS_ACTIVE).count()
-    suspended_vendors = Vendor.objects.filter(
+    total_vendors = S.vendors.count()
+    active_vendors = S.vendors.filter(status=Vendor.STATUS_ACTIVE).count()
+    suspended_vendors = S.vendors.filter(
         status__in=[Vendor.STATUS_ON_HOLD, Vendor.STATUS_SUSPENDED]
     ).count()
-    draft_or_pending = Vendor.objects.filter(
+    draft_or_pending = S.vendors.filter(
         status__in=[Vendor.STATUS_DRAFT, Vendor.STATUS_SUBMITTED, Vendor.STATUS_KYC_REVIEW]
     ).count()
 
@@ -355,13 +408,13 @@ def get_approval_history_audit(
     end_date: Optional[Any] = None,
     limit: int = 50,
     offset: int = 0,
+    user=None,
 ) -> Dict[str, Any]:
     """
     Audits complete approval governance chain across all entities (PRs, Invoices, Contracts).
     """
-    qs = ApprovalAction.objects.select_related(
-        "actor", "policy_step", "policy_step__approver_role"
-    ).all()
+    S = _Scope(user)
+    qs = S.actions.select_related("actor", "policy_step", "policy_step__approver_role").all()
 
     if target_model:
         qs = qs.filter(target_model_name__iexact=target_model)
@@ -390,11 +443,11 @@ def get_approval_history_audit(
     actions_page = list(qs.order_by("-created_at")[offset : offset + limit])
 
     # Summary metrics
-    total_actions = ApprovalAction.objects.count()
-    approved_count = ApprovalAction.objects.filter(action="APPROVED").count()
-    rejected_count = ApprovalAction.objects.filter(action="REJECTED").count()
-    submitted_count = ApprovalAction.objects.filter(action="SUBMITTED").count()
-    delegated_count = ApprovalAction.objects.filter(action="DELEGATED").count()
+    total_actions = S.actions.count()
+    approved_count = S.actions.filter(action="APPROVED").count()
+    rejected_count = S.actions.filter(action="REJECTED").count()
+    submitted_count = S.actions.filter(action="SUBMITTED").count()
+    delegated_count = S.actions.filter(action="DELEGATED").count()
 
     items = []
     for a in actions_page:
@@ -439,15 +492,13 @@ def get_sourcing_activity_audit(
     end_date: Optional[Any] = None,
     limit: int = 50,
     offset: int = 0,
+    user=None,
 ) -> Dict[str, Any]:
     """
     Audits competitive bidding integrity, sealed bid protection, and award distributions.
     """
-    qs = (
-        SourcingEvent.objects.select_related("requisition")
-        .prefetch_related("bids", "invitations")
-        .all()
-    )
+    S = _Scope(user)
+    qs = S.events.select_related("requisition").prefetch_related("bids", "invitations").all()
 
     if status:
         qs = qs.filter(status=status)
@@ -510,16 +561,10 @@ def get_sourcing_activity_audit(
 
     return {
         "summary": {
-            "total_events": SourcingEvent.objects.count(),
-            "awarded_events": SourcingEvent.objects.filter(
-                status=SourcingEvent.STATUS_AWARDED
-            ).count(),
-            "active_bidding": SourcingEvent.objects.filter(
-                status=SourcingEvent.STATUS_BID_WINDOW
-            ).count(),
-            "total_bids_submitted": VendorBid.objects.filter(
-                status=VendorBid.STATUS_SUBMITTED
-            ).count(),
+            "total_events": S.events.count(),
+            "awarded_events": S.events.filter(status=SourcingEvent.STATUS_AWARDED).count(),
+            "active_bidding": S.events.filter(status=SourcingEvent.STATUS_BID_WINDOW).count(),
+            "total_bids_submitted": S.bids.filter(status=VendorBid.STATUS_SUBMITTED).count(),
         },
         "total_count": total_count,
         "limit": limit,
@@ -535,12 +580,14 @@ def get_po_changes_audit(
     end_date: Optional[Any] = None,
     limit: int = 50,
     offset: int = 0,
+    user=None,
 ) -> Dict[str, Any]:
     """
     Audits purchase order amendments, change orders, status modifications, and cancellation trails.
     """
+    S = _Scope(user)
     qs = (
-        PurchaseOrder.objects.select_related("vendor", "requisition", "cost_center")
+        S.pos.select_related("vendor", "requisition", "cost_center")
         .prefetch_related("amendments")
         .all()
     )
@@ -597,14 +644,10 @@ def get_po_changes_audit(
 
     return {
         "summary": {
-            "total_pos": PurchaseOrder.objects.count(),
-            "total_amended_pos": PurchaseOrder.objects.filter(version__gt=1).count(),
-            "cancelled_pos": PurchaseOrder.objects.filter(
-                status=PurchaseOrder.STATUS_CANCELLED
-            ).count(),
-            "completed_pos": PurchaseOrder.objects.filter(
-                status=PurchaseOrder.STATUS_COMPLETED
-            ).count(),
+            "total_pos": S.pos.count(),
+            "total_amended_pos": S.pos.filter(version__gt=1).count(),
+            "cancelled_pos": S.pos.filter(status=PurchaseOrder.STATUS_CANCELLED).count(),
+            "completed_pos": S.pos.filter(status=PurchaseOrder.STATUS_COMPLETED).count(),
         },
         "total_count": total_count,
         "limit": limit,
@@ -621,11 +664,13 @@ def get_invoice_exceptions_audit(
     end_date: Optional[Any] = None,
     limit: int = 50,
     offset: int = 0,
+    user=None,
 ) -> Dict[str, Any]:
     """
     Audits 3-way match discrepancies, price/qty variances, and supervisor override resolutions.
     """
-    qs = MatchException.objects.select_related(
+    S = _Scope(user)
+    qs = S.exceptions.select_related(
         "invoice", "invoice__vendor", "invoice__po", "resolved_by"
     ).all()
 
@@ -654,10 +699,10 @@ def get_invoice_exceptions_audit(
     exceptions_page = list(qs.order_by("-created_at")[offset : offset + limit])
 
     # Summary metrics
-    total_exceptions = MatchException.objects.count()
-    open_count = MatchException.objects.filter(status=MatchException.STATUS_OPEN).count()
-    resolved_count = MatchException.objects.filter(status=MatchException.STATUS_RESOLVED).count()
-    rejected_count = MatchException.objects.filter(status=MatchException.STATUS_REJECTED).count()
+    total_exceptions = S.exceptions.count()
+    open_count = S.exceptions.filter(status=MatchException.STATUS_OPEN).count()
+    resolved_count = S.exceptions.filter(status=MatchException.STATUS_RESOLVED).count()
+    rejected_count = S.exceptions.filter(status=MatchException.STATUS_REJECTED).count()
 
     items = []
     for exc in exceptions_page:
@@ -703,12 +748,14 @@ def get_contract_changes_audit(
     end_date: Optional[Any] = None,
     limit: int = 50,
     offset: int = 0,
+    user=None,
 ) -> Dict[str, Any]:
     """
     Audits legal contract modifications, version amendments, milestone completions, and obligation tracking.
     """
+    S = _Scope(user)
     qs = (
-        Contract.objects.select_related("vendor", "contract_owner")
+        S.contracts.select_related("vendor", "contract_owner")
         .prefetch_related("versions", "milestones", "obligations", "alerts")
         .all()
     )
@@ -770,10 +817,10 @@ def get_contract_changes_audit(
 
     return {
         "summary": {
-            "total_contracts": Contract.objects.count(),
-            "active_contracts": Contract.objects.filter(status=Contract.STATUS_ACTIVE).count(),
-            "amended_contracts": Contract.objects.filter(version__gt=1).count(),
-            "total_overdue_obligations": ContractObligation.objects.filter(
+            "total_contracts": S.contracts.count(),
+            "active_contracts": S.contracts.filter(status=Contract.STATUS_ACTIVE).count(),
+            "amended_contracts": S.contracts.filter(version__gt=1).count(),
+            "total_overdue_obligations": S.obligations.filter(
                 is_fulfilled=False, due_date__lt=today
             ).count(),
         },
@@ -792,10 +839,12 @@ def get_security_events_audit(
     end_date: Optional[Any] = None,
     limit: int = 50,
     offset: int = 0,
+    user=None,
 ) -> Dict[str, Any]:
     """
     Audits security, authentication (login/logout), export operations, and high-risk administrative overrides.
     """
+    S = _Scope(user)
     security_actions = [
         AuditLog.ACTION_LOGIN,
         AuditLog.ACTION_LOGOUT,
@@ -805,7 +854,7 @@ def get_security_events_audit(
         AuditLog.ACTION_CANCEL,
     ]
 
-    qs = AuditLog.objects.filter(
+    qs = S.audit.filter(
         Q(action__in=security_actions)
         | Q(target_model__in=["User", "Role", "ExportJob", "Session", "Permission"])
     ).select_related("actor")

@@ -55,7 +55,10 @@ class UserAdmin(BaseUserAdmin):
     def has_module_permission(self, request):
         if not request.user or not request.user.is_authenticated or not request.user.is_staff:
             return False
-        if request.user.is_superuser or getattr(request.user, "role_code", None) == Role.SUPER_ADMIN:
+        if (
+            request.user.is_superuser
+            or getattr(request.user, "role_code", None) == Role.SUPER_ADMIN
+        ):
             return True
         return super().has_module_permission(request)
 
@@ -65,10 +68,15 @@ class UserAdmin(BaseUserAdmin):
         if obj and not request.user.is_superuser:
             scoped_org = getattr(request.user, "effective_organization", None)
             if scoped_org:
-                user_org_id = obj.organization_id or (obj.department.organization_id if obj.department else None)
+                user_org_id = obj.organization_id or (
+                    obj.department.organization_id if obj.department else None
+                )
                 if user_org_id != scoped_org.id:
                     return False
-        if request.user.is_superuser or getattr(request.user, "role_code", None) == Role.SUPER_ADMIN:
+        if (
+            request.user.is_superuser
+            or getattr(request.user, "role_code", None) == Role.SUPER_ADMIN
+        ):
             return True
         return super().has_view_permission(request, obj)
 
@@ -78,10 +86,15 @@ class UserAdmin(BaseUserAdmin):
         if obj and not request.user.is_superuser:
             scoped_org = getattr(request.user, "effective_organization", None)
             if scoped_org:
-                user_org_id = obj.organization_id or (obj.department.organization_id if obj.department else None)
+                user_org_id = obj.organization_id or (
+                    obj.department.organization_id if obj.department else None
+                )
                 if user_org_id != scoped_org.id:
                     return False
-        if request.user.is_superuser or getattr(request.user, "role_code", None) == Role.SUPER_ADMIN:
+        if (
+            request.user.is_superuser
+            or getattr(request.user, "role_code", None) == Role.SUPER_ADMIN
+        ):
             return True
         return super().has_change_permission(request, obj)
 
@@ -89,7 +102,9 @@ class UserAdmin(BaseUserAdmin):
         if obj and not request.user.is_superuser:
             scoped_org = getattr(request.user, "effective_organization", None)
             if scoped_org:
-                user_org_id = obj.organization_id or (obj.department.organization_id if obj.department else None)
+                user_org_id = obj.organization_id or (
+                    obj.department.organization_id if obj.department else None
+                )
                 if user_org_id != scoped_org.id:
                     return False
         return super().has_delete_permission(request, obj)

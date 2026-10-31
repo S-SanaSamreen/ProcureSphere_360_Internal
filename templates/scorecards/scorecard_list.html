@@ -6,7 +6,7 @@
 <div class="d-flex flex-wrap gap-2 align-items-center justify-content-between mb-4">
     <div>
         <h2 class="fw-bold text-dark mb-1"><i class="fa-solid fa-award text-success me-2"></i>Supplier Performance</h2>
-        <p class="text-muted small mb-0">Latest scorecard per supplier. Composite = Delivery 30%, Quality 30%, Price 20%, Compliance 20% over indicators with data; Responsiveness and SLA are reported alongside.</p>
+        <p class="text-muted small mb-0">Latest scorecard per supplier. Composite = weighted average of the six dimensions (weights configured per organization); dimensions with no data are left out and the weights rescaled. Rating: A &ge; 90, B &ge; 75, C &ge; 60, D below.</p>
     </div>
 </div>
 
@@ -83,7 +83,7 @@
                         {% if card.composite_score is None %}<span class="text-muted small">No data</span>
                         {% elif card.composite_score >= 85 %}<span class="badge bg-success">{{ card.composite_score|floatformat:1 }}</span>
                         {% elif card.composite_score >= 70 %}<span class="badge bg-warning text-dark">{{ card.composite_score|floatformat:1 }}</span>
-                        {% else %}<span class="badge bg-danger">{{ card.composite_score|floatformat:1 }}</span>{% endif %}
+                        {% else %}<span class="badge bg-danger">{{ card.composite_score|floatformat:1 }}</span>{% endif %}{% if card.rating_band %} <span class="small text-muted">({{ card.rating_band }})</span>{% endif %}
                     </td>
                     <td class="text-end pe-3">
                         <a href="{% url 'vendor_detail' card.vendor.id %}#performance" class="btn btn-outline-success btn-sm rounded-pill px-3">Governance <i class="fa-solid fa-arrow-right ms-1"></i></a>

@@ -31,6 +31,7 @@ def finance_setup(db, db_roles):
     finance_user = User.objects.create_user(
         email="finance_validator@hpe.com",
         password="Password123!",
+        organization=org,
         role=db_roles[Role.FINANCE_AP],
     )
 
@@ -234,4 +235,7 @@ def test_finance_invoice_create_successful_with_valid_counts(client, finance_set
     invoice = SupplierInvoice.objects.get(invoice_number="INV-VALID-FIN-01")
     assert invoice.lines.first().quantity == Decimal("10.00")
     assert invoice.lines.first().unit_price == Decimal("100.00")
-    assert invoice.status in [SupplierInvoice.STATUS_READY_FOR_PAYMENT, SupplierInvoice.STATUS_EXCEPTION]
+    assert invoice.status in [
+        SupplierInvoice.STATUS_READY_FOR_PAYMENT,
+        SupplierInvoice.STATUS_EXCEPTION,
+    ]

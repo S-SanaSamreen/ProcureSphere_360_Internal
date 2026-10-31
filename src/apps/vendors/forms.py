@@ -16,6 +16,7 @@ class VendorEditForm(forms.Form):
     Allows updating name, email, phone, address, bank and category.
     Tax ID / registration number changes are intentionally excluded (require legal justification).
     """
+
     legal_name = forms.CharField(max_length=255, label="Legal name")
     trade_name = forms.CharField(max_length=255, required=False, label="Trade / brand name")
     email = forms.EmailField(label="Primary email")
@@ -100,6 +101,7 @@ class VendorProfileUpdateForm(forms.Form):
     Validates phone number to strictly enforce country code (+91) followed by 10 digits.
     Allows updating PAN and GSTIN with consistency validation.
     """
+
     trade_name = forms.CharField(max_length=255, required=False)
     address = forms.CharField(widget=forms.Textarea(attrs={"rows": 2}), required=True)
     phone = forms.CharField(
@@ -161,6 +163,7 @@ class VendorContactForm(forms.Form):
     Form for adding and editing authorized vendor contacts.
     Strictly validates primary/secondary contact email and phone format.
     """
+
     first_name = forms.CharField(max_length=100, required=True)
     last_name = forms.CharField(max_length=100, required=True)
     email = forms.EmailField(required=True)
@@ -188,10 +191,13 @@ class VendorChangesRequestForm(forms.Form):
     """
     Form for procurement reviewers to request corrections/updates from a vendor.
     """
+
     notes = forms.CharField(
-        widget=forms.Textarea(attrs={"rows": 3, "class": "form-control", "placeholder": "Specify changes required..."}),
+        widget=forms.Textarea(
+            attrs={"rows": 3, "class": "form-control", "placeholder": "Specify changes required..."}
+        ),
         required=True,
-        error_messages={"required": "Please provide detailed instructions on what changes are required."},
+        error_messages={
+            "required": "Please provide detailed instructions on what changes are required."
+        },
     )
-
-

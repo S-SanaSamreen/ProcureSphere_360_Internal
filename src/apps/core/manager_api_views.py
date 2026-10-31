@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsProcurementManager
 from apps.budgets.models import Budget, SpendLedger
+from apps.core import tenancy
 from apps.invoices.models import MatchException, SupplierInvoice
 from apps.notifications.models import Notification
 from apps.orders.models import PurchaseOrder
@@ -19,14 +20,12 @@ from apps.requisitions.models import PurchaseRequisition
 from apps.scorecards.models import VendorScorecard
 from apps.sourcing.models import SourcingEvent
 from apps.vendors.models import Vendor, VendorRiskRecord
+from apps.vendors.selectors import scope_vendors_queryset
 
 
 def get_user_org(user):
     if user and user.is_authenticated and not user.is_superuser:
-        if getattr(user, "department_id", None) and getattr(
-            user.department, "organization_id", None
-        ):
-            return user.department.organization
+        return getattr(user, "effective_organization", None)
     return None
 
 
@@ -89,20 +88,23 @@ class ManagerKPIsAPIView(APIView):
         # High risk records or vendors currently on hold/suspended
         high_risk_vendor_ids = set(
             VendorRiskRecord.objects.filter(
-                risk_level=VendorRiskRecord.RISK_LEVEL_HIGH
+                risk_level=VendorRiskRecord.RISK_LEVEL_HIGH,
+                vendor__in=scope_vendors_queryset(Vendor.objects.all(), request.user),
             ).values_list("vendor_id", flat=True)
         )
         held_vendor_ids = set(
-            Vendor.objects.filter(
-                status__in=[Vendor.STATUS_ON_HOLD, Vendor.STATUS_SUSPENDED]
-            ).values_list("id", flat=True)
+            scope_vendors_queryset(Vendor.objects.all(), request.user)
+            .filter(status__in=[Vendor.STATUS_ON_HOLD, Vendor.STATUS_SUSPENDED])
+            .values_list("id", flat=True)
         )
         high_risk_vendors_count = len(high_risk_vendor_ids.union(held_vendor_ids))
 
         # 5. Pending KYC Reviews
-        kyc_reviews_count = Vendor.objects.filter(
-            status__in=[Vendor.STATUS_SUBMITTED, Vendor.STATUS_KYC_REVIEW]
-        ).count()
+        kyc_reviews_count = (
+            scope_vendors_queryset(Vendor.objects.all(), request.user)
+            .filter(status__in=[Vendor.STATUS_SUBMITTED, Vendor.STATUS_KYC_REVIEW])
+            .count()
+        )
 
         # 6. Spend & Budgets
         budget_qs = Budget.objects.all()
@@ -128,9 +130,9 @@ class ManagerKPIsAPIView(APIView):
         if org:
             open_sourcing_qs = open_sourcing_qs.filter(requisition__department__organization=org)
         open_sourcing_count = open_sourcing_qs.count()
-        avg_scorecard = VendorScorecard.objects.aggregate(avg=Avg("composite_score"))[
-            "avg"
-        ] or Decimal("0.00")
+        avg_scorecard = tenancy.scope_scorecards(
+            VendorScorecard.objects.all(), request.user
+        ).aggregate(avg=Avg("composite_score"))["avg"] or Decimal("0.00")
 
         # 8. Unread Governance Notifications
         unread_notifications = Notification.objects.filter(
@@ -1382,9 +1384,11 @@ class ManagerSupplierPerformanceAPIView(APIView):
         from apps.scorecards.models import VendorScorecard
         from apps.vendors.models import VendorCategory
 
-        qs = VendorScorecard.objects.select_related(
-            "vendor", "vendor__category", "evaluated_by"
-        ).order_by("-created_at")
+        qs = (
+            tenancy.scope_scorecards(VendorScorecard.objects.all(), request.user)
+            .select_related("vendor", "vendor__category", "evaluated_by")
+            .order_by("-created_at")
+        )
 
         search_query = request.GET.get("search", "").strip()
         if search_query:
@@ -1472,6 +1476,12 @@ class ManagerSupplierPerformanceAPIView(APIView):
                 "compliance_score": (
                     float(sc.compliance_score) if sc.compliance_score is not None else None
                 ),
+                "responsiveness_score": (
+                    float(sc.responsiveness_score) if sc.responsiveness_score is not None else None
+                ),
+                "sla_score": float(sc.sla_score) if sc.sla_score is not None else None,
+                "rating_band": sc.rating_band,
+                "weights_used": sc.weights_used,
                 "composite_score": (
                     float(sc.composite_score) if sc.composite_score is not None else None
                 ),
@@ -1497,7 +1507,8 @@ class ManagerSupplierPerformanceAPIView(APIView):
 
         # Available periods for filter dropdown
         periods = list(
-            VendorScorecard.objects.values_list("evaluation_period", flat=True)
+            tenancy.scope_scorecards(VendorScorecard.objects.all(), request.user)
+            .values_list("evaluation_period", flat=True)
             .distinct()
             .order_by("-evaluation_period")
         )
@@ -1532,7 +1543,7 @@ class ManagerPerformanceSummaryAPIView(APIView):
     def get(self, request):
         from apps.scorecards.models import VendorScorecard
 
-        qs = VendorScorecard.objects.all()
+        qs = tenancy.scope_scorecards(VendorScorecard.objects.all(), request.user)
         total_count = qs.count()
         distinct_vendors = qs.values("vendor_id").distinct().count()
 
@@ -1583,7 +1594,9 @@ class ManagerSupplierPerformanceDetailAPIView(APIView):
         from apps.vendors.models import Vendor
 
         org = get_user_org(request.user)
-        vendor = get_object_or_404(Vendor, pk=vendor_id)
+        vendor = get_object_or_404(
+            scope_vendors_queryset(Vendor.objects.all(), request.user), pk=vendor_id
+        )
 
         # Historical scorecards
         scorecards_qs = vendor.scorecards.select_related("evaluated_by").order_by("-created_at")
@@ -1601,6 +1614,12 @@ class ManagerSupplierPerformanceDetailAPIView(APIView):
                 "compliance_score": (
                     float(sc.compliance_score) if sc.compliance_score is not None else None
                 ),
+                "responsiveness_score": (
+                    float(sc.responsiveness_score) if sc.responsiveness_score is not None else None
+                ),
+                "sla_score": float(sc.sla_score) if sc.sla_score is not None else None,
+                "rating_band": sc.rating_band,
+                "weights_used": sc.weights_used,
                 "composite_score": (
                     float(sc.composite_score) if sc.composite_score is not None else None
                 ),
@@ -1724,8 +1743,12 @@ class ManagerSupplierCompareAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        vendor_a = get_object_or_404(Vendor, pk=vendor_a_id)
-        vendor_b = get_object_or_404(Vendor, pk=vendor_b_id)
+        vendor_a = get_object_or_404(
+            scope_vendors_queryset(Vendor.objects.all(), request.user), pk=vendor_a_id
+        )
+        vendor_b = get_object_or_404(
+            scope_vendors_queryset(Vendor.objects.all(), request.user), pk=vendor_b_id
+        )
 
         def get_vendor_summary(v):
             latest_sc = v.scorecards.order_by("-created_at").first()
@@ -1790,12 +1813,17 @@ class ManagerVendorWatchlistAPIView(APIView):
             ).values_list("vendor_id", flat=True)
         )
         governance_status_ids = set(
-            Vendor.objects.filter(
-                status__in=[Vendor.STATUS_SUSPENDED, Vendor.STATUS_ON_HOLD]
-            ).values_list("id", flat=True)
+            scope_vendors_queryset(Vendor.objects.all(), request.user)
+            .filter(status__in=[Vendor.STATUS_SUSPENDED, Vendor.STATUS_ON_HOLD])
+            .values_list("id", flat=True)
         )
 
-        target_ids = list(high_risk_ids.union(governance_status_ids))
+        scoped_vendors = scope_vendors_queryset(Vendor.objects.all(), request.user)
+        target_ids = list(
+            scoped_vendors.filter(id__in=high_risk_ids.union(governance_status_ids)).values_list(
+                "id", flat=True
+            )
+        )
         qs = (
             Vendor.objects.filter(id__in=target_ids)
             .select_related("category")
@@ -1804,7 +1832,7 @@ class ManagerVendorWatchlistAPIView(APIView):
 
         # If empty, fallback to recently updated vendors so dashboard is never empty
         if not qs.exists():
-            qs = Vendor.objects.select_related("category").order_by("-updated_at")[:5]
+            qs = scoped_vendors.select_related("category").order_by("-updated_at")[:5]
 
         results = []
         for v in qs:

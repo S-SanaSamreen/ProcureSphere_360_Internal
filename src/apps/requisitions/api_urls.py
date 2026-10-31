@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -10,6 +11,7 @@ from apps.accounts.models import Role
 from apps.audit.permissions import AuditorReadOnlyPermission
 
 from .models import PRAttachment, PRLine, PurchaseRequisition
+from .selectors import scope_requisitions_to_org
 
 
 class PRLineSerializer(serializers.ModelSerializer):
@@ -88,7 +90,7 @@ def _parse_line_items(lines_data):
     for idx, item in enumerate(lines_data, start=1):
         if not isinstance(item, dict):
             raise serializers.ValidationError({"line_items": f"Line {idx} must be an object."})
-        label = (item.get("item_description") or "Line Item")
+        label = item.get("item_description") or "Line Item"
         try:
             qty = Decimal(str(item.get("quantity", 1)))
             raw_price = item.get("estimated_unit_price")
@@ -101,7 +103,9 @@ def _parse_line_items(lines_data):
             )
         if not qty.is_finite() or not price.is_finite():
             raise serializers.ValidationError(
-                {"line_items": f"Line {idx} ('{label}'): quantity and price must be finite numbers."}
+                {
+                    "line_items": f"Line {idx} ('{label}'): quantity and price must be finite numbers."
+                }
             )
         if qty <= Decimal("0.00"):
             raise serializers.ValidationError({"quantity": "Quantity must be greater than zero."})
@@ -115,7 +119,9 @@ def _parse_line_items(lines_data):
             )
         if qty > MAX_LINE_QUANTITY:
             raise serializers.ValidationError(
-                {"quantity": f"Line {idx} ('{label}'): quantity cannot exceed {MAX_LINE_QUANTITY:,.0f}."}
+                {
+                    "quantity": f"Line {idx} ('{label}'): quantity cannot exceed {MAX_LINE_QUANTITY:,.0f}."
+                }
             )
         if price > MAX_LINE_UNIT_PRICE:
             raise serializers.ValidationError(
@@ -124,7 +130,9 @@ def _parse_line_items(lines_data):
         line_total = (qty * price).quantize(Decimal("0.01"))
         if line_total > MAX_LINE_TOTAL:
             raise serializers.ValidationError(
-                {"line_items": f"Line {idx} ('{label}'): line total exceeds the maximum allowed amount."}
+                {
+                    "line_items": f"Line {idx} ('{label}'): line total exceeds the maximum allowed amount."
+                }
             )
         total += line_total
         rows.append(
@@ -150,7 +158,9 @@ def _withdraw_approval_requests(requisition, user):
     from apps.approvals.models import ApprovalPolicy
 
     for module in (ApprovalPolicy.MODULE_PR, ApprovalPolicy.MODULE_BUDGET_EXCEPTION):
-        engine.cancel_pending_request(module, requisition, actor=user, reason="Requisition cancelled")
+        engine.cancel_pending_request(
+            module, requisition, actor=user, reason="Requisition cancelled"
+        )
 
 
 class PurchaseRequisitionSerializer(serializers.ModelSerializer):
@@ -181,9 +191,16 @@ class PurchaseRequisitionSerializer(serializers.ModelSerializer):
 
     def validate_department(self, value):
         request = self.context.get("request")
-        if request and request.user and request.user.is_authenticated and not request.user.is_superuser:
+        if (
+            request
+            and request.user
+            and request.user.is_authenticated
+            and not request.user.is_superuser
+        ):
             role_code = getattr(request.user, "role_code", None) or (
-                request.user.role.code if hasattr(request.user, "role") and request.user.role else None
+                request.user.role.code
+                if hasattr(request.user, "role") and request.user.role
+                else None
             )
             if role_code == Role.REQUESTER and getattr(request.user, "department_id", None):
                 if value.id != request.user.department_id:
@@ -252,12 +269,15 @@ class PurchaseRequisitionSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         # Approval routing and the budget reservation are computed at submission. Editing a
         # submitted requisition would let approvers sign off a different amount than was routed.
-        if instance.status != PurchaseRequisition.STATUS_DRAFT:
+        if instance.status not in (
+            PurchaseRequisition.STATUS_DRAFT,
+            PurchaseRequisition.STATUS_RETURNED,
+        ):
             raise serializers.ValidationError(
                 {
                     "status": (
                         f"Requisition {instance.pr_number} is in '{instance.status}' status. "
-                        "Only DRAFT requisitions can be edited."
+                        "Only DRAFT or RETURNED requisitions can be edited."
                     )
                 }
             )
@@ -300,19 +320,19 @@ class CanCreateRequisitionPermission(permissions.BasePermission):
             return False
 
         if request.method in ["POST", "PUT", "PATCH", "DELETE"]:
-            if request.user.is_superuser:
-                return True
+            # PRD 3.6: Super Admin and the platform superuser never transact.
+            if request.user.is_superuser or role_code == Role.SUPER_ADMIN:
+                return False
             action = getattr(view, "action", None)
-            if action in ["approve", "reject"]:
+            if action in ["approve", "reject", "return_for_clarification"]:
                 return role_code in [
                     Role.DEPT_APPROVER,
                     Role.PROC_MGR,
                     Role.FINANCE_AP,
-                    Role.SUPER_ADMIN,
                 ]
-            if action in ["submit", "cancel"]:
-                return role_code in [Role.REQUESTER, Role.PROC_MGR, Role.SUPER_ADMIN]
-            return role_code in [Role.REQUESTER, Role.SUPER_ADMIN]
+            if action in ["submit", "cancel", "withdraw"]:
+                return role_code in [Role.REQUESTER, Role.PROC_MGR]
+            return role_code == Role.REQUESTER
 
         return True
 
@@ -352,6 +372,7 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
             qs = self.queryset
         elif role_code == Role.DEPT_APPROVER:
             from django.db.models import Q
+
             if user.department_id:
                 qs = self.queryset.filter(
                     Q(department_id=user.department_id) | Q(cost_center__manager=user)
@@ -366,6 +387,8 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
             # Requesters are strictly scoped to their own requisitions (prevents IDOR)
             qs = self.queryset.filter(requester=user)
 
+        qs = scope_requisitions_to_org(qs, user)
+
         # Filter by search
         search_param = (
             self.request.query_params.get("search", "").strip()
@@ -373,6 +396,7 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
         )
         if search_param:
             from django.db.models import Q
+
             qs = qs.filter(
                 Q(pr_number__icontains=search_param)
                 | Q(title__icontains=search_param)
@@ -398,7 +422,7 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
         role_code = getattr(user, "role_code", None) or (
             user.role.code if hasattr(user, "role") and user.role else None
         )
-        if not user.is_superuser and role_code not in [Role.REQUESTER, Role.SUPER_ADMIN]:
+        if role_code != Role.REQUESTER:
             from rest_framework.exceptions import PermissionDenied
 
             raise PermissionDenied(
@@ -421,15 +445,14 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
         role_code = getattr(user, "role_code", None) or (
             user.role.code if hasattr(user, "role") and user.role else None
         )
-        if pr.requester_id == user.id and not user.is_superuser:
+        if pr.requester_id == user.id:
             raise permissions.exceptions.PermissionDenied(
                 "Self-approval is strictly prohibited: Requesters cannot approve their own Purchase Requisitions."
             )
-        if not user.is_superuser and role_code not in [
+        if role_code not in [
             Role.DEPT_APPROVER,
             Role.PROC_MGR,
             Role.FINANCE_AP,
-            Role.SUPER_ADMIN,
         ]:
             raise permissions.exceptions.PermissionDenied(
                 "You do not have permission to approve Purchase Requisitions."
@@ -449,11 +472,10 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
         role_code = getattr(user, "role_code", None) or (
             user.role.code if hasattr(user, "role") and user.role else None
         )
-        if not user.is_superuser and role_code not in [
+        if role_code not in [
             Role.DEPT_APPROVER,
             Role.PROC_MGR,
             Role.FINANCE_AP,
-            Role.SUPER_ADMIN,
         ]:
             raise permissions.exceptions.PermissionDenied(
                 "You do not have permission to reject Purchase Requisitions."
@@ -470,6 +492,46 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
         )
         return Response(self.get_serializer(updated_pr).data, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=["post"], url_path="return")
+    def return_for_clarification(self, request, pk=None):
+        pr = self.get_object()
+        user = request.user
+        role_code = getattr(user, "role_code", None) or (
+            user.role.code if hasattr(user, "role") and user.role else None
+        )
+        if role_code not in [
+            Role.DEPT_APPROVER,
+            Role.PROC_MGR,
+            Role.FINANCE_AP,
+        ]:
+            raise permissions.exceptions.PermissionDenied(
+                "You do not have permission to return Purchase Requisitions."
+            )
+        comments = (request.data.get("comments") or "").strip()
+        if not comments:
+            raise serializers.ValidationError(
+                {"comments": "A comment explaining what needs clarification is mandatory."}
+            )
+        from apps.requisitions.services import return_purchase_requisition_service
+
+        updated_pr = return_purchase_requisition_service(
+            requisition=pr, approver=user, comments=comments
+        )
+        return Response(self.get_serializer(updated_pr).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="withdraw")
+    def withdraw(self, request, pk=None):
+        pr = self.get_object()
+        from apps.requisitions.services import withdraw_purchase_requisition_service
+
+        try:
+            updated_pr = withdraw_purchase_requisition_service(
+                requisition=pr, user=request.user, reason=request.data.get("reason", "")
+            )
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"status": exc.messages})
+        return Response(self.get_serializer(updated_pr).data, status=status.HTTP_200_OK)
+
     @action(detail=True, methods=["post"], url_path="cancel")
     def cancel(self, request, pk=None):
         pr = self.get_object()
@@ -477,12 +539,13 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
         role_code = getattr(user, "role_code", None) or (
             user.role.code if hasattr(user, "role") and user.role else None
         )
-        if pr.requester_id != user.id and not user.is_superuser and role_code != Role.PROC_MGR:
+        if pr.requester_id != user.id and role_code != Role.PROC_MGR:
             raise permissions.exceptions.PermissionDenied(
                 "Only the original requester or a procurement manager can cancel this requisition."
             )
         if pr.status in [
             PurchaseRequisition.STATUS_PO_ISSUED,
+            PurchaseRequisition.STATUS_COMPLETED,
             PurchaseRequisition.STATUS_CANCELLED,
             PurchaseRequisition.STATUS_SOURCING,
         ]:
@@ -518,7 +581,7 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
                     "status": f"Cannot delete requisition in '{pr.status}' status. Only DRAFT requisitions can be deleted."
                 }
             )
-        if pr.requester_id != user.id and not user.is_superuser:
+        if pr.requester_id != user.id:
             raise permissions.exceptions.PermissionDenied(
                 "You do not have permission to delete this requisition."
             )

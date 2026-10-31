@@ -15,10 +15,11 @@ from apps.accounts.models import Role
 from apps.approvals.models import ApprovalAction
 from apps.approvals.services import process_approval_action_service
 from apps.budgets.models import Budget
-from apps.budgets.services import validate_budget_availability_service
+from apps.budgets.services import pr_budget_position, validate_budget_availability_service
 from apps.core.validators import validate_pr_attachment
 from apps.organization.models import CostCenter, Department
 from apps.requisitions.models import PRAttachment, PRLine, PurchaseRequisition
+from apps.requisitions.selectors import scope_requisitions_to_org
 from apps.requisitions.services import (
     create_purchase_requisition_service,
     submit_purchase_requisition_service,
@@ -33,6 +34,7 @@ def list_view(request):
     )
     if getattr(user, "is_vendor", False) or role_code == Role.VENDOR_USER:
         from django.core.exceptions import PermissionDenied
+
         raise PermissionDenied("Vendors are not permitted to view internal Purchase Requisitions.")
     search_q = request.GET.get("q", "").strip()
     status_filter = request.GET.get("status", "").strip()
@@ -48,16 +50,12 @@ def list_view(request):
         user_department = getattr(user, "department", None)
         if not user_department:
             managed_cc = (
-                CostCenter.objects.filter(manager=user)
-                .select_related("department")
-                .first()
+                CostCenter.objects.filter(manager=user).select_related("department").first()
             )
             if managed_cc and managed_cc.department:
                 user_department = managed_cc.department
             elif getattr(user, "organization", None):
-                user_department = Department.objects.filter(
-                    organization=user.organization
-                ).first()
+                user_department = Department.objects.filter(organization=user.organization).first()
 
         if user_department:
             items = (
@@ -79,6 +77,8 @@ def list_view(request):
             items = PurchaseRequisition.objects.all().order_by("-created_at")
     else:
         items = PurchaseRequisition.objects.all().order_by("-created_at")
+
+    items = scope_requisitions_to_org(items, user)
 
     if search_q:
         items = items.filter(
@@ -102,6 +102,7 @@ def list_view(request):
                     PurchaseRequisition.STATUS_APPROVED,
                     PurchaseRequisition.STATUS_SOURCING,
                     PurchaseRequisition.STATUS_PO_ISSUED,
+                    PurchaseRequisition.STATUS_COMPLETED,
                 ]
             )
         else:
@@ -117,7 +118,9 @@ def list_view(request):
         query_params.pop("page")
     querystring = query_params.urlencode()
 
-    if role_code == Role.LEGAL_MGR or role_code == "LEGAL_MGR":
+    if user.is_superuser or role_code == Role.SUPER_ADMIN:
+        base_layout = "layouts/superadmin_base.html"
+    elif role_code == Role.LEGAL_MGR or role_code == "LEGAL_MGR":
         base_layout = "layouts/legal_base.html"
     elif role_code in [Role.DEPT_APPROVER, Role.PROC_MGR]:
         base_layout = "layouts/approver_base.html"
@@ -145,7 +148,7 @@ def create_view(request):
     role_code = getattr(user, "role_code", None) or (
         user.role.code if hasattr(user, "role") and user.role else Role.SUPER_ADMIN
     )
-    if role_code not in [Role.REQUESTER, Role.SUPER_ADMIN]:
+    if role_code != Role.REQUESTER:
         messages.error(
             request,
             f"Permission Denied: Only Requesters hold permissions to create purchase requisitions (current role: {role_code}).",
@@ -163,7 +166,9 @@ def create_view(request):
         cost_center_id = request.POST.get("cost_center")
         requested_delivery_date = request.POST.get("requested_delivery_date")
         attachments = request.FILES.getlist("attachments")
-        action_type = request.POST.get("action_type") or request.POST.get("submit_action", "save_draft")
+        action_type = request.POST.get("action_type") or request.POST.get(
+            "submit_action", "save_draft"
+        )
 
         if not (
             title and justification and department_id and cost_center_id and requested_delivery_date
@@ -196,10 +201,13 @@ def create_view(request):
 
         try:
 
-            department = Department.objects.get(id=department_id)
-            cost_center = CostCenter.objects.get(id=cost_center_id)
+            org_depts, org_ccs = _org_masters(user)
+            department = org_depts.get(id=department_id)
+            cost_center = org_ccs.get(id=cost_center_id)
 
-            if getattr(user, "cost_center", None) and str(user.cost_center.id) != str(cost_center.id):
+            if getattr(user, "cost_center", None) and str(user.cost_center.id) != str(
+                cost_center.id
+            ):
                 messages.error(
                     request,
                     f"Authorization Error: You are only authorized to create requisitions for Cost Center '{user.cost_center.code}' ({user.cost_center.name}).",
@@ -306,10 +314,10 @@ def create_view(request):
 
             if action_type in ["submit", "SUBMIT"] or "submit" in request.POST:
                 submit_purchase_requisition_service(requisition=pr, user=user)
-                if pr.status == PurchaseRequisition.STATUS_BUDGET_REVIEW:
+                if pr_budget_position(pr)["status"] == "OUT_OF_BUDGET":
                     messages.warning(
                         request,
-                        f"Budget Alert: Requisition {pr.pr_number} exceeds available budget for Cost Center '{cost_center.code}' and has been routed for Budget Exception Review.",
+                        f"Budget Alert: Requisition {pr.pr_number} exceeds available budget for Cost Center '{cost_center.code}' and is out of budget; Finance will need a budget exception to approve it.",
                     )
                 else:
                     messages.success(
@@ -334,8 +342,7 @@ def create_view(request):
         departments = Department.objects.filter(id=user.department.id)
         cost_centers = CostCenter.objects.filter(department=user.department)
     else:
-        departments = Department.objects.all()
-        cost_centers = CostCenter.objects.all()
+        departments, cost_centers = _org_masters(user)
 
     cost_centers = _attach_available_budgets(cost_centers)
 
@@ -348,6 +355,19 @@ def create_view(request):
             "user_assigned_cost_center": getattr(user, "cost_center", None),
             "today": timezone.now().date().isoformat(),
         },
+    )
+
+
+def _org_masters(user):
+    """Departments / cost centers selectable by ``user``: own organisation only (none if org-less)."""
+    if user.is_superuser:
+        return Department.objects.all(), CostCenter.objects.all()
+    org = getattr(user, "effective_organization", None)
+    if org is None:
+        return Department.objects.none(), CostCenter.objects.none()
+    return (
+        Department.objects.filter(organization=org),
+        CostCenter.objects.filter(department__organization=org),
     )
 
 
@@ -372,13 +392,15 @@ def _attach_available_budgets(cost_centers):
 
 @login_required(login_url="/login/")
 def edit_view(request, pk):
-    pr = get_object_or_404(PurchaseRequisition, pk=pk)
-    if pr.requester != request.user and not request.user.is_superuser:
+    pr = get_object_or_404(
+        scope_requisitions_to_org(PurchaseRequisition.objects.all(), request.user), pk=pk
+    )
+    if pr.requester != request.user:
         messages.error(request, "You do not have permission to edit this requisition.")
         return redirect("requisitions_list")
 
-    if pr.status != PurchaseRequisition.STATUS_DRAFT:
-        messages.error(request, "Only draft requisitions can be edited.")
+    if pr.status not in (PurchaseRequisition.STATUS_DRAFT, PurchaseRequisition.STATUS_RETURNED):
+        messages.error(request, "Only draft or returned requisitions can be edited.")
         return redirect("requisition_detail", pk=pr.pk)
 
     if request.method == "POST":
@@ -390,12 +412,9 @@ def edit_view(request, pk):
         attachments = request.FILES.getlist("attachments")
 
         try:
-            department = (
-                Department.objects.get(id=department_id) if department_id else pr.department
-            )
-            cost_center = (
-                CostCenter.objects.get(id=cost_center_id) if cost_center_id else pr.cost_center
-            )
+            org_depts, org_ccs = _org_masters(request.user)
+            department = org_depts.get(id=department_id) if department_id else pr.department
+            cost_center = org_ccs.get(id=cost_center_id) if cost_center_id else pr.cost_center
 
             # Update basic fields
             if title:
@@ -508,8 +527,7 @@ def edit_view(request, pk):
         departments = Department.objects.filter(id=request.user.department.id)
         cost_centers = CostCenter.objects.filter(department=request.user.department)
     else:
-        departments = Department.objects.all()
-        cost_centers = CostCenter.objects.all()
+        departments, cost_centers = _org_masters(request.user)
 
     cost_centers = _attach_available_budgets(cost_centers)
 
@@ -546,6 +564,13 @@ def detail_view(request, pk):
     if role_code == Role.REQUESTER and pr.requester != user:
         messages.error(request, "You do not have permission to view this requisition.")
         return redirect("requisitions_list")
+
+    if not scope_requisitions_to_org(PurchaseRequisition.objects.filter(pk=pr.pk), user).exists():
+        from django.core.exceptions import PermissionDenied
+
+        raise PermissionDenied(
+            "You do not have permission to view requisitions from another organization."
+        )
 
     if not user.is_superuser and role_code not in [
         Role.FINANCE_AP,
@@ -589,11 +614,7 @@ def detail_view(request, pk):
         PurchaseRequisition.STATUS_BUDGET_REVIEW,
     ]
     is_budget_exceeded = bool(
-        is_pending_review
-        and (
-            pr.status == PurchaseRequisition.STATUS_BUDGET_REVIEW
-            or (available_budget is not None and pr.total_amount > available_budget)
-        )
+        is_pending_review and (available_budget is not None and pr.total_amount > available_budget)
     )
 
     from apps.approvals.models import ApprovalPolicy
@@ -619,9 +640,7 @@ def detail_view(request, pk):
         PurchaseRequisition.STATUS_SUBMITTED,
         PurchaseRequisition.STATUS_MANAGER_REVIEW,
     ]:
-        if user.is_superuser:
-            can_approve = True
-        elif chain and current_step_index < len(chain):
+        if chain and current_step_index < len(chain):
             step_info = chain[current_step_index]
             current_step_info = step_info
             req_role = step_info["approver_role"]
@@ -633,34 +652,86 @@ def detail_view(request, pk):
                     can_approve = True
             else:
                 approver_role_code = getattr(user.role, "code", None)
-                if (getattr(user, "role_id", None) == req_role.id) or (approver_role_code == req_role.code):
+                if (getattr(user, "role_id", None) == req_role.id) or (
+                    approver_role_code == req_role.code
+                ):
                     if req_role.code == Role.DEPT_APPROVER and pr.department and user.department:
-                        if user.department == pr.department or (pr.cost_center and user == pr.cost_center.manager):
+                        if user.department == pr.department or (
+                            pr.cost_center and user == pr.cost_center.manager
+                        ):
                             can_approve = True
                     else:
                         can_approve = True
-        elif not chain and role_code in [Role.DEPT_APPROVER, Role.PROC_MGR, Role.SUPER_ADMIN]:
+        elif not chain and role_code in [Role.DEPT_APPROVER, Role.PROC_MGR]:
             can_approve = not user_has_approved
     elif pr.status == PurchaseRequisition.STATUS_BUDGET_REVIEW:
-        if role_code in [Role.FINANCE_AP, Role.SUPER_ADMIN] or user.is_superuser:
+        if role_code == Role.FINANCE_AP:
             can_approve = True
 
+    from apps.approvals import engine as approval_engine
+
+    open_request = approval_engine.get_pending_request(
+        ApprovalPolicy.MODULE_BUDGET_EXCEPTION, pr
+    ) or approval_engine.get_pending_request(ApprovalPolicy.MODULE_PR, pr)
+    current_approvers = []
+    if open_request is not None:
+        # the engine is the authority on who may decide the active step
+        can_approve = approval_engine.can_act(open_request, user)
+        active = open_request.active_step
+        current_approvers = [
+            u.get_full_name() or u.email for u in approval_engine.step_approvers(open_request)
+        ]
+        current_approver_role = active["role_name"] if active else ""
+    else:
+        current_approver_role = ""
+    stage_labels = ["Manager Review", "Budget Review", "Approved"]
+    stage_index = {
+        PurchaseRequisition.STATUS_SUBMITTED: 0,
+        PurchaseRequisition.STATUS_MANAGER_REVIEW: 0,
+        PurchaseRequisition.STATUS_BUDGET_REVIEW: 1,
+        PurchaseRequisition.STATUS_APPROVED: 2,
+        PurchaseRequisition.STATUS_SOURCING: 2,
+        PurchaseRequisition.STATUS_PO_ISSUED: 2,
+    }.get(pr.status)
+    stages = [
+        {
+            "label": label,
+            "done": stage_index is not None and idx < stage_index,
+            "current": stage_index == idx,
+        }
+        for idx, label in enumerate(stage_labels)
+    ]
+    budget_position = (
+        pr_budget_position(pr)
+        if pr.status
+        in (
+            PurchaseRequisition.STATUS_SUBMITTED,
+            PurchaseRequisition.STATUS_MANAGER_REVIEW,
+            PurchaseRequisition.STATUS_BUDGET_REVIEW,
+        )
+        else None
+    )
+
     base_layout = (
-        "manager/base_manager.html"
-        if role_code == Role.PROC_MGR
+        "layouts/superadmin_base.html"
+        if (request.user.is_superuser or role_code == Role.SUPER_ADMIN)
         else (
-            "audit/base_auditor.html"
-            if role_code == Role.AUDITOR
+            "manager/base_manager.html"
+            if role_code == Role.PROC_MGR
             else (
-                "layouts/legal_base.html"
-                if role_code == Role.LEGAL_MGR
+                "audit/base_auditor.html"
+                if role_code == Role.AUDITOR
                 else (
-                    "layouts/approver_base.html"
-                    if role_code in [Role.DEPT_APPROVER, Role.PROC_EXEC]
+                    "layouts/legal_base.html"
+                    if role_code == Role.LEGAL_MGR
                     else (
-                        "layouts/finance_base.html"
-                        if role_code == Role.FINANCE_AP
-                        else "layouts/requester_base.html"
+                        "layouts/approver_base.html"
+                        if role_code in [Role.DEPT_APPROVER, Role.PROC_EXEC]
+                        else (
+                            "layouts/finance_base.html"
+                            if role_code == Role.FINANCE_AP
+                            else "layouts/requester_base.html"
+                        )
                     )
                 )
             )
@@ -680,6 +751,10 @@ def detail_view(request, pk):
             "can_approve": can_approve,
             "user_has_approved": user_has_approved,
             "current_step_info": current_step_info,
+            "stages": stages,
+            "current_approvers": current_approvers,
+            "current_approver_role": current_approver_role,
+            "budget_position": budget_position,
         },
     )
 
@@ -689,23 +764,25 @@ def submit_view(request, pk):
     if request.method != "POST":
         return redirect("requisitions_list")
 
-    pr = get_object_or_404(PurchaseRequisition, pk=pk)
+    pr = get_object_or_404(
+        scope_requisitions_to_org(PurchaseRequisition.objects.all(), request.user), pk=pk
+    )
 
     # Check permissions
-    if pr.requester != request.user and not request.user.is_superuser:
+    if pr.requester != request.user:
         messages.error(request, "You do not have permission to submit this requisition.")
         return redirect("requisition_detail", pk=pr.pk)
 
-    if pr.status != PurchaseRequisition.STATUS_DRAFT:
-        messages.error(request, "Only draft requisitions can be submitted.")
+    if pr.status not in (PurchaseRequisition.STATUS_DRAFT, PurchaseRequisition.STATUS_RETURNED):
+        messages.error(request, "Only draft or returned requisitions can be submitted.")
         return redirect("requisition_detail", pk=pr.pk)
 
     try:
         submit_purchase_requisition_service(requisition=pr, user=request.user)
-        if pr.status == PurchaseRequisition.STATUS_BUDGET_REVIEW:
+        if pr_budget_position(pr)["status"] == "OUT_OF_BUDGET":
             messages.warning(
                 request,
-                f"Budget Alert: Requisition {pr.pr_number} exceeds available budget for Cost Center '{pr.cost_center.code}' and has been routed for Budget Exception Review.",
+                f"Budget Alert: Requisition {pr.pr_number} exceeds available budget for Cost Center '{pr.cost_center.code}' and is out of budget; Finance will need a budget exception to approve it.",
             )
         else:
             messages.success(
@@ -719,7 +796,9 @@ def submit_view(request, pk):
 
 @login_required(login_url="/login/")
 def approve_view(request, pk):
-    pr = get_object_or_404(PurchaseRequisition, pk=pk)
+    pr = get_object_or_404(
+        scope_requisitions_to_org(PurchaseRequisition.objects.all(), request.user), pk=pk
+    )
     if request.method == "POST":
         comments = request.POST.get("comments", "").strip()
         user = request.user
@@ -727,10 +806,7 @@ def approve_view(request, pk):
             user.role.code if hasattr(user, "role") and user.role else Role.SUPER_ADMIN
         )
 
-        if pr.status == PurchaseRequisition.STATUS_BUDGET_REVIEW and role_code not in [
-            Role.FINANCE_AP,
-            Role.SUPER_ADMIN,
-        ]:
+        if pr.status == PurchaseRequisition.STATUS_BUDGET_REVIEW and role_code != Role.FINANCE_AP:
             messages.error(
                 request,
                 "Permission Denied: Only Finance/AP can approve a budget overrun exception.",
@@ -739,7 +815,7 @@ def approve_view(request, pk):
         elif pr.status in [
             PurchaseRequisition.STATUS_MANAGER_REVIEW,
             PurchaseRequisition.STATUS_SUBMITTED,
-        ] and role_code not in [Role.DEPT_APPROVER, Role.PROC_MGR, Role.SUPER_ADMIN]:
+        ] and role_code not in [Role.DEPT_APPROVER, Role.PROC_MGR]:
             messages.error(
                 request,
                 "Permission Denied: You do not have permission to approve this requisition.",
@@ -761,7 +837,9 @@ def approve_view(request, pk):
 
 @login_required(login_url="/login/")
 def reject_view(request, pk):
-    pr = get_object_or_404(PurchaseRequisition, pk=pk)
+    pr = get_object_or_404(
+        scope_requisitions_to_org(PurchaseRequisition.objects.all(), request.user), pk=pk
+    )
     if request.method == "POST":
         comments = request.POST.get("comments", "").strip() or "Rejected by Approver."
         user = request.user
@@ -769,10 +847,7 @@ def reject_view(request, pk):
             user.role.code if hasattr(user, "role") and user.role else Role.SUPER_ADMIN
         )
 
-        if pr.status == PurchaseRequisition.STATUS_BUDGET_REVIEW and role_code not in [
-            Role.FINANCE_AP,
-            Role.SUPER_ADMIN,
-        ]:
+        if pr.status == PurchaseRequisition.STATUS_BUDGET_REVIEW and role_code != Role.FINANCE_AP:
             messages.error(
                 request, "Permission Denied: Only Finance/AP can reject a budget overrun exception."
             )
@@ -780,7 +855,7 @@ def reject_view(request, pk):
         elif pr.status in [
             PurchaseRequisition.STATUS_MANAGER_REVIEW,
             PurchaseRequisition.STATUS_SUBMITTED,
-        ] and role_code not in [Role.DEPT_APPROVER, Role.PROC_MGR, Role.SUPER_ADMIN]:
+        ] and role_code not in [Role.DEPT_APPROVER, Role.PROC_MGR]:
             messages.error(
                 request, "Permission Denied: You do not have permission to reject this requisition."
             )
@@ -800,11 +875,52 @@ def reject_view(request, pk):
 
 
 @login_required(login_url="/login/")
+def return_view(request, pk):
+    """Approver / Finance sends a PR back to the requester for clarification (comment required)."""
+    pr = get_object_or_404(
+        scope_requisitions_to_org(PurchaseRequisition.objects.all(), request.user), pk=pk
+    )
+    if request.method == "POST":
+        comments = request.POST.get("comments", "").strip()
+        try:
+            process_approval_action_service(
+                target_object=pr, actor=request.user, action="RETURNED", comments=comments
+            )
+            messages.success(request, f"Requisition {pr.pr_number} returned to the requester.")
+        except Exception as e:
+            messages.error(request, f"Return error: {', '.join(getattr(e, 'messages', [str(e)]))}")
+    return redirect("requisition_detail", pk=pr.pk)
+
+
+@login_required(login_url="/login/")
+def withdraw_view(request, pk):
+    """Requester withdraws a PR before final approval."""
+    pr = get_object_or_404(
+        scope_requisitions_to_org(PurchaseRequisition.objects.all(), request.user), pk=pk
+    )
+    if request.method == "POST":
+        from apps.requisitions.services import withdraw_purchase_requisition_service
+
+        try:
+            withdraw_purchase_requisition_service(
+                requisition=pr, user=request.user, reason=request.POST.get("reason", "").strip()
+            )
+            messages.success(request, f"Requisition {pr.pr_number} has been withdrawn.")
+        except Exception as e:
+            messages.error(
+                request, f"Withdraw error: {', '.join(getattr(e, 'messages', [str(e)]))}"
+            )
+    return redirect("requisition_detail", pk=pr.pk)
+
+
+@login_required(login_url="/login/")
 def cancel_view(request, pk):
     if request.method == "POST":
-        pr = get_object_or_404(PurchaseRequisition, pk=pk)
+        pr = get_object_or_404(
+            scope_requisitions_to_org(PurchaseRequisition.objects.all(), request.user), pk=pk
+        )
 
-        if pr.requester != request.user and not request.user.is_superuser:
+        if pr.requester != request.user:
             messages.error(request, "You do not have permission to cancel this requisition.")
             return redirect("requisition_detail", pk=pr.pk)
 
@@ -813,6 +929,7 @@ def cancel_view(request, pk):
             PurchaseRequisition.STATUS_SUBMITTED,
             PurchaseRequisition.STATUS_MANAGER_REVIEW,
             PurchaseRequisition.STATUS_BUDGET_REVIEW,
+            PurchaseRequisition.STATUS_RETURNED,
         ]
 
         if pr.status not in allowed_cancel_statuses:
@@ -863,10 +980,10 @@ def cancel_view(request, pk):
 
 @login_required(login_url="/login/")
 def delete_view(request, pk):
-    pr = get_object_or_404(PurchaseRequisition, pk=pk)
-    if pr.status == PurchaseRequisition.STATUS_DRAFT and (
-        pr.requester == request.user or request.user.is_superuser
-    ):
+    pr = get_object_or_404(
+        scope_requisitions_to_org(PurchaseRequisition.objects.all(), request.user), pk=pk
+    )
+    if pr.status == PurchaseRequisition.STATUS_DRAFT and (pr.requester == request.user):
         pr.delete()
         messages.success(request, "Draft requisition deleted successfully.")
         return redirect("requisitions_list")
@@ -891,7 +1008,9 @@ def attachment_download_view(request, pk, attachment_id):
         user.role.code if hasattr(user, "role") and user.role else Role.SUPER_ADMIN
     )
 
-    pr = get_object_or_404(PurchaseRequisition, pk=pk)
+    pr = get_object_or_404(
+        scope_requisitions_to_org(PurchaseRequisition.objects.all(), user), pk=pk
+    )
 
     # Scoping check
     if role_code == Role.REQUESTER and pr.requester != user:

@@ -15,6 +15,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.accounts.models import Role, User
+from apps.accounts.permissions import forbid_non_transacting_actor
 from apps.audit.models import AuditLog
 from apps.audit.services import create_audit_log_service
 from apps.core.validators import (
@@ -36,6 +37,7 @@ from .kyc_policy import ProvisionalKYCPolicy
 from .models import (
     Vendor,
     VendorCategory,
+    VendorChangeRequest,
     VendorContact,
     VendorCredentialDispatch,
     VendorDocument,
@@ -138,6 +140,144 @@ def register_vendor_service(
     return vendor
 
 
+def _norm_sensitive(field, value):
+    value = "" if value is None else str(value).strip()
+    return normalize_tax_identifier(value) if field in ("pan_number", "gstin") else value
+
+
+def _stage_sensitive_changes(vendor, actor, proposed: dict):
+    """
+    For an ACTIVE vendor, files a pending VendorChangeRequest for every bank/tax field whose
+    value differs from the current one and returns it (None when nothing differs or the
+    vendor is not ACTIVE, in which case the caller applies the change directly).
+    """
+    if vendor.status != Vendor.STATUS_ACTIVE:
+        return None
+    changes = {}
+    for field, new in proposed.items():
+        old = getattr(vendor, field) or ""
+        new = _norm_sensitive(field, new)
+        if new != _norm_sensitive(field, old):
+            changes[field] = {"old": old, "new": new}
+    if not changes:
+        return None
+    if "pan_number" in changes or "gstin" in changes:
+        pan = changes.get("pan_number", {}).get("new", vendor.pan_number or "")
+        gstin = changes.get("gstin", {}).get("new", vendor.gstin or "")
+        if pan:
+            validate_pan_number(pan)
+        if gstin:
+            validate_gstin(gstin)
+        if pan and gstin:
+            validate_pan_gstin_consistency(pan, gstin)
+    # Supersede any earlier pending request for this vendor (latest request wins).
+    for earlier in vendor.change_requests.filter(status=VendorChangeRequest.STATUS_PENDING):
+        earlier.status = VendorChangeRequest.STATUS_REJECTED
+        earlier.decision_comments = "Superseded by a newer change request."
+        earlier.decided_at = timezone.now()
+        earlier.save(update_fields=["status", "decision_comments", "decided_at", "updated_at"])
+    req = VendorChangeRequest.objects.create(
+        vendor=vendor, changes=changes, requested_by=actor, created_by=actor
+    )
+    AuditLog.objects.create(
+        actor=actor,
+        action=AuditLog.ACTION_SUBMIT,
+        target_model="VendorChangeRequest",
+        target_object_id=str(req.id),
+        new_state={
+            "vendor": vendor.vendor_number,
+            "fields": sorted(changes),
+            "status": req.status,
+        },
+    )
+    approvers = User.objects.filter(
+        role__code=Role.PROC_MGR, is_active=True, organization=vendor.organization
+    ).exclude(pk=getattr(actor, "pk", None))
+    notify_users(
+        users=list(approvers),
+        notification_type=Notification.TYPE_APPROVAL_REQUIRED,
+        title=f"Vendor bank/tax change approval: {vendor.legal_name}",
+        message="Changed fields: " + ", ".join(sorted(changes)),
+        target_url=f"/vendors/{vendor.id}/",
+    )
+    return req
+
+
+def _divert_sensitive_profile_changes(vendor, user, data: dict) -> dict:
+    """Returns ``data`` minus the sensitive fields that were staged for approval."""
+    proposed = {f: data[f] for f in VendorChangeRequest.SENSITIVE_FIELDS if f in data}
+    if not proposed:
+        return data
+    if _stage_sensitive_changes(vendor, user, proposed) is None:
+        return data
+    return {k: v for k, v in data.items() if k not in VendorChangeRequest.SENSITIVE_FIELDS}
+
+
+@transaction.atomic
+def decide_vendor_change_request_service(
+    *, change_request: VendorChangeRequest, approver: User, approve: bool, comments: str = ""
+) -> VendorChangeRequest:
+    """Procurement Manager of the vendor's organization applies or discards a pending change."""
+    forbid_non_transacting_actor(approver, "decide vendor change requests")
+    req = (
+        VendorChangeRequest.objects.select_for_update()
+        .select_related("vendor")
+        .get(pk=change_request.pk)
+    )
+    vendor = req.vendor
+    org = getattr(approver, "effective_organization", None)
+    if (
+        getattr(approver, "role_code", None) != Role.PROC_MGR
+        or org is None
+        or vendor.organization_id != org.pk
+    ):
+        raise PermissionDenied(
+            "Only the Procurement Manager of the vendor's organization can decide this change."
+        )
+    if req.status != VendorChangeRequest.STATUS_PENDING:
+        raise ValidationError(f"This change request is already {req.status.lower()}.")
+    if req.requested_by_id == approver.id:
+        raise ValidationError(
+            "Separation of duties violation: you cannot approve your own change request."
+        )
+    if not approve and not (comments or "").strip():
+        raise ValidationError("A reason is required to reject a change request.")
+
+    previous = {f: getattr(vendor, f) for f in req.changes}
+    if approve:
+        for field, delta in req.changes.items():
+            setattr(vendor, field, delta["new"])
+        vendor.save(update_fields=[*req.changes, "updated_at"])
+    req.status = (
+        VendorChangeRequest.STATUS_APPROVED if approve else VendorChangeRequest.STATUS_REJECTED
+    )
+    req.decided_by = approver
+    req.decided_at = timezone.now()
+    req.decision_comments = (comments or "").strip()
+    req.save()
+    AuditLog.objects.create(
+        actor=approver,
+        action=AuditLog.ACTION_APPROVE if approve else AuditLog.ACTION_REJECT,
+        target_model="Vendor",
+        target_object_id=str(vendor.id),
+        previous_state=previous,
+        new_state={
+            "change_request": str(req.id),
+            "status": req.status,
+            "fields": {f: d["new"] for f, d in req.changes.items()} if approve else {},
+            "comments": req.decision_comments,
+        },
+    )
+    notify_users(
+        users=[req.requested_by],
+        notification_type=Notification.TYPE_APPROVAL_REQUIRED,
+        title=f"Vendor change {req.status.lower()}: {vendor.legal_name}",
+        message=", ".join(sorted(req.changes)),
+        target_url=f"/vendors/{vendor.id}/",
+    )
+    return req
+
+
 @transaction.atomic
 def update_vendor_service(
     *,
@@ -159,6 +299,21 @@ def update_vendor_service(
     """
     if not can_operate_governance(actor):
         raise PermissionDenied("Only Procurement Executives/Managers can edit vendor information.")
+
+    # Bank details of an ACTIVE vendor change only after Procurement Manager approval.
+    bank_changes = _stage_sensitive_changes(
+        vendor,
+        actor,
+        {
+            "bank_name": bank_name,
+            "bank_account_number": bank_account_number,
+            "bank_routing_code": bank_routing_code,
+        },
+    )
+    if bank_changes:
+        bank_name = vendor.bank_name
+        bank_account_number = vendor.bank_account_number
+        bank_routing_code = vendor.bank_routing_code
 
     previous_state = {
         "legal_name": vendor.legal_name,
@@ -280,8 +435,9 @@ def delete_vendor_service(*, vendor: Vendor, actor: User) -> None:
     vendor.delete()
     # Only reached if deletion succeeded — now deactivate orphaned portal logins.
     if vendor_user_ids:
-        User.objects.filter(id__in=vendor_user_ids).update(is_active=False, must_change_password=True)
-
+        User.objects.filter(id__in=vendor_user_ids).update(
+            is_active=False, must_change_password=True
+        )
 
 
 @transaction.atomic
@@ -319,6 +475,7 @@ def start_kyc_review_service(*, vendor: Vendor, reviewer: User) -> Vendor:
     """
     Transitions Vendor state to KYC_REVIEW.
     """
+    forbid_non_transacting_actor(reviewer, "make vendor KYC decisions")
     if vendor.status != Vendor.STATUS_SUBMITTED:
         raise ValidationError(
             f"Cannot start KYC review for vendor in status '{vendor.status}'. Must be SUBMITTED."
@@ -363,7 +520,6 @@ def _lock_reviewable_document(document: VendorDocument, reviewer: User) -> Vendo
     return document
 
 
-
 @transaction.atomic
 def verify_vendor_document_decision_service(
     *,
@@ -382,6 +538,7 @@ def verify_vendor_document_decision_service(
     Appends to VendorDocumentReviewHistory and logs AuditLog.
     Re-evaluates vendor event eligibility if a mandatory document status changes.
     """
+    forbid_non_transacting_actor(reviewer, "make vendor KYC decisions")
     if document is None:
         if document_id is None:
             raise ValidationError("Either document or document_id is required.")
@@ -460,7 +617,6 @@ def verify_vendor_document_decision_service(
             "status": previous_status,
             "review_status": previous_review_status,
             "is_verified": previous_is_verified,
-            "review_status": document.review_status,
             "document_type": document.document_type,
             "vendor": document.vendor.legal_name,
         },
@@ -468,7 +624,6 @@ def verify_vendor_document_decision_service(
             "status": new_status,
             "review_status": document.review_status,
             "is_verified": document.is_verified,
-            "review_status": document.review_status,
             "decision": decision,
             "notes": resolved_notes,
             "vendor": document.vendor.legal_name,
@@ -570,6 +725,7 @@ def verify_vendor_document_service(
     *, document: VendorDocument, verifier: User, notes: str = ""
 ) -> VendorDocument:
     """Marks a KYC document as verified (delegates to verify_vendor_document_decision_service)."""
+    forbid_non_transacting_actor(verifier, "make vendor KYC decisions")
     if document.is_verified:
         raise ValidationError("Document is already verified.")
     return verify_vendor_document_decision_service(
@@ -585,6 +741,7 @@ def reject_vendor_document_service(
     *, document: VendorDocument, reviewer: User, reason: str
 ) -> VendorDocument:
     """Rejects a pending KYC document with a mandatory reason (delegates to verify_vendor_document_decision_service)."""
+    forbid_non_transacting_actor(reviewer, "make vendor KYC decisions")
     reason = (reason or "").strip()
     if not reason:
         raise ValidationError("A reason is required to reject a document.")
@@ -669,6 +826,7 @@ def approve_vendor_service(
     separate, individually audited transitions; with activate=False the vendor rests in
     APPROVED until ``activate_vendor_service`` is called.
     """
+    forbid_non_transacting_actor(manager, "approve vendor KYC")
     from django.conf import settings
 
     from .permissions import can_operate_governance
@@ -726,6 +884,7 @@ def activate_vendor_service(*, vendor: Vendor, manager: User, notes: str = "") -
     APPROVED -> ACTIVE. Documents are re-validated (one may have expired or been rejected since
     approval) and a blacklisted vendor can never be activated.
     """
+    forbid_non_transacting_actor(manager, "activate vendors")
     from .permissions import can_operate_governance
     from .selectors import get_vendor_kyc_summary
 
@@ -758,6 +917,7 @@ def blacklist_vendor_service(*, vendor: Vendor, actor: User, reason: str) -> Ven
     it, flagged blacklisted, made ineligible for events, and cannot be reinstated until the
     blacklist is lifted. Open sourcing/PO exposure is recorded in the audit entry.
     """
+    forbid_non_transacting_actor(actor, "blacklist vendors")
     from .permissions import can_suspend_vendor
     from .selectors import get_vendor_open_transactions
 
@@ -823,6 +983,7 @@ def lift_vendor_blacklist_service(*, vendor: Vendor, actor: User, reason: str) -
     ordinary governance step). Lifting is a higher-trust act than imposing: the person who
     imposed the blacklist cannot lift it themselves (Super Admin excepted).
     """
+    forbid_non_transacting_actor(actor, "lift vendor blacklists")
     from .permissions import can_suspend_vendor
 
     if not can_suspend_vendor(actor):
@@ -833,7 +994,7 @@ def lift_vendor_blacklist_service(*, vendor: Vendor, actor: User, reason: str) -
     vendor = Vendor.objects.select_for_update().get(pk=vendor.pk)
     if not vendor.is_blacklisted:
         raise ValidationError("Vendor is not blacklisted.")
-    if vendor.blacklisted_by_id == actor.id and not getattr(actor, "is_superuser", False):
+    if vendor.blacklisted_by_id == actor.id:
         raise ValidationError(
             "Separation of duties: the user who imposed the blacklist cannot lift it."
         )
@@ -910,6 +1071,7 @@ def set_vendor_status_governance_service(
     audit trail. Open transactions are NOT auto-cancelled (OPEN DECISION, ASSUMP-009); a
     suspended vendor is blocked from new invitations, bids, awards and POs by those services.
     """
+    forbid_non_transacting_actor(actor, "change vendor status")
     from .permissions import can_operate_governance, can_suspend_vendor
     from .selectors import get_vendor_open_transactions
 
@@ -982,6 +1144,7 @@ def record_vendor_risk_assessment_service(
     *, vendor: Vendor, assessor: User, risk_level: str, risk_flags: list, notes: str
 ) -> VendorRiskRecord:
     """Appends a new risk assessment (risk history is never overwritten)."""
+    forbid_non_transacting_actor(assessor, "record vendor risk assessments")
     from .permissions import can_operate_governance
 
     if not can_operate_governance(assessor):
@@ -1045,6 +1208,8 @@ def update_vendor_profile_service(
         raise ValidationError(
             f"Vendor '{vendor.legal_name}' is suspended. Self-service updates are frozen."
         )
+
+    data = _divert_sensitive_profile_changes(vendor, user, data)
 
     previous_state = {
         "trade_name": vendor.trade_name,
@@ -1276,6 +1441,7 @@ def issue_vendor_credentials_service(
     Raises ValidationError on rule violations or if the email could not be delivered
     (the dispatch is still recorded as FAILED so the executive can retry).
     """
+    forbid_non_transacting_actor(issued_by, "issue vendor credentials")
     if not can_operate_governance(issued_by):
         raise PermissionDenied("Only Procurement Executives/Managers can issue vendor credentials.")
     if vendor.status in CREDENTIAL_ISSUE_BLOCKED:
@@ -1412,6 +1578,7 @@ def legal_validate_vendor_credentials_service(
     Dispatches notifications to both Vendor and registering Procurement Executive.
     Records an immutable AuditLog entry.
     """
+    forbid_non_transacting_actor(legal_user, "verify vendor credentials")
     if not can_legal_verify_vendor(legal_user):
         raise PermissionDenied(
             "Permission Denied: Only Legal Managers and Super Admins can verify and approve vendor portal credentials."
@@ -1639,6 +1806,7 @@ def legal_reject_vendor_credentials_service(
     Requires reviewer notes. Dispatches notifications to Vendor and Procurement Executive.
     Records an immutable AuditLog entry.
     """
+    forbid_non_transacting_actor(legal_user, "verify vendor credentials")
     if not can_legal_verify_vendor(legal_user):
         raise PermissionDenied(
             "Permission Denied: Only Legal Managers and Super Admins can verify vendor credentials."
@@ -1919,6 +2087,7 @@ def request_vendor_changes_service(*, vendor: Vendor, reviewer: User, notes: str
     """
     Transitions Vendor to CHANGES_REQUIRED and notifies vendor with reviewer notes.
     """
+    forbid_non_transacting_actor(reviewer, "make vendor KYC decisions")
     return set_vendor_status_governance_service(
         vendor=vendor,
         actor=reviewer,

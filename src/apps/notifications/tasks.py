@@ -3,6 +3,8 @@ import logging
 from celery import shared_task
 from django.utils import timezone
 
+from apps.core.job_runs import record_job_run
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,7 +25,9 @@ def test_celery_beat_task():
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def send_user_welcome_email_task(self, user_id: str, temporary_password: str, login_url: str = None):
+def send_user_welcome_email_task(
+    self, user_id: str, temporary_password: str, login_url: str = None
+):
     """
     Celery task to asynchronously send the user welcome email.
     """
@@ -50,6 +54,7 @@ def send_user_welcome_email_task(self, user_id: str, temporary_password: str, lo
 
 
 @shared_task(name="notifications.tasks.scan_overdue_approvals_and_escalate")
+@record_job_run("notifications.tasks.scan_overdue_approvals_and_escalate")
 def scan_overdue_approvals_and_escalate():
     """
     Celery Beat periodic task to check for pending approvals exceeding reminder
@@ -60,4 +65,3 @@ def scan_overdue_approvals_and_escalate():
     result = scan_overdue_approvals_and_escalate_service()
     logger.info("Scan overdue approvals completed: %s", result)
     return result
-

@@ -44,7 +44,7 @@
                 </div>
                 <div class="row mb-3">
                     <div class="col-sm-4 text-muted fw-semibold small text-uppercase">Linked PO</div>
-                    <div class="col-sm-8"><a href="#" class="text-decoration-none fw-bold">{{ exception.invoice.po.po_number }}</a></div>
+                    <div class="col-sm-8">{% if exception.invoice.po %}<a href="{% url 'order_detail' exception.invoice.po.pk %}" class="text-decoration-none fw-bold">{{ exception.invoice.po.po_number }}</a>{% else %}<span class="text-muted">None</span>{% endif %}</div>
                 </div>
                 <div class="row mb-3">
                     <div class="col-sm-4 text-muted fw-semibold small text-uppercase">Invoice Total</div>
@@ -71,6 +71,18 @@
                     </div>
 
                     <div class="d-grid gap-2">
+                        {% if exception.status == 'OPEN' %}
+                        <button type="submit" name="action" value="REQUEST_CREDIT_NOTE" class="btn btn-outline-primary fw-bold py-2">
+                            <i class="fa-solid fa-file-circle-exclamation me-2"></i> Request Credit Note / Revised Invoice
+                        </button>
+                        {% if exception.exception_type == 'QUANTITY_VARIANCE' %}
+                        <button type="submit" name="action" value="HOLD" class="btn btn-outline-secondary fw-bold py-2">
+                            <i class="fa-solid fa-pause me-2"></i> Hold Until Receipt Posted
+                        </button>
+                        {% endif %}
+                        {% else %}
+                        <div class="alert alert-info small mb-0">Status: {{ exception.get_status_display }}. {{ exception.resolution_notes }}</div>
+                        {% endif %}
                         <button type="submit" name="action" value="RESOLVE" class="btn btn-success fw-bold py-2">
                             <i class="fa-solid fa-check me-2"></i> Override & Resolve
                         </button>

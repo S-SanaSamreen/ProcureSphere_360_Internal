@@ -68,6 +68,11 @@ class SourcingEvent(TimeStampedModel):
         max_digits=5, decimal_places=2, default=Decimal("50.00")
     )
 
+    # Sole-source control: a single-vendor event must carry a justification and an approved
+    # SOLE_SOURCE deviation before it is published or awarded.
+    is_sole_source = models.BooleanField(default=False)
+    sole_source_justification = models.TextField(blank=True, default="")
+
     class Meta:
         constraints = [
             models.CheckConstraint(
@@ -371,3 +376,104 @@ class NegotiationNote(TimeStampedModel):
 
     def __str__(self):
         return f"Negotiation note on {self.bid.bid_number} by {self.author.email}"
+
+
+class BidDeadlineExtension(TimeStampedModel):
+    """Append-only record of every bid-deadline extension (mandatory reason)."""
+
+    event = models.ForeignKey(
+        SourcingEvent, on_delete=models.CASCADE, related_name="deadline_extensions"
+    )
+    previous_deadline = models.DateTimeField()
+    new_deadline = models.DateTimeField()
+    reason = models.TextField()
+    extended_by = models.ForeignKey(
+        "accounts.User", on_delete=models.PROTECT, related_name="deadline_extensions"
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.event.event_number}: {self.previous_deadline:%Y-%m-%d} -> {self.new_deadline:%Y-%m-%d}"
+
+
+class SourcingDeviation(TimeStampedModel):
+    """
+    A policy deviation on a sourcing event (below-minimum bidders, sole source, high-value
+    publish) that the Procurement Manager of the event's organization must approve.
+    """
+
+    KIND_MIN_BIDDERS_PUBLISH = "MIN_BIDDERS_PUBLISH"
+    KIND_MIN_BIDDERS_AWARD = "MIN_BIDDERS_AWARD"
+    KIND_SOLE_SOURCE = "SOLE_SOURCE"
+    KIND_HIGH_VALUE_PUBLISH = "HIGH_VALUE_PUBLISH"
+    KIND_CHOICES = [
+        (KIND_MIN_BIDDERS_PUBLISH, "Fewer invited bidders than the minimum (publish)"),
+        (KIND_MIN_BIDDERS_AWARD, "Fewer submitted bids than the minimum (close / award)"),
+        (KIND_SOLE_SOURCE, "Sole-source justification"),
+        (KIND_HIGH_VALUE_PUBLISH, "High-value event publish approval"),
+    ]
+
+    STATUS_PENDING = "PENDING"
+    STATUS_APPROVED = "APPROVED"
+    STATUS_REJECTED = "REJECTED"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    event = models.ForeignKey(SourcingEvent, on_delete=models.CASCADE, related_name="deviations")
+    kind = models.CharField(max_length=30, choices=KIND_CHOICES)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    reason = models.TextField()
+    requested_by = models.ForeignKey(
+        "accounts.User", on_delete=models.PROTECT, related_name="requested_deviations"
+    )
+    decided_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="decided_deviations",
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_comments = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.event.event_number} {self.kind} [{self.status}]"
+
+
+class ProcurementControlSetting(TimeStampedModel):
+    """
+    Per-organization procurement controls. Missing row == deployment defaults taken from
+    Django settings (see apps.sourcing.controls).
+    """
+
+    organization = models.OneToOneField(
+        "organization.Organization",
+        on_delete=models.CASCADE,
+        related_name="procurement_controls",
+    )
+    min_bidders = models.PositiveIntegerField(default=3)
+    enforce_min_bidders = models.BooleanField(default=False)
+    publish_approval_threshold = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Events with an estimated value at or above this need Procurement Manager approval to publish.",
+    )
+    over_delivery_tolerance_pct = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        help_text="Receipts may exceed a PO line's open quantity by up to this percentage.",
+    )
+
+    def __str__(self):
+        return f"Procurement controls: {self.organization}"

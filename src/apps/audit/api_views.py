@@ -49,6 +49,11 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = AuditLogListSerializer
     permission_classes = [IsAuthenticated, IsAuditorOrSuperAdmin, AuditorReadOnlyPermission]
 
+    def get_queryset(self):
+        from apps.core.tenancy import scope_audit_logs
+
+        return scope_audit_logs(super().get_queryset(), self.request.user)
+
     def get_serializer_class(self):
         if self.action == "retrieve":
             return AuditLogDetailSerializer
@@ -70,6 +75,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
             request_id=data.get("request_id"),
             limit=data.get("limit", 50),
             offset=data.get("offset", 0),
+            user=request.user,
         )
 
         serializer = AuditLogListSerializer(result["logs"], many=True)
@@ -97,7 +103,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
         except (ValueError, TypeError):
             period_days = 30
 
-        metrics_data = get_audit_metrics(period_days=period_days)
+        metrics_data = get_audit_metrics(period_days=period_days, user=request.user)
         return Response(metrics_data, status=status.HTTP_200_OK)
 
     @extend_schema(
@@ -127,6 +133,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
         lifecycle_data = get_transaction_lifecycle_service(
             entity_type=entity_type,
             entity_identifier=identifier,
+            user=request.user,
         )
 
         if not lifecycle_data.get("is_found"):
@@ -171,6 +178,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
         trail_data = get_entity_audit_trail(
             target_model=model_name,
             target_object_id=obj_id,
+            user=request.user,
         )
 
         logs_serializer = AuditLogDetailSerializer(trail_data["logs"], many=True)
@@ -204,7 +212,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
         except (ValueError, TypeError):
             period_days = 30
 
-        data = get_auditor_dashboard_data(period_days=period_days)
+        data = get_auditor_dashboard_data(period_days=period_days, user=request.user)
         data["recent_logs"] = AuditLogListSerializer(data["recent_logs"], many=True).data
         data["recent_approvals"] = [
             {
@@ -274,6 +282,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
             search=data.get("search"),
             limit=data.get("limit", 50),
             offset=data.get("offset", 0),
+            user=request.user,
         )
         return Response(result, status=status.HTTP_200_OK)
 
@@ -292,6 +301,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
             end_date=data.get("end_date"),
             limit=data.get("limit", 50),
             offset=data.get("offset", 0),
+            user=request.user,
         )
         return Response(result, status=status.HTTP_200_OK)
 
@@ -309,6 +319,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
             end_date=data.get("end_date"),
             limit=data.get("limit", 50),
             offset=data.get("offset", 0),
+            user=request.user,
         )
         return Response(result, status=status.HTTP_200_OK)
 
@@ -325,6 +336,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
             end_date=data.get("end_date"),
             limit=data.get("limit", 50),
             offset=data.get("offset", 0),
+            user=request.user,
         )
         return Response(result, status=status.HTTP_200_OK)
 
@@ -342,6 +354,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
             end_date=data.get("end_date"),
             limit=data.get("limit", 50),
             offset=data.get("offset", 0),
+            user=request.user,
         )
         return Response(result, status=status.HTTP_200_OK)
 
@@ -358,6 +371,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
             end_date=data.get("end_date"),
             limit=data.get("limit", 50),
             offset=data.get("offset", 0),
+            user=request.user,
         )
         return Response(result, status=status.HTTP_200_OK)
 
@@ -375,6 +389,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
             end_date=data.get("end_date"),
             limit=data.get("limit", 50),
             offset=data.get("offset", 0),
+            user=request.user,
         )
         return Response(result, status=status.HTTP_200_OK)
 
@@ -390,6 +405,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
 
         if request.data.get("async") or request.query_params.get("async") == "true":
             from apps.audit.tasks import generate_auditor_export_task
+
             task = generate_auditor_export_task.delay(
                 export_type=data["export_type"],
                 export_format=data["export_format"],
@@ -441,7 +457,7 @@ def auditor_dashboard_summary_api_view(request):
             period_days = 30
     except (ValueError, TypeError):
         period_days = 30
-    data = get_auditor_dashboard_data(period_days=period_days)
+    data = get_auditor_dashboard_data(period_days=period_days, user=request.user)
     data["recent_logs"] = AuditLogListSerializer(data["recent_logs"], many=True).data
     data["recent_approvals"] = [
         {
@@ -505,7 +521,8 @@ def auditor_vendor_compliance_api_view(request):
     serializer = VendorComplianceQuerySerializer(data=request.query_params)
     serializer.is_valid(raise_exception=True)
     return Response(
-        get_vendor_compliance_audit(**serializer.validated_data), status=status.HTTP_200_OK
+        get_vendor_compliance_audit(**serializer.validated_data, user=request.user),
+        status=status.HTTP_200_OK,
     )
 
 
@@ -517,7 +534,9 @@ def auditor_approval_history_api_view(request):
     data = serializer.validated_data
     if "actor_id" in data:
         data["actor_id"] = str(data["actor_id"])
-    return Response(get_approval_history_audit(**data), status=status.HTTP_200_OK)
+    return Response(
+        get_approval_history_audit(**data, user=request.user), status=status.HTTP_200_OK
+    )
 
 
 @api_view(["GET"])
@@ -526,7 +545,8 @@ def auditor_sourcing_activity_api_view(request):
     serializer = SourcingActivityQuerySerializer(data=request.query_params)
     serializer.is_valid(raise_exception=True)
     return Response(
-        get_sourcing_activity_audit(**serializer.validated_data), status=status.HTTP_200_OK
+        get_sourcing_activity_audit(**serializer.validated_data, user=request.user),
+        status=status.HTTP_200_OK,
     )
 
 
@@ -535,7 +555,10 @@ def auditor_sourcing_activity_api_view(request):
 def auditor_po_changes_api_view(request):
     serializer = POChangesQuerySerializer(data=request.query_params)
     serializer.is_valid(raise_exception=True)
-    return Response(get_po_changes_audit(**serializer.validated_data), status=status.HTTP_200_OK)
+    return Response(
+        get_po_changes_audit(**serializer.validated_data, user=request.user),
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(["GET"])
@@ -544,7 +567,8 @@ def auditor_invoice_exceptions_api_view(request):
     serializer = InvoiceExceptionsQuerySerializer(data=request.query_params)
     serializer.is_valid(raise_exception=True)
     return Response(
-        get_invoice_exceptions_audit(**serializer.validated_data), status=status.HTTP_200_OK
+        get_invoice_exceptions_audit(**serializer.validated_data, user=request.user),
+        status=status.HTTP_200_OK,
     )
 
 
@@ -554,7 +578,8 @@ def auditor_contract_changes_api_view(request):
     serializer = ContractChangesQuerySerializer(data=request.query_params)
     serializer.is_valid(raise_exception=True)
     return Response(
-        get_contract_changes_audit(**serializer.validated_data), status=status.HTTP_200_OK
+        get_contract_changes_audit(**serializer.validated_data, user=request.user),
+        status=status.HTTP_200_OK,
     )
 
 
@@ -566,7 +591,7 @@ def auditor_security_events_api_view(request):
     data = serializer.validated_data
     if "actor_id" in data:
         data["actor_id"] = str(data["actor_id"])
-    return Response(get_security_events_audit(**data), status=status.HTTP_200_OK)
+    return Response(get_security_events_audit(**data, user=request.user), status=status.HTTP_200_OK)
 
 
 @api_view(["GET"])
@@ -578,6 +603,7 @@ def auditor_lifecycle_api_view(request):
     lifecycle_data = get_transaction_lifecycle_service(
         entity_type=data.get("entity_type", "AUTO"),
         entity_identifier=data["identifier"],
+        user=request.user,
     )
     if not lifecycle_data.get("is_found"):
         return Response(
@@ -606,6 +632,7 @@ def auditor_export_api_view(request):
 
     if request.data.get("async") or request.GET.get("async") == "true":
         from apps.audit.tasks import generate_auditor_export_task
+
         task = generate_auditor_export_task.delay(
             export_type=data["export_type"],
             export_format=data["export_format"],

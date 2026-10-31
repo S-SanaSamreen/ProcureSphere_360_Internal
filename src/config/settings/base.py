@@ -84,6 +84,7 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 MIDDLEWARE = [
     "apps.core.middleware.RequestIDMiddleware",
     "apps.core.middleware.SecurityHeadersMiddleware",
+    "apps.core.middleware.AdminIPAllowListMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
@@ -91,12 +92,15 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "apps.core.middleware.FailClosedAccessMiddleware",
     "apps.core.middleware.VendorPortalIsolationMiddleware",
+    "apps.accounts.middleware.MFAEnforcementMiddleware",
     "apps.accounts.middleware.PasswordChangeRequiredMiddleware",
     "apps.core.middleware.AuditContextMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "axes.middleware.AxesMiddleware",
+    "apps.core.middleware.MaintenanceModeMiddleware",
 ]
 
 AUTHENTICATION_BACKENDS = [
@@ -202,6 +206,15 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 25,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "EXCEPTION_HANDLER": "apps.core.exceptions.custom_exception_handler",
+    "DEFAULT_THROTTLE_CLASSES": (
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ),
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": env("DRF_THROTTLE_ANON", default="60/min"),
+        "user": env("DRF_THROTTLE_USER", default="600/min"),
+        "login": env("DRF_THROTTLE_LOGIN", default="10/min"),
+    },
 }
 
 # Session & CSRF Security Baseline
@@ -251,6 +264,10 @@ CELERY_BEAT_SCHEDULE = {
     "scan-vendor-document-expirations": {
         "task": "apps.vendors.tasks.scan_vendor_document_expirations_task",
         "schedule": 86400.0,  # daily scan (runs every 24h)
+    },
+    "recalculate-supplier-scorecards": {
+        "task": "apps.scorecards.tasks.recalculate_supplier_scorecards_task",
+        "schedule": 86400.0,  # daily refresh of the current-period scorecards
     },
 }
 
@@ -384,3 +401,18 @@ LOGGING = {
         },
     },
 }
+
+# Tenancy model: one platform superuser; one Super Admin per organization; the Django admin does
+# not expose tenant business data to the platform superuser.
+ENFORCE_SINGLE_PLATFORM_SUPERUSER = env.bool("ENFORCE_SINGLE_PLATFORM_SUPERUSER", default=True)
+PLATFORM_ADMIN_HIDE_BUSINESS_DATA = env.bool("PLATFORM_ADMIN_HIDE_BUSINESS_DATA", default=True)
+
+# Platform hardening (PRD ROLE_WORKFLOWS 1-3).
+# Require a TOTP second factor for the platform superuser and Super Admins (enrolment forced).
+MFA_REQUIRED_FOR_SUPER_ADMIN = env.bool("MFA_REQUIRED_FOR_SUPER_ADMIN", default=False)
+# Comma-separated IPs/CIDRs allowed to reach /admin/ (empty = allow all).
+ADMIN_ALLOWED_IPS = env.list("ADMIN_ALLOWED_IPS", default=[])
+# Honour X-Forwarded-For (client IP = first entry) only when behind a proxy you control.
+TRUSTED_PROXY = env.bool("TRUSTED_PROXY", default=False)
+# Emergency env switch for maintenance mode; the platform superuser can also toggle it in the DB.
+MAINTENANCE_MODE = env.bool("MAINTENANCE_MODE", default=False)

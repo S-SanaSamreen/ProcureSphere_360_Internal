@@ -45,19 +45,51 @@ from apps.vendors.services import (
 pytestmark = [pytest.mark.django_db, pytest.mark.regression]
 
 
+def _test_org():
+    from apps.organization.models import Organization
+
+    return Organization.objects.get_or_create(code="HPE-T", defaults={"name": "HPE Test Org"})[0]
+
+
 # ==============================================================================
 # FIXTURES
 # ==============================================================================
+
 
 @pytest.fixture
 def test_setup(db, db_roles):
     cat = VendorCategory.objects.create(name="IT Hardware", code="HW-001")
 
-    admin = User.objects.create_user(email="admin_vh@test.local", password="Password123!", role=db_roles[Role.SUPER_ADMIN])
-    mgr = User.objects.create_user(email="mgr_vh@test.local", password="Password123!", role=db_roles[Role.PROC_MGR])
-    proc_exec = User.objects.create_user(email="exec_vh@test.local", password="Password123!", role=db_roles[Role.PROC_EXEC])
-    finance = User.objects.create_user(email="finance_vh@test.local", password="Password123!", role=db_roles[Role.FINANCE_AP])
-    auditor = User.objects.create_user(email="auditor_vh@test.local", password="Password123!", role=db_roles[Role.AUDITOR])
+    admin = User.objects.create_user(
+        email="admin_vh@test.local",
+        password="Password123!",
+        role=db_roles[Role.SUPER_ADMIN],
+        organization=_test_org(),
+    )
+    mgr = User.objects.create_user(
+        email="mgr_vh@test.local",
+        password="Password123!",
+        role=db_roles[Role.PROC_MGR],
+        organization=_test_org(),
+    )
+    proc_exec = User.objects.create_user(
+        email="exec_vh@test.local",
+        password="Password123!",
+        role=db_roles[Role.PROC_EXEC],
+        organization=_test_org(),
+    )
+    finance = User.objects.create_user(
+        email="finance_vh@test.local",
+        password="Password123!",
+        role=db_roles[Role.FINANCE_AP],
+        organization=_test_org(),
+    )
+    auditor = User.objects.create_user(
+        email="auditor_vh@test.local",
+        password="Password123!",
+        role=db_roles[Role.AUDITOR],
+        organization=_test_org(),
+    )
 
     vendor = register_vendor_service(
         legal_name="Apex Global Technologies Ltd",
@@ -81,6 +113,7 @@ def test_setup(db, db_roles):
 
     from apps.budgets.models import Budget
     from apps.organization.models import CostCenter, Department, FiscalPeriod, Organization
+
     org = Organization.objects.create(name="HPE Global", code="ORG-001")
     dept = Department.objects.create(name="IT Procurement", code="D-IT", organization=org)
     cost_center = CostCenter.objects.create(name="IT Operations", code="CC-IT-001", department=dept)
@@ -115,6 +148,7 @@ def test_setup(db, db_roles):
 # ==============================================================================
 # 1. VENDOR HOLD WORKFLOW TESTS
 # ==============================================================================
+
 
 class TestVendorHoldWorkflow:
     def test_executive_can_place_on_hold_and_release(self, test_setup):
@@ -177,7 +211,7 @@ class TestVendorHoldWorkflow:
             )
 
         # 2. PO generation blocked
-        with pytest.raises(ValidationError, match="on hold"):
+        with pytest.raises(ValidationError, match="On Hold"):
             order_svc.generate_purchase_order_service(
                 vendor=v,
                 cost_center=s["cost_center"],
@@ -202,7 +236,14 @@ class TestVendorHoldWorkflow:
             invoice_number="INV-HOLD-001",
             invoice_date=date.today(),
             due_date=date.today() + timedelta(days=30),
-            line_items=[{"po_line": po.lines.first(), "item_description": "Network Switch", "quantity": 2, "unit_price": 1000}],
+            line_items=[
+                {
+                    "po_line": po.lines.first(),
+                    "item_description": "Network Switch",
+                    "quantity": 2,
+                    "unit_price": 1000,
+                }
+            ],
             created_by_user=s["vendor_user"],
         )
         inv.status = SupplierInvoice.STATUS_READY_FOR_PAYMENT
@@ -218,7 +259,9 @@ class TestVendorHoldWorkflow:
 
         # Attempt to pay invoice -> blocked
         with pytest.raises(ValidationError, match="on hold"):
-            invoice_svc.mark_invoice_paid_service(invoice=inv, user=s["finance"], payment_reference="UTR-HOLD-001")
+            invoice_svc.mark_invoice_paid_service(
+                invoice=inv, user=s["finance"], payment_reference="UTR-HOLD-001"
+            )
 
         # Release hold -> payment succeeds
         set_vendor_status_governance_service(
@@ -228,13 +271,16 @@ class TestVendorHoldWorkflow:
             notes="Bank verified",
         )
         inv.refresh_from_db()
-        paid_inv = invoice_svc.mark_invoice_paid_service(invoice=inv, user=s["finance"], payment_reference="PAY-2026-001")
+        paid_inv = invoice_svc.mark_invoice_paid_service(
+            invoice=inv, user=s["finance"], payment_reference="PAY-2026-001"
+        )
         assert paid_inv.status == SupplierInvoice.STATUS_PAID
 
 
 # ==============================================================================
 # 2. VENDOR SUSPENSION WORKFLOW TESTS
 # ==============================================================================
+
 
 class TestVendorSuspensionWorkflow:
     def test_manager_can_suspend_and_reinstate_executive_denied(self, test_setup):
@@ -310,7 +356,7 @@ class TestVendorSuspensionWorkflow:
         )
 
         # 1. New PO issuance blocked
-        with pytest.raises(ValidationError, match="suspended"):
+        with pytest.raises(ValidationError, match="Suspended"):
             order_svc.generate_purchase_order_service(
                 vendor=v,
                 cost_center=s["cost_center"],
@@ -319,11 +365,13 @@ class TestVendorSuspensionWorkflow:
             )
 
         # 2. PO amendment blocked
-        with pytest.raises(ValidationError, match="suspended"):
+        with pytest.raises(ValidationError, match="not active"):
             order_svc.amend_purchase_order_service(
                 po=po,
                 reason="Increase quantity",
-                updated_line_items=[{"item_description": "RAM 32GB", "quantity": 20, "unit_price": 100}],
+                updated_line_items=[
+                    {"item_description": "RAM 32GB", "quantity": 20, "unit_price": 100}
+                ],
                 requested_by_user=s["exec"],
             )
 
@@ -421,6 +469,7 @@ class TestVendorSuspensionWorkflow:
 # ==============================================================================
 # 3. RISK-HISTORY WORKFLOW TESTS
 # ==============================================================================
+
 
 class TestRiskHistoryWorkflow:
     def test_append_only_risk_assessment_history(self, test_setup):
@@ -570,7 +619,9 @@ class TestRiskHistoryWorkflow:
         # 2. External vendor user is strictly blocked from viewing risk or history
         client.force_authenticate(user=s["vendor_user"])
         assert client.get(f"/api/v1/vendors/{v.id}/risk/").status_code == status.HTTP_403_FORBIDDEN
-        assert client.get(f"/api/v1/vendors/{v.id}/history/").status_code == status.HTTP_403_FORBIDDEN
+        assert (
+            client.get(f"/api/v1/vendors/{v.id}/history/").status_code == status.HTTP_403_FORBIDDEN
+        )
 
         # 3. Executive can record assessment via dedicated API View
         client.force_authenticate(user=s["exec"])

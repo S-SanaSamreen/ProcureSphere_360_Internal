@@ -47,13 +47,17 @@ def test_create_organization_with_admin_service():
     assert admin_user.effective_organization == org
 
     # Verify Audit log
-    audit_org = AuditLog.objects.filter(target_model="Organization", target_object_id=str(org.id)).first()
+    audit_org = AuditLog.objects.filter(
+        target_model="Organization", target_object_id=str(org.id)
+    ).first()
     assert audit_org is not None
     assert audit_org.action == AuditLog.ACTION_CREATE
     assert audit_org.new_state["code"] == "ACME-GL"
     assert audit_org.new_state["admin_user"] == "admin@acme.com"
 
-    audit_user = AuditLog.objects.filter(target_model="User", target_object_id=str(admin_user.id)).first()
+    audit_user = AuditLog.objects.filter(
+        target_model="User", target_object_id=str(admin_user.id)
+    ).first()
     assert audit_user is not None
     assert audit_user.action == AuditLog.ACTION_CREATE
     assert audit_user.new_state["email"] == "admin@acme.com"
@@ -260,14 +264,18 @@ def test_create_organization_assigning_existing_admin_user(client, super_admin_u
 
 
 @pytest.mark.django_db
-def test_superadmin_dashboard_shows_admin_user_column_and_edit_action(client, super_admin_user, db_roles):
+def test_superadmin_dashboard_shows_admin_user_column_and_edit_action(
+    client, super_admin_user, db_roles
+):
     """
     Verifies that the Super Admin Dashboard (/) renders:
     1. The 'ADMIN USER' column header.
     2. The email of the assigned Organization Administrator.
     3. The 'Edit' button linking to the modal.
     """
-    org1 = Organization.objects.create(name="Hewlett Packard Enterprise", code="HPE-MAIN", is_active=True)
+    org1 = Organization.objects.create(
+        name="Hewlett Packard Enterprise", code="HPE-MAIN", is_active=True
+    )
     admin1 = User.objects.create_user(
         email="admin@hpe.com",
         password="Password123!",
@@ -359,7 +367,9 @@ def test_superadmin_edit_organization_and_admin_details(client, super_admin_user
 
 
 @pytest.mark.django_db
-def test_create_organization_welcome_email_marked_sends_credentials(client, super_admin_user, db_roles, mailoutbox):
+def test_create_organization_welcome_email_marked_sends_credentials(
+    client, super_admin_user, db_roles, mailoutbox
+):
     """
     When 'Send Welcome Email' is marked (checked), credentials (email & password)
     are dispatched to the newly provisioned organization administrator.
@@ -393,11 +403,15 @@ def test_create_organization_welcome_email_marked_sends_credentials(client, supe
     assert len(sent_mail) == 1
     email = sent_mail[0]
     assert "admin@betacloud.com" in email.to
-    assert "BetaSecretPassword!2026" in email.body or "BetaSecretPassword!2026" in str(email.alternatives)
+    assert "BetaSecretPassword!2026" in email.body or "BetaSecretPassword!2026" in str(
+        email.alternatives
+    )
 
 
 @pytest.mark.django_db
-def test_create_organization_welcome_email_unmarked_skips_email(client, super_admin_user, db_roles, mailoutbox):
+def test_create_organization_welcome_email_unmarked_skips_email(
+    client, super_admin_user, db_roles, mailoutbox
+):
     """
     When 'Send Welcome Email' is unmarked (unchecked), the organization and admin user
     are created, but NO welcome email is dispatched.
@@ -430,7 +444,9 @@ def test_create_organization_welcome_email_unmarked_skips_email(client, super_ad
 
 
 @pytest.mark.django_db
-def test_edit_organization_welcome_email_marked_dispatches_credentials(client, super_admin_user, db_roles, mailoutbox):
+def test_edit_organization_welcome_email_marked_dispatches_credentials(
+    client, super_admin_user, db_roles, mailoutbox
+):
     """
     When editing an organization and marking 'Send Welcome Email', new credentials
     are updated and dispatched via email.
@@ -472,7 +488,9 @@ def test_edit_organization_welcome_email_marked_dispatches_credentials(client, s
     # Email sent verification
     sent_mail = [m for m in mailoutbox if "admin@deltanet.com" in m.to]
     assert len(sent_mail) >= 1
-    assert "UpdatedSecretPass!2026" in sent_mail[-1].body or "UpdatedSecretPass!2026" in str(sent_mail[-1].alternatives)
+    assert "UpdatedSecretPass!2026" in sent_mail[-1].body or "UpdatedSecretPass!2026" in str(
+        sent_mail[-1].alternatives
+    )
 
 
 @pytest.mark.django_db
@@ -546,21 +564,26 @@ def test_superadmin_delete_organization_success(client, super_admin_user, db_rol
     assert not Department.objects.filter(code="ARCH-99").exists()
 
     # 4. Assert AuditLog entry
-    audit = AuditLog.objects.filter(target_model="Organization", target_object_id=str(org.id)).last()
+    audit = AuditLog.objects.filter(
+        target_model="Organization", target_object_id=str(org.id)
+    ).last()
     assert audit is not None
     assert audit.action == AuditLog.ACTION_DELETE
     assert audit.previous_state["code"] == "TEMP-LEGACY"
 
 
 @pytest.mark.django_db
-def test_superadmin_delete_organization_with_purchase_requisitions_blocked(client, super_admin_user, db_roles):
+def test_superadmin_delete_organization_with_purchase_requisitions_blocked(
+    client, super_admin_user, db_roles
+):
     """
     Deleting an organization with operational purchase requisitions is safely blocked
     with a clear explanatory message.
     """
-    from apps.requisitions.models import PurchaseRequisition
-    from apps.organization.models import CostCenter
     from decimal import Decimal
+
+    from apps.organization.models import CostCenter
+    from apps.requisitions.models import PurchaseRequisition
 
     org = Organization.objects.create(name="Active Production Org", code="ACT-PROD", is_active=True)
     dept = Department.objects.create(organization=org, name="Operations", code="OPS-ACT")
@@ -573,6 +596,7 @@ def test_superadmin_delete_organization_with_purchase_requisitions_blocked(clien
     )
 
     from datetime import date
+
     PurchaseRequisition.objects.create(
         pr_number="PR-TEST-BLOCK-01",
         title="Server Equipment",
@@ -668,5 +692,43 @@ def test_scoped_tenant_admin_ui_and_permissions(client, db_roles):
     assert "Permission Denied" in res_edit.content.decode()
 
 
+@pytest.mark.django_db
+def test_tenant_super_admin_cannot_create_another_super_admin(client, db_roles):
+    """Only the platform superuser creates an organization's Super Admin; a tenant admin cannot."""
+    org = Organization.objects.create(name="Iso Org", code="ISO-1", is_active=True)
+    tenant_admin = User.objects.create_user(
+        email="admin@iso.com",
+        password="Password123!",
+        role=db_roles[Role.SUPER_ADMIN],
+        organization=org,
+    )
+    client.force_login(tenant_admin)
+    res = client.post(
+        reverse("superadmin:user_create"),
+        {
+            "email": "second.admin@iso.com",
+            "first_name": "Second",
+            "last_name": "Admin",
+            "role": db_roles[Role.SUPER_ADMIN].pk,
+            "is_active": "on",
+            "password": "Password123!",
+        },
+    )
+    assert not User.objects.filter(email="second.admin@iso.com").exists()
+    assert res.status_code in (200, 400, 403)
 
-
+    # ...but can create ordinary business users, always inside their own organization
+    client.post(
+        reverse("superadmin:user_create"),
+        {
+            "email": "buyer@iso.com",
+            "first_name": "B",
+            "last_name": "Uyer",
+            "role": db_roles[Role.PROC_EXEC].pk,
+            "is_active": "on",
+            "password": "Password123!",
+        },
+    )
+    created = User.objects.get(email="buyer@iso.com")
+    assert created.organization_id == org.id
+    assert created.must_change_password is True

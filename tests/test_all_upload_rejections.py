@@ -55,22 +55,35 @@ class TestRequisitionAttachmentUploadRejections:
     """Tests invalid file formats for Requisitions."""
 
     def test_pr_rejects_spoofed_pdf(self):
-        fake_pdf = SimpleUploadedFile("spoofed.pdf", b"Plain text disguised as pdf", content_type="application/pdf")
+        fake_pdf = SimpleUploadedFile(
+            "spoofed.pdf", b"Plain text disguised as pdf", content_type="application/pdf"
+        )
         with pytest.raises(ValidationError, match="Invalid file format."):
             validate_pr_attachment(fake_pdf)
 
     def test_pr_rejects_spoofed_docx(self):
-        fake_docx = SimpleUploadedFile("fake.docx", b"\x89PNG\r\n\x1a\n", content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        fake_docx = SimpleUploadedFile(
+            "fake.docx",
+            b"\x89PNG\r\n\x1a\n",
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
         with pytest.raises(ValidationError, match="Invalid file format."):
             validate_pr_attachment(fake_docx)
 
     def test_pr_rejects_spoofed_doc(self):
-        fake_doc = SimpleUploadedFile("fake.doc", b"MZ\x90\x00\x03\x00\x00\x00", content_type="application/msword")
+        fake_doc = SimpleUploadedFile(
+            "fake.doc", b"MZ\x90\x00\x03\x00\x00\x00", content_type="application/msword"
+        )
         with pytest.raises(ValidationError, match="Invalid file format."):
             validate_pr_attachment(fake_doc)
 
     def test_pr_rejects_disallowed_extensions(self):
-        for bad_ext, mime in [("run.exe", "application/octet-stream"), ("notes.txt", "text/plain"), ("script.bat", "text/plain"), ("data.xlsx", "application/vnd.ms-excel")]:
+        for bad_ext, mime in [
+            ("run.exe", "application/octet-stream"),
+            ("notes.txt", "text/plain"),
+            ("script.bat", "text/plain"),
+            ("data.xlsx", "application/vnd.ms-excel"),
+        ]:
             bad_file = SimpleUploadedFile(bad_ext, b"sample content", content_type=mime)
             with pytest.raises(ValidationError, match="Invalid file format."):
                 validate_pr_attachment(bad_file)
@@ -82,7 +95,9 @@ class TestRequisitionAttachmentUploadRejections:
 
     def test_pr_rejects_oversized_file(self):
         oversized_data = b"%PDF-" + b"0" * (10 * 1024 * 1024 + 50)
-        oversized_file = SimpleUploadedFile("oversized.pdf", oversized_data, content_type="application/pdf")
+        oversized_file = SimpleUploadedFile(
+            "oversized.pdf", oversized_data, content_type="application/pdf"
+        )
         with pytest.raises(ValidationError, match="File size exceeds the maximum allowed limit"):
             validate_pr_attachment(oversized_file)
 
@@ -116,7 +131,9 @@ class TestVendorKycUploadRejections:
 
     def test_vendor_kyc_rejects_oversized_file(self, procurement_world):
         w = procurement_world
-        oversized = SimpleUploadedFile("large_tax.pdf", b"A" * (10 * 1024 * 1024 + 100), content_type="application/pdf")
+        oversized = SimpleUploadedFile(
+            "large_tax.pdf", b"A" * (10 * 1024 * 1024 + 100), content_type="application/pdf"
+        )
         with pytest.raises(ValidationError, match="File size exceeds maximum allowed limit"):
             upload_vendor_document_service(
                 vendor=w["vendor_a"],
@@ -140,7 +157,9 @@ class TestVendorKycUploadRejections:
 
     def test_vendor_kyc_rejects_spoofed_pdf(self, procurement_world):
         w = procurement_world
-        spoofed = SimpleUploadedFile("fake.pdf", b"MZ\x90\x00Not a real pdf", content_type="application/pdf")
+        spoofed = SimpleUploadedFile(
+            "fake.pdf", b"MZ\x90\x00Not a real pdf", content_type="application/pdf"
+        )
         with pytest.raises(ValidationError, match="Invalid file content for .pdf"):
             upload_vendor_document_service(
                 vendor=w["vendor_a"],
@@ -176,7 +195,9 @@ class TestVendorKycUploadRejections:
 
     def test_vendor_kyc_rejects_spoofed_doc(self, procurement_world):
         w = procurement_world
-        spoofed = SimpleUploadedFile("fake.doc", b"MZ\x90\x00Not CFBF", content_type="application/msword")
+        spoofed = SimpleUploadedFile(
+            "fake.doc", b"MZ\x90\x00Not CFBF", content_type="application/msword"
+        )
         with pytest.raises(ValidationError, match="Invalid file content for .doc"):
             upload_vendor_document_service(
                 vendor=w["vendor_a"],
@@ -220,8 +241,12 @@ class TestVendorKycUploadRejections:
 
     def test_vendor_kyc_rejects_csv_with_binary_or_null_bytes(self, procurement_world):
         w = procurement_world
-        null_csv = SimpleUploadedFile("bad.csv", b"col1,col2\x00payload\n1,2\n", content_type="text/csv")
-        with pytest.raises(ValidationError, match="Binary content and null bytes are not permitted"):
+        null_csv = SimpleUploadedFile(
+            "bad.csv", b"col1,col2\x00payload\n1,2\n", content_type="text/csv"
+        )
+        with pytest.raises(
+            ValidationError, match="Binary content and null bytes are not permitted"
+        ):
             upload_vendor_document_service(
                 vendor=w["vendor_a"],
                 user=w["user_a"],
@@ -230,7 +255,9 @@ class TestVendorKycUploadRejections:
                 title="Null Byte CSV",
             )
 
-        binary_csv = SimpleUploadedFile("fake.csv", b"MZ\x90\x00binary executable disguised as csv", content_type="text/csv")
+        binary_csv = SimpleUploadedFile(
+            "fake.csv", b"MZ\x90\x00binary executable disguised as csv", content_type="text/csv"
+        )
         with pytest.raises(ValidationError, match="Binary file disguised with .csv extension"):
             upload_vendor_document_service(
                 vendor=w["vendor_a"],
@@ -298,6 +325,7 @@ class TestVendorKycUploadRejections:
         )
         # Mock FieldFile.size property to simulate 49MB on file
         from django.db.models.fields.files import FieldFile
+
         monkeypatch.setattr(FieldFile, "size", 49 * 1024 * 1024)
 
         # 2MB incoming file exceeds 50MB storage quota
@@ -384,7 +412,9 @@ class TestSourcingBidAttachmentUploadRejections:
     def test_bid_attachment_rejects_oversized_file(self, procurement_world):
         w = procurement_world
         bid = self._create_bid(w)
-        oversized = SimpleUploadedFile("huge_tech_proposal.pdf", b"A" * (10 * 1024 * 1024 + 50), content_type="application/pdf")
+        oversized = SimpleUploadedFile(
+            "huge_tech_proposal.pdf", b"A" * (10 * 1024 * 1024 + 50), content_type="application/pdf"
+        )
         with pytest.raises(ValidationError, match="File size exceeds maximum allowed limit"):
             upload_bid_attachment_service(
                 bid=bid,
@@ -437,7 +467,7 @@ class TestContractDocumentUploadRejections:
         ]
         for fname, content in bad_files:
             file_obj = SimpleUploadedFile(fname, content)
-            with pytest.raises(ValidationError, match="Unsupported file extension"):
+            with pytest.raises(ValidationError, match="is not permitted"):
                 upload_contract_document_service(
                     contract=contract,
                     user=w["exec"],
@@ -460,8 +490,12 @@ class TestContractDocumentUploadRejections:
     def test_contract_upload_rejects_oversized_file(self, procurement_world):
         w = procurement_world
         contract = self._create_contract(w)
-        oversized = SimpleUploadedFile("massive_contract.pdf", b"C" * (10 * 1024 * 1024 + 100), content_type="application/pdf")
-        with pytest.raises(ValidationError, match="File size exceeds 10MB upload limit"):
+        oversized = SimpleUploadedFile(
+            "massive_contract.pdf", b"C" * (10 * 1024 * 1024 + 100), content_type="application/pdf"
+        )
+        with pytest.raises(
+            ValidationError, match="File size exceeds maximum allowed limit of 10MB"
+        ):
             upload_contract_document_service(
                 contract=contract,
                 user=w["exec"],

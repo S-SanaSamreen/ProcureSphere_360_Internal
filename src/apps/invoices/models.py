@@ -61,17 +61,13 @@ class InvoiceLine(TimeStampedModel):
         max_digits=12,
         decimal_places=2,
         validators=[
-            MinValueValidator(
-                Decimal("0.01"), message="Quantity must be greater than zero."
-            )
+            MinValueValidator(Decimal("0.01"), message="Quantity must be greater than zero.")
         ],
     )
     unit_price = models.DecimalField(
         max_digits=12,
         decimal_places=2,
-        validators=[
-            MinValueValidator(Decimal("0.00"), message="Unit price cannot be negative.")
-        ],
+        validators=[MinValueValidator(Decimal("0.00"), message="Unit price cannot be negative.")],
     )
     line_total = models.DecimalField(max_digits=14, decimal_places=2)
 
@@ -79,12 +75,12 @@ class InvoiceLine(TimeStampedModel):
         super().clean()
         if self.quantity is not None and self.quantity <= Decimal("0.00"):
             raise ValidationError(
-                {"quantity": "Quantity must be greater than zero. Negative or zero counts are not permitted."}
+                {
+                    "quantity": "Quantity must be greater than zero. Negative or zero counts are not permitted."
+                }
             )
         if self.unit_price is not None and self.unit_price < Decimal("0.00"):
-            raise ValidationError(
-                {"unit_price": "Unit price cannot be negative."}
-            )
+            raise ValidationError({"unit_price": "Unit price cannot be negative."})
 
     def save(self, *args, **kwargs):
         self.clean()
@@ -108,12 +104,18 @@ class MatchException(TimeStampedModel):
     STATUS_OPEN = "OPEN"
     STATUS_RESOLVED = "RESOLVED"
     STATUS_REJECTED = "REJECTED"
+    # Still unresolved, but waiting on someone else:
+    STATUS_AWAITING_VENDOR = "AWAITING_VENDOR"  # credit note / revised invoice requested
+    STATUS_HELD = "HELD"  # held until a receipt is posted for the PO
 
     STATUS_CHOICES = [
         (STATUS_OPEN, "Open"),
+        (STATUS_AWAITING_VENDOR, "Awaiting Vendor (credit note / revised invoice)"),
+        (STATUS_HELD, "Held Until Receipt Posted"),
         (STATUS_RESOLVED, "Resolved / Overridden"),
         (STATUS_REJECTED, "Invoice Rejected"),
     ]
+    UNRESOLVED_STATUSES = (STATUS_OPEN, STATUS_AWAITING_VENDOR, STATUS_HELD)
 
     invoice = models.ForeignKey(
         SupplierInvoice, on_delete=models.CASCADE, related_name="exceptions"

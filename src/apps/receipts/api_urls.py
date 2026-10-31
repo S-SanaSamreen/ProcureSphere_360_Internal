@@ -8,7 +8,7 @@ from rest_framework.response import Response
 from rest_framework.routers import DefaultRouter
 
 from apps.accounts.models import Role, User
-from apps.orders.models import POLine, PurchaseOrder
+from apps.orders.models import PurchaseOrder
 
 from .models import GoodsReceipt, ReceiptLine
 
@@ -39,8 +39,7 @@ class CanManageGoodsReceipt(BasePermission):
         if request.method in SAFE_METHODS:
             return True
 
-        return request.user.is_superuser or request.user.role_code in [
-            Role.SUPER_ADMIN,
+        return not request.user.is_superuser and request.user.role_code in [
             Role.STORES_RECEIVER,
             Role.PROC_MGR,
         ]
@@ -99,33 +98,49 @@ class GoodsReceiptSerializer(serializers.ModelSerializer):
 
                     if po_line:
                         try:
-                            qty_recv = Decimal(str(item_dict.get("quantity_received", po_line.quantity)))
+                            qty_recv = Decimal(
+                                str(item_dict.get("quantity_received", po_line.quantity))
+                            )
                         except Exception:
-                            raise serializers.ValidationError({"lines": ["Invalid quantity received."]})
+                            raise serializers.ValidationError(
+                                {"lines": ["Invalid quantity received."]}
+                            )
                         current_received = po_line.quantity_received or Decimal("0.00")
                         remaining_qty = max(Decimal("0.00"), po_line.quantity - current_received)
                         if qty_recv > remaining_qty:
                             raise serializers.ValidationError(
-                                {"lines": [f"Quantity received ({qty_recv}) cannot exceed remaining ordered quantity ({remaining_qty}) for '{po_line.item_description}'."]}
+                                {
+                                    "lines": [
+                                        f"Quantity received ({qty_recv}) cannot exceed remaining ordered quantity ({remaining_qty}) for '{po_line.item_description}'."
+                                    ]
+                                }
                             )
 
         lines = self.initial_data.get("lines", [])
         if po and lines:
-            po_lines_map = {str(l.id): l for l in po.lines.all()}
+            po_lines_map = {str(po_line_obj.id): po_line_obj for po_line_obj in po.lines.all()}
             for item in lines:
                 po_line_id = str(item.get("po_line_id") or item.get("po_line", ""))
                 po_line = po_lines_map.get(po_line_id)
                 try:
                     qty_recv = Decimal(str(item.get("quantity_received", "0")))
                 except Exception:
-                    raise serializers.ValidationError({"lines": ["Quantity received must be a valid number."]})
+                    raise serializers.ValidationError(
+                        {"lines": ["Quantity received must be a valid number."]}
+                    )
                 if qty_recv <= Decimal("0.00"):
-                    raise serializers.ValidationError({"lines": ["Quantity received must be greater than zero."]})
+                    raise serializers.ValidationError(
+                        {"lines": ["Quantity received must be greater than zero."]}
+                    )
                 if po_line:
                     rem = po_line.remaining_quantity
                     if qty_recv > rem:
                         raise serializers.ValidationError(
-                            {"lines": [f"Quantity received ({qty_recv}) cannot exceed remaining quantity ({rem}) for '{po_line.item_description}'."]}
+                            {
+                                "lines": [
+                                    f"Quantity received ({qty_recv}) cannot exceed remaining quantity ({rem}) for '{po_line.item_description}'."
+                                ]
+                            }
                         )
 
         return attrs
@@ -158,14 +173,14 @@ class GoodsReceiptPermission(IsAuthenticated):
     Enforces RBAC on Goods Receipt API:
     - Vendor users denied access to internal goods receipt endpoints.
     - Read (SAFE_METHODS): Stores Receiver, Super Admin, Auditor, Procurement Executive/Manager, Finance.
-    - State modifications (POST, PUT, PATCH, DELETE): Stores Receiver or Super Admin only.
+    - State modifications (POST, PUT, PATCH, DELETE): Stores Receiver only (read-only for Super Admin).
     """
 
     def has_permission(self, request, view):
         if not super().has_permission(request, view):
             return False
         if request.user.is_superuser:
-            return True
+            return request.method in SAFE_METHODS
 
         role_code = getattr(request.user, "role_code", None) or (
             request.user.role.code if hasattr(request.user, "role") and request.user.role else None
@@ -185,7 +200,7 @@ class GoodsReceiptPermission(IsAuthenticated):
         if role_code == Role.VENDOR_USER:
             return False
 
-        return role_code in [Role.STORES_RECEIVER, Role.SUPER_ADMIN]
+        return role_code == Role.STORES_RECEIVER
 
 
 class GoodsReceiptViewSet(viewsets.ModelViewSet):
@@ -202,7 +217,9 @@ class GoodsReceiptViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = self.queryset
+        from .selectors import scoped_receipts
+
+        qs = self.queryset.filter(pk__in=scoped_receipts(user).values("pk"))
 
         # Vendor scoping: only receipts for vendor's own purchase orders
         if getattr(user, "is_vendor", False) or getattr(user, "vendor_id", None):

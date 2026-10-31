@@ -63,7 +63,9 @@ class Command(BaseCommand):
         if options["generate"]:
             alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
             password = "".join(secrets.choice(alphabet) for _ in range(16))
-            self.stdout.write(self.style.WARNING(f"Generated secure temporary password for {email}: {password}"))
+            self.stdout.write(
+                self.style.WARNING(f"Generated secure temporary password for {email}: {password}")
+            )
         elif not password:
             password = getpass.getpass(prompt=f"Enter new password for {email}: ")
             confirm = getpass.getpass(prompt="Confirm new password: ")
@@ -85,6 +87,7 @@ class Command(BaseCommand):
         # Clear Axes lockouts and cached attempt counters
         try:
             from axes.models import AccessAttempt
+
             deleted_count, _ = AccessAttempt.objects.filter(username__iexact=email).delete()
             cache.clear()
             lockout_cleared = deleted_count > 0

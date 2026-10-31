@@ -102,6 +102,7 @@ class ApprovalDelegateAdmin(admin.ModelAdmin):
         qs = super().get_queryset(request)
         if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
             org = request.user.effective_organization
-            return qs.filter(Q(approver__organization=org) | Q(approver__department__organization=org))
+            return qs.filter(
+                Q(approver__organization=org) | Q(approver__department__organization=org)
+            )
         return qs
-

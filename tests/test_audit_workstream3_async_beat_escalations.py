@@ -47,7 +47,9 @@ def ws3_setup(db_roles):
     today = timezone.now().date()
     org = Organization.objects.create(name="Enterprise Global Corp", code="EGC-01")
     dept = Department.objects.create(organization=org, name="Engineering", code="DEPT-ENG")
-    cost_center = CostCenter.objects.create(department=dept, code="CC-ENG-101", name="Cloud Infrastructure")
+    cost_center = CostCenter.objects.create(
+        department=dept, code="CC-ENG-101", name="Cloud Infrastructure"
+    )
 
     fiscal_period = FiscalPeriod.objects.create(
         organization=org,
@@ -126,6 +128,9 @@ def ws3_setup(db_roles):
         phone="+12065551234",
         address="410 Terry Ave N, Seattle, WA",
     )
+    # POs can only be issued to ACTIVE vendors (vendor lifecycle gate)
+    Vendor.objects.filter(pk=vendor.pk).update(status=Vendor.STATUS_ACTIVE)
+    vendor.refresh_from_db()
     vendor_user = User.objects.create_user(
         email="vendor_user_ws3@awscloud.com",
         password="Password123!",
@@ -195,10 +200,16 @@ def test_celery_beat_schedule_configuration_and_contract_scan_task(ws3_setup):
     """
     beat_schedule = getattr(settings, "CELERY_BEAT_SCHEDULE", {})
     assert "scan-contract-expirations-and-milestones" in beat_schedule
-    assert beat_schedule["scan-contract-expirations-and-milestones"]["task"] == "contracts.tasks.scan_contract_expirations_and_milestones"
+    assert (
+        beat_schedule["scan-contract-expirations-and-milestones"]["task"]
+        == "contracts.tasks.scan_contract_expirations_and_milestones"
+    )
 
     assert "scan-overdue-approvals-and-escalate" in beat_schedule
-    assert beat_schedule["scan-overdue-approvals-and-escalate"]["task"] == "notifications.tasks.scan_overdue_approvals_and_escalate"
+    assert (
+        beat_schedule["scan-overdue-approvals-and-escalate"]["task"]
+        == "notifications.tasks.scan_overdue_approvals_and_escalate"
+    )
 
     # Create active contract expiring in 20 days with 30-day notice period
     today = timezone.now().date()
@@ -248,7 +259,10 @@ def test_scan_overdue_approvals_48h_reminder_and_72h_escalation(ws3_setup):
     )
     submit_purchase_requisition_service(requisition=pr, user=ws3_setup["requester"])
     pr.refresh_from_db()
-    assert pr.status in [PurchaseRequisition.STATUS_SUBMITTED, PurchaseRequisition.STATUS_MANAGER_REVIEW]
+    assert pr.status in [
+        PurchaseRequisition.STATUS_SUBMITTED,
+        PurchaseRequisition.STATUS_MANAGER_REVIEW,
+    ]
 
     # 2. Simulate PR pending for 50 hours (should trigger 48h reminder)
     PurchaseRequisition.objects.filter(id=pr.id).update(
@@ -368,6 +382,10 @@ def test_module_notifications_and_safe_document_numbering(ws3_setup):
             }
         ],
     )
+    # a PO can only be raised against an APPROVED requisition
+    type(pr).objects.filter(pk=pr.pk).update(status="APPROVED")
+    pr.refresh_from_db()
+
     po = generate_purchase_order_service(
         vendor=ws3_setup["vendor"],
         cost_center=ws3_setup["cost_center"],
@@ -453,7 +471,11 @@ def test_module_notifications_and_safe_document_numbering(ws3_setup):
         cost_center=ws3_setup["cost_center"],
         created_by_user=ws3_setup["proc_manager"],
         line_items=[
-            {"item_description": "Item A", "quantity": Decimal("1"), "unit_price": Decimal("100.00")}
+            {
+                "item_description": "Item A",
+                "quantity": Decimal("1"),
+                "unit_price": Decimal("100.00"),
+            }
         ],
     )
     po_b = generate_purchase_order_service(
@@ -461,7 +483,11 @@ def test_module_notifications_and_safe_document_numbering(ws3_setup):
         cost_center=ws3_setup["cost_center"],
         created_by_user=ws3_setup["proc_manager"],
         line_items=[
-            {"item_description": "Item B", "quantity": Decimal("1"), "unit_price": Decimal("100.00")}
+            {
+                "item_description": "Item B",
+                "quantity": Decimal("1"),
+                "unit_price": Decimal("100.00"),
+            }
         ],
     )
     po_b_num = po_b.po_number
@@ -473,7 +499,11 @@ def test_module_notifications_and_safe_document_numbering(ws3_setup):
         cost_center=ws3_setup["cost_center"],
         created_by_user=ws3_setup["proc_manager"],
         line_items=[
-            {"item_description": "Item C", "quantity": Decimal("1"), "unit_price": Decimal("100.00")}
+            {
+                "item_description": "Item C",
+                "quantity": Decimal("1"),
+                "unit_price": Decimal("100.00"),
+            }
         ],
     )
     # Old count()+1 would compute 2+1-1 = 2 (colliding with po_b!).

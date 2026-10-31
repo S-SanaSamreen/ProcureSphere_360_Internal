@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 import pytest
+from django.core.exceptions import ValidationError
 
 from apps.accounts.models import Role, User
 from apps.orders.models import POLine, PurchaseOrder
@@ -25,6 +26,7 @@ def receiving_setup(db, db_roles):
     )
 
     receiver = User.objects.create_user(
+        organization=org,
         email="receiver_grn@hpe.com",
         password="Password123!",
         role=db_roles[Role.STORES_RECEIVER],
@@ -316,7 +318,6 @@ def test_empty_receipt_submission_is_rejected(client, receiving_setup):
 @pytest.mark.django_db
 def test_unauthorized_roles_cannot_create_goods_receipt(client, receiving_setup, db_roles):
     """Test L: Users without STORES_RECEIVER or SUPER_ADMIN role are blocked by view and service."""
-    from django.core.exceptions import ValidationError
 
     from apps.receipts.services import create_goods_receipt_service
 
@@ -368,29 +369,27 @@ def test_unauthorized_roles_cannot_create_goods_receipt(client, receiving_setup,
                 ],
                 delivery_note_number="DN-SERVICE-UNAUTH",
             )
-        assert "Unauthorized: Only Stores Receiver or Super Admin can create goods receipts" in str(
-            exc.value
-        )
+        assert "Unauthorized: Only Stores Receiver can create goods receipts" in str(exc.value)
         assert GoodsReceipt.objects.count() == 0
 
-    # Super Admin can create goods receipt
+    # PRD 3.6: Super Admin (even with the platform flag) cannot post a goods receipt
     admin = User.objects.create_user(
         email="admin_grn_ok@hpe.com",
         password="Password123!",
         role=db_roles[Role.SUPER_ADMIN],
         is_superuser=True,
     )
-    grn_admin = create_goods_receipt_service(
-        po=po,
-        received_by=admin,
-        receipt_items=[
-            {
-                "po_line_id": str(line1.id),
-                "quantity_received": Decimal("2.00"),
-                "quantity_accepted": Decimal("2.00"),
-            }
-        ],
-        delivery_note_number="DN-ADMIN-OK",
-    )
-    assert grn_admin.received_by == admin
-    assert grn_admin.lines.count() == 1
+    with pytest.raises(ValidationError):
+        create_goods_receipt_service(
+            po=po,
+            received_by=admin,
+            receipt_items=[
+                {
+                    "po_line_id": str(line1.id),
+                    "quantity_received": Decimal("2.00"),
+                    "quantity_accepted": Decimal("2.00"),
+                }
+            ],
+            delivery_note_number="DN-ADMIN-NO",
+        )
+    assert GoodsReceipt.objects.count() == 0

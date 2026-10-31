@@ -264,18 +264,20 @@ def test_approver_from_another_organisation_cannot_approve(w):
         engine.approve_step(request=req, actor=w["outsider_mgr"])
 
 
-def test_maker_can_never_approve_their_own_request_even_as_super_admin(w):
+def test_maker_can_never_approve_their_own_request(w):
+    # PRD 3.6: Super Admin cannot approve anything, so the SoD check is exercised with a
+    # manager who is both maker and eligible approver.
     mk_policy(w, "Std", [(Role.PROC_MGR, {})])
     t = target(w)
-    req = engine.open_approval_request(module=PR, target=t, amount=100, maker=w["admin"])
+    req = engine.open_approval_request(module=PR, target=t, amount=100, maker=w["mgr2"])
     with pytest.raises(ValidationError, match="Self-approval is strictly prohibited"):
-        engine.approve_step(request=req, actor=w["admin"])
+        engine.approve_step(request=req, actor=w["mgr2"])
     mgr_req = engine.open_approval_request(module=PR, target=target(w), amount=100, maker=w["mgr"])
     with pytest.raises(ValidationError, match="Self-approval"):
         engine.approve_step(request=mgr_req, actor=w["mgr"])
 
 
-def test_nobody_approves_two_steps_of_the_same_request_including_super_admin(w):
+def test_nobody_approves_two_steps_of_the_same_request(w):
     mk_policy(w, "Std", [(Role.PROC_MGR, {}), (Role.PROC_MGR, {})])
     req = open_req(w)
     engine.approve_step(request=req, actor=w["mgr"])
@@ -285,8 +287,8 @@ def test_nobody_approves_two_steps_of_the_same_request_including_super_admin(w):
 
     mk_policy(w, "Std2", [(Role.DEPT_APPROVER, {}), (Role.PROC_MGR, {})], department=w["dept_b"])
     req2 = open_req(w, department=w["dept_b"], cost_center=None)
-    engine.approve_step(request=req2, actor=w["admin"])  # super admin may stand in for one step
-    with pytest.raises(ValidationError, match="four-eyes"):
+    # PRD 3.6: Super Admin may not stand in for any step (fix the policy/users instead)
+    with pytest.raises(ValidationError, match="configure the system"):
         engine.approve_step(request=req2, actor=w["admin"])
 
 
@@ -326,12 +328,12 @@ def test_approval_limit_blocks_larger_transactions_and_allows_up_to_the_limit(w)
     assert engine.approve_step(request=big, actor=w["mgr2"]).status == "APPROVED"
 
 
-def test_approval_limit_applies_to_super_admin_when_one_is_set(w):
+def test_approval_limit_applies_to_a_manager_with_a_low_limit(w):
     mk_policy(w, "Std", [(Role.PROC_MGR, {})])
-    User.objects.filter(pk=w["admin"].pk).update(approval_limit=D(100))
-    w["admin"].refresh_from_db()
+    User.objects.filter(pk=w["mgr"].pk).update(approval_limit=D(100))
+    w["mgr"].refresh_from_db()
     with pytest.raises(ValidationError, match="approval limit"):
-        engine.approve_step(request=open_req(w, amount=101), actor=w["admin"])
+        engine.approve_step(request=open_req(w, amount=101), actor=w["mgr"])
 
 
 def test_can_act_reflects_role_limit_and_maker(w):

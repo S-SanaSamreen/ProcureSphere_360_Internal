@@ -8,7 +8,10 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from apps.accounts.models import Role, User
+from apps.accounts.permissions import is_non_transacting_actor
+from apps.core.tenancy import scope_approval_requests, scope_users
 from apps.requisitions.models import PurchaseRequisition
+from apps.requisitions.selectors import scope_requisitions_to_org
 
 from . import engine
 from .models import ApprovalAction, ApprovalDelegate, ApprovalPolicy, ApprovalRequest
@@ -20,10 +23,42 @@ from .services import (
 )
 
 
+def _pr_ids_awaiting(user):
+    """PRs whose active approval step (PR chain or budget exception) this user can decide now."""
+    return [
+        req.target_object_id
+        for req in engine.pending_requests_for_user(
+            user, modules=[ApprovalPolicy.MODULE_PR, ApprovalPolicy.MODULE_BUDGET_EXCEPTION]
+        )
+        if req.target_model_name == "PurchaseRequisition"
+    ]
+
+
 def _get_approval_querysets(user, role_code):
+    """Org-isolated pending/history queues (the role logic below only narrows further)."""
+    from apps.requisitions.selectors import scope_requisitions_to_org
+
+    pending, history = _role_approval_querysets(user, role_code)
+    return scope_requisitions_to_org(pending, user), scope_requisitions_to_org(history, user)
+
+
+def _role_approval_querysets(user, role_code):
     """Retrieve base pending and history querysets scoped by role and department."""
     pending_statuses = ["SUBMITTED", "MANAGER_REVIEW", "BUDGET_REVIEW"]
-    history_statuses = ["APPROVED", "REJECTED", "SOURCING", "PO_ISSUED"]
+    history_statuses = ["APPROVED", "REJECTED", "SOURCING", "PO_ISSUED", "COMPLETED"]
+
+    if is_non_transacting_actor(user):
+        # Super Admin / platform admin decide nothing (PRD 3.6): empty queue, org-scoped history.
+        return (
+            PurchaseRequisition.objects.none(),
+            (
+                PurchaseRequisition.objects.filter(
+                    status__in=history_statuses, department__organization_id=user.organization_id
+                )
+                if user.organization_id and not user.is_superuser
+                else PurchaseRequisition.objects.none()
+            ),
+        )
 
     if role_code == Role.REQUESTER:
         return (
@@ -37,47 +72,62 @@ def _get_approval_querysets(user, role_code):
         action=ApprovalAction.ACTION_APPROVE,
     ).values_list("target_object_id", flat=True)
 
+    if role_code in (Role.FINANCE_AP, Role.PROC_MGR):
+        # Finance sees PRs at its Budget Review step; the Procurement Manager only PRs where
+        # it is the active step (e.g. a budget exception) - never every PR in flight.
+        return (
+            PurchaseRequisition.objects.filter(
+                id__in=_pr_ids_awaiting(user), status__in=pending_statuses
+            ),
+            (
+                PurchaseRequisition.objects.filter(
+                    status__in=history_statuses, department__organization_id=user.organization_id
+                )
+                if user.organization_id
+                else PurchaseRequisition.objects.none()
+            ),
+        )
+
     if role_code == Role.DEPT_APPROVER:
+        pending_statuses = ["MANAGER_REVIEW"]
         user_dept = getattr(user, "department", None)
         if not user_dept:
             from apps.organization.models import CostCenter, Department
 
             managed_cc = (
-                CostCenter.objects.filter(manager=user)
-                .select_related("department")
-                .first()
+                CostCenter.objects.filter(manager=user).select_related("department").first()
             )
             if managed_cc and managed_cc.department:
                 user_dept = managed_cc.department
             elif getattr(user, "organization", None):
-                user_dept = Department.objects.filter(
-                    organization=user.organization
-                ).first()
+                user_dept = Department.objects.filter(organization=user.organization).first()
 
         if user_dept:
             q = Q(department=user_dept) | Q(cost_center__manager=user)
-            pending_qs = PurchaseRequisition.objects.filter(
-                q, status__in=pending_statuses
-            ).exclude(id__in=user_approved_pr_ids).distinct()
+            pending_qs = (
+                PurchaseRequisition.objects.filter(q, status__in=pending_statuses)
+                .exclude(id__in=user_approved_pr_ids)
+                .distinct()
+            )
             history_qs = PurchaseRequisition.objects.filter(
                 q & (Q(status__in=history_statuses) | Q(id__in=user_approved_pr_ids))
             ).distinct()
             return pending_qs, history_qs
         elif getattr(user, "organization", None):
-            q = Q(department__organization=user.organization) | Q(
-                cost_center__manager=user
+            q = Q(department__organization=user.organization) | Q(cost_center__manager=user)
+            pending_qs = (
+                PurchaseRequisition.objects.filter(q, status__in=pending_statuses)
+                .exclude(id__in=user_approved_pr_ids)
+                .distinct()
             )
-            pending_qs = PurchaseRequisition.objects.filter(
-                q, status__in=pending_statuses
-            ).exclude(id__in=user_approved_pr_ids).distinct()
             history_qs = PurchaseRequisition.objects.filter(
                 q & (Q(status__in=history_statuses) | Q(id__in=user_approved_pr_ids))
             ).distinct()
             return pending_qs, history_qs
         else:
-            pending_qs = PurchaseRequisition.objects.filter(
-                status__in=pending_statuses
-            ).exclude(id__in=user_approved_pr_ids)
+            pending_qs = PurchaseRequisition.objects.filter(status__in=pending_statuses).exclude(
+                id__in=user_approved_pr_ids
+            )
             history_qs = PurchaseRequisition.objects.filter(
                 Q(status__in=history_statuses) | Q(id__in=user_approved_pr_ids)
             )
@@ -112,7 +162,9 @@ def _handle_approval_post(request, role_code):
     comments = request.POST.get("comments", "").strip()
 
     try:
-        pr = PurchaseRequisition.objects.get(id=pr_id)
+        pr = scope_requisitions_to_org(PurchaseRequisition.objects.all(), request.user).get(
+            id=pr_id
+        )
         if action in ["REJECT", "REJECTED"] and not comments:
             comments = "Rejected by Department Approver."
         process_approval_action_service(
@@ -158,6 +210,12 @@ def _target_link(req, target):
             f"Invoice {target.invoice.invoice_number} - {target.get_exception_type_display()}",
             f"/invoices/exceptions/{target.pk}/",
         )
+    if name == "BudgetTransfer":
+        return (
+            f"Budget transfer {target.amount} {target.source.cost_center.code} -> "
+            f"{target.destination.cost_center.code}",
+            "/budgets/",
+        )
     if name == "PurchaseRequisition":
         return (f"PR {target.pr_number} - {target.title}", f"/requisitions/{target.pk}/")
     return (name, "")
@@ -183,7 +241,9 @@ def _other_pending_requests(user):
 @require_POST
 def approval_request_decide_view(request, request_id):
     """Approve or reject the active step of any pending approval request (the engine decides)."""
-    approval = get_object_or_404(ApprovalRequest, pk=request_id)
+    approval = get_object_or_404(
+        scope_approval_requests(ApprovalRequest.objects.all(), request.user), pk=request_id
+    )
     target = get_decision_target(approval.target_model_name, approval.target_object_id)
     if target is None or approval.status != ApprovalRequest.STATUS_PENDING:
         messages.error(request, "This approval request is no longer pending.")
@@ -260,7 +320,7 @@ def approvals_inbox_view(request):
         history_prs = history_prs.filter(q_filter)
 
     valid_pending_statuses = ["SUBMITTED", "MANAGER_REVIEW", "BUDGET_REVIEW"]
-    valid_history_statuses = ["APPROVED", "REJECTED", "SOURCING", "PO_ISSUED"]
+    valid_history_statuses = ["APPROVED", "REJECTED", "SOURCING", "PO_ISSUED", "COMPLETED"]
 
     if status_filter:
         if tab == "history":
@@ -337,7 +397,7 @@ def delegation_view(request):
         reason = request.POST.get("reason", "").strip()
 
         try:
-            delegate_user = User.objects.get(pk=delegate_id)
+            delegate_user = scope_users(User.objects.all(), user).get(pk=delegate_id)
             set_approval_delegate_service(
                 approver=user,
                 delegate=delegate_user,
@@ -357,7 +417,8 @@ def delegation_view(request):
     ).order_by("-start_date")
 
     eligible_delegates = (
-        User.objects.filter(role__code__in=[Role.DEPT_APPROVER, Role.PROC_MGR, Role.PROC_EXEC])
+        scope_users(User.objects.all(), user)
+        .filter(role__code__in=[Role.DEPT_APPROVER, Role.PROC_MGR, Role.PROC_EXEC])
         .exclude(pk=user.pk)
         .select_related("role")
     )

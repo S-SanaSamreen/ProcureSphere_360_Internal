@@ -1,0 +1,90 @@
+{% extends 'layouts/superadmin_base.html' %}
+
+{% block title %}Locations & Business Units — Admin{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h3 class="fw-bold text-dark mb-1"><i class="fa-solid fa-location-dot text-primary me-2"></i> Master Data: Locations &amp; Business Units</h3>
+        <p class="text-muted mb-0">{% if scoped_org %}Sites and business units for {{ scoped_org.name }}.{% else %}Sites and business units across organizations.{% endif %}</p>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm rounded-4 mb-4">
+    <div class="card-header bg-white pt-4 pb-0 px-4 border-bottom-0 d-flex justify-content-between align-items-center">
+        <h5 class="fw-bold text-dark mb-1">Locations</h5>
+        <button hx-get="/superadmin/locations/create/" hx-target="#modal-content-body" data-bs-toggle="modal" data-bs-target="#modal-container" class="btn btn-primary text-white fw-bold rounded-pill px-4 shadow-sm">
+            <i class="fa-solid fa-plus me-2"></i> Add Location
+        </button>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0 mt-3">
+            <thead class="table-light">
+                <tr>
+                    <th class="ps-4">Code</th><th>Name</th><th>Organization</th><th>Address</th><th>Status</th>
+                    <th class="pe-4 text-end">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for loc in locations %}
+                <tr>
+                    <td class="ps-4 fw-bold text-primary">{{ loc.code }}</td>
+                    <td>{{ loc.name }}</td>
+                    <td><span class="badge bg-light text-dark border">{{ loc.organization.code }}</span></td>
+                    <td class="text-muted small">{{ loc.address|default:"—"|truncatechars:60 }}</td>
+                    <td>{% if loc.is_active %}<span class="badge bg-success">Active</span>{% else %}<span class="badge bg-secondary">Inactive</span>{% endif %}</td>
+                    <td class="pe-4 text-end">
+                        <button hx-get="/superadmin/locations/{{ loc.pk }}/edit/" hx-target="#modal-content-body" data-bs-toggle="modal" data-bs-target="#modal-container" class="btn btn-sm btn-outline-secondary rounded-pill px-3">
+                            <i class="fa-solid fa-pen-to-square me-1"></i> Edit
+                        </button>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="6" class="text-center py-4 text-muted">No locations defined.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </div>
+</div>
+
+<div class="card border-0 shadow-sm rounded-4">
+    <div class="card-header bg-white pt-4 pb-0 px-4 border-bottom-0 d-flex justify-content-between align-items-center">
+        <h5 class="fw-bold text-dark mb-1">Business Units</h5>
+        <button hx-get="/superadmin/business-units/create/" hx-target="#modal-content-body" data-bs-toggle="modal" data-bs-target="#modal-container" class="btn btn-primary text-white fw-bold rounded-pill px-4 shadow-sm">
+            <i class="fa-solid fa-plus me-2"></i> Add Business Unit
+        </button>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0 mt-3">
+            <thead class="table-light">
+                <tr>
+                    <th class="ps-4">Code</th><th>Name</th><th>Organization</th><th>Parent</th><th>Status</th>
+                    <th class="pe-4 text-end">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for bu in business_units %}
+                <tr>
+                    <td class="ps-4 fw-bold text-primary">{{ bu.code }}</td>
+                    <td>{{ bu.name }}</td>
+                    <td><span class="badge bg-light text-dark border">{{ bu.organization.code }}</span></td>
+                    <td class="text-muted small">{{ bu.parent.name|default:"—" }}</td>
+                    <td>{% if bu.is_active %}<span class="badge bg-success">Active</span>{% else %}<span class="badge bg-secondary">Inactive</span>{% endif %}</td>
+                    <td class="pe-4 text-end">
+                        <button hx-get="/superadmin/business-units/{{ bu.pk }}/edit/" hx-target="#modal-content-body" data-bs-toggle="modal" data-bs-target="#modal-container" class="btn btn-sm btn-outline-secondary rounded-pill px-3">
+                            <i class="fa-solid fa-pen-to-square me-1"></i> Edit
+                        </button>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="6" class="text-center py-4 text-muted">No business units defined.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

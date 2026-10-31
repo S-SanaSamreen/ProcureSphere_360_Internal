@@ -12,7 +12,11 @@ from apps.accounts.models import Role, User
 from apps.approvals import engine
 from apps.approvals.models import ApprovalAction, ApprovalPolicy, ApprovalRequest
 from apps.budgets.models import Budget, BudgetReservation
-from apps.budgets.services import allocate_budget_service, reconcile_budget
+from apps.budgets.services import (
+    allocate_budget_service,
+    check_and_reserve_budget_service,
+    reconcile_budget,
+)
 from apps.notifications.models import Notification
 from apps.organization.models import CostCenter, Department, FiscalPeriod, Organization
 from apps.requisitions.models import PurchaseRequisition
@@ -126,8 +130,8 @@ def test_submit_binds_the_pr_to_the_policy_version_and_records_the_request(w):
     assert req.department == w["dept"] and req.cost_center == w["cc"]
     assert [s["role_code"] for s in req.steps] == [
         "DEPT_APPROVER",
-        "PROC_MGR",
-    ]  # seeded global policy
+        "FINANCE_AP",
+    ]  # seeded global policy (PRD 4.2: department, then Finance budget review)
     submitted = ApprovalAction.objects.get(approval_request=req, action="SUBMITTED")
     assert "v1" in submitted.comments and submitted.actor_id == w["requester"].id
 
@@ -140,7 +144,7 @@ def test_cost_center_policy_overrides_the_department_and_global_policies(w):
         s["role_code"] for s in ApprovalRequest.objects.get(module=PR, target_object_id=pr.id).steps
     ]
     assert steps(on_special) == ["FINANCE_AP"]
-    assert steps(on_other) == ["DEPT_APPROVER", "PROC_MGR"]
+    assert steps(on_other) == ["DEPT_APPROVER", "FINANCE_AP"]
     assert engine.can_act(
         ApprovalRequest.objects.get(target_object_id=on_special.id, module=PR), w["fin"]
     )
@@ -184,7 +188,7 @@ def test_a_policy_change_after_submission_does_not_reroute_the_pr_in_flight(w):
         change_note="Finance only",
     )
     approve(requisition=pr, approver=w["appr"])  # still the ORIGINAL step 1 (dept approver)
-    pr = approve(requisition=pr, approver=w["mgr"])  # and the original step 2
+    pr = approve(requisition=pr, approver=w["fin"])  # and the original step 2 (Finance)
     assert pr.status == PurchaseRequisition.STATUS_APPROVED
 
     later = submit(requisition=make_pr(w), user=w["requester"])
@@ -201,14 +205,17 @@ def test_full_chain_approval_with_fresh_status_audit_and_notifications(w):
     assert not Notification.objects.filter(
         recipient=w["mgr"], title__startswith="New PR Approval"
     ).exists()
+    assert fresh(w["budget"]).reserved_amount == D(0)  # soft check only at submit
 
     pr = approve(requisition=pr, approver=w["appr"], comments="ok by dept")
-    assert pr.status == PurchaseRequisition.STATUS_MANAGER_REVIEW
-    assert Notification.objects.filter(recipient=w["mgr"], title__contains="Step 2").exists()
+    assert pr.status == PurchaseRequisition.STATUS_BUDGET_REVIEW
+    assert fresh(w["budget"]).reserved_amount == D(0)
+    assert Notification.objects.filter(recipient=w["fin"], title__contains="Step 2").exists()
+    assert not Notification.objects.filter(recipient=w["mgr"], title__contains="Step 2").exists()
 
-    pr = approve(requisition=pr, approver=w["mgr"])
+    pr = approve(requisition=pr, approver=w["fin"])
     assert pr.status == PurchaseRequisition.STATUS_APPROVED
-    assert fresh(w["budget"]).reserved_amount == D(1000)
+    assert fresh(w["budget"]).reserved_amount == D(1000)  # reserved when Finance approves
     # regression: the "ready for sourcing" notification to Procurement Executives must be sent
     assert Notification.objects.filter(
         recipient=w["pe"], title="Approved PR Ready for Sourcing"
@@ -222,15 +229,17 @@ def test_full_chain_approval_with_fresh_status_audit_and_notifications(w):
         (a.actor_id, a.new_state)
         for a in req.actions.filter(action="APPROVED").order_by("created_at")
     ] == [
-        (w["appr"].id, "MANAGER_REVIEW"),
-        (w["mgr"].id, "APPROVED"),
+        (w["appr"].id, "BUDGET_REVIEW"),
+        (w["fin"].id, "APPROVED"),
     ]
 
 
-def test_requester_cannot_approve_their_own_pr_even_when_super_admin(w):
-    pr = submit(requisition=make_pr(w, requester=w["admin"]), user=w["admin"])
+def test_requester_cannot_approve_their_own_pr_even_when_they_hold_the_approver_role(w):
+    # PRD 3.6: Super Admin can neither raise nor approve PRs, so the SoD rule is shown with a
+    # Department Approver who raised the PR in their own department.
+    pr = submit(requisition=make_pr(w, requester=w["appr"]), user=w["appr"])
     with pytest.raises(ValidationError, match="Self-approval is strictly prohibited"):
-        approve(requisition=pr, approver=w["admin"])
+        approve(requisition=pr, approver=w["appr"])
     assert fresh(pr).status == PurchaseRequisition.STATUS_MANAGER_REVIEW
 
 
@@ -268,12 +277,15 @@ def test_approval_limit_stops_an_approver_who_is_not_allowed_to_approve_that_muc
     small = submit(requisition=make_pr(w, 400), user=w["requester"])
     assert (
         approve(requisition=small, approver=w["appr"]).status
-        == PurchaseRequisition.STATUS_MANAGER_REVIEW
+        == PurchaseRequisition.STATUS_BUDGET_REVIEW
     )
 
 
 def test_rejection_requires_a_chain_member_and_a_reason_and_releases_the_reservation(w):
     pr = submit(requisition=make_pr(w), user=w["requester"])
+    assert fresh(w["budget"]).reserved_amount == D(0)  # nothing reserved at submit any more
+    # a reservation still held by a PR that was in flight before the Finance-first flow
+    check_and_reserve_budget_service(requisition=pr, requested_by_user=w["requester"])
     assert fresh(w["budget"]).reserved_amount == D(1000)
     with pytest.raises(ValidationError, match="not an approver"):
         reject(requisition=pr, approver=w["pe"], comments="nope")
@@ -289,62 +301,104 @@ def test_rejection_requires_a_chain_member_and_a_reason_and_releases_the_reserva
 
 
 # ======================================================================= budget exception route
-def test_budget_overrun_needs_the_budget_exception_chain_before_the_normal_chain(w):
+def test_out_of_budget_pr_needs_the_budget_exception_chain_after_finance(w):
     pr = submit(requisition=make_pr(w, 60000), user=w["requester"])  # allocation is 50,000
+    assert pr.status == PurchaseRequisition.STATUS_MANAGER_REVIEW  # soft check only
+    assert fresh(w["budget"]).reserved_amount == D(0)
+    pr = approve(requisition=pr, approver=w["appr"])
+    assert pr.status == PurchaseRequisition.STATUS_BUDGET_REVIEW
+
+    # Finance cannot silently approve: the budget exception (Procurement Manager) is raised
+    pr = approve(requisition=pr, approver=w["fin"], comments="over budget")
     assert pr.status == PurchaseRequisition.STATUS_BUDGET_REVIEW
     assert fresh(w["budget"]).reserved_amount == D(0)  # nothing reserved until authorised
     bx = ApprovalRequest.objects.get(module=BX, target_object_id=pr.id)
-    assert bx.amount == D(10000) and [s["role_code"] for s in bx.steps] == ["FINANCE_AP"]
+    assert bx.amount == D(10000) and [s["role_code"] for s in bx.steps] == ["PROC_MGR"]
     assert Notification.objects.filter(
-        recipient=w["fin"], title__startswith="Budget Alert"
+        recipient=w["mgr"], title__startswith="Budget Alert"
     ).exists()
 
-    # the department approver is NOT the budget exception authority any more
-    with pytest.raises(ValidationError, match="not authorized"):
-        approve(requisition=pr, approver=w["appr"])
+    # neither the department approver nor Finance is the budget exception authority
+    for outsider in (w["appr"], w["fin"]):
+        with pytest.raises(ValidationError, match="not authorized|already approved"):
+            approve(requisition=pr, approver=outsider)
     assert fresh(pr).status == PurchaseRequisition.STATUS_BUDGET_REVIEW
 
-    pr = approve(requisition=pr, approver=w["fin"], comments="Exception granted")
-    assert pr.status == PurchaseRequisition.STATUS_MANAGER_REVIEW
+    pr = approve(requisition=pr, approver=w["mgr"], comments="Exception granted")
+    assert pr.status == PurchaseRequisition.STATUS_APPROVED
     assert fresh(w["budget"]).reserved_amount == D(60000)  # forced, authorised overrun
     assert ApprovalRequest.objects.get(module=BX, target_object_id=pr.id).status == "APPROVED"
-    # now the normal chain starts
-    approve(requisition=pr, approver=w["appr"])
-    pr = approve(requisition=pr, approver=w["mgr"])
-    assert pr.status == PurchaseRequisition.STATUS_APPROVED
     assert reconcile_budget(fresh(w["budget"]))["in_sync"]
 
 
 def test_rejecting_a_budget_exception_ends_everything_and_reserves_nothing(w):
     pr = submit(requisition=make_pr(w, 60000), user=w["requester"])
+    approve(requisition=pr, approver=w["appr"])
     pr = reject(requisition=pr, approver=w["fin"], comments="Not affordable this quarter")
     assert pr.status == PurchaseRequisition.STATUS_REJECTED
     assert not ApprovalRequest.objects.filter(status="PENDING", target_object_id=pr.id).exists()
     assert fresh(w["budget"]).reserved_amount == D(0)
 
+    pr2 = submit(requisition=make_pr(w, 60000, cc=w["cc2"]), user=w["requester"])
+    approve(requisition=pr2, approver=w["appr"])
+    approve(requisition=pr2, approver=w["fin"])  # opens the budget exception
+    pr2 = reject(requisition=pr2, approver=w["mgr"], comments="No overspend")
+    assert pr2.status == PurchaseRequisition.STATUS_REJECTED
+    assert not ApprovalRequest.objects.filter(status="PENDING", target_object_id=pr2.id).exists()
+    assert fresh(w["budget2"]).reserved_amount == D(0)
+
 
 def test_budget_exception_policy_is_configurable_by_amount(w):
-    seeded = ApprovalPolicy.objects.get(
-        module=BX, department__isnull=True, cost_center__isnull=True
+    policy(
+        w,
+        "Small overruns",
+        [Role.FINANCE_AP],
+        module=BX,
+        max_amount=D(20000),
+        is_exception_route=True,
     )
-    engine.revise_approval_policy(policy=seeded, actor=w["admin"], max_amount=D(20000))
-    policy(w, "Big overruns", [Role.FINANCE_AP, Role.PROC_MGR], module=BX, min_amount=D(20000.01))
-    small = submit(requisition=make_pr(w, 60000), user=w["requester"])  # overrun 10,000
-    big = submit(requisition=make_pr(w, 90000, cc=w["cc2"]), user=w["requester"])  # overrun 40,000
-    steps = lambda pr: len(  # noqa: E731
-        ApprovalRequest.objects.get(module=BX, target_object_id=pr.id).steps
+    policy(
+        w,
+        "Big overruns",
+        [Role.FINANCE_AP, Role.PROC_MGR],
+        module=BX,
+        min_amount=D(20000.01),
+        is_exception_route=True,
     )
-    assert (steps(small), steps(big)) == (1, 2)
+
+    def routed(amount, cc):
+        pr = submit(requisition=make_pr(w, amount, cc=cc), user=w["requester"])
+        approve(requisition=pr, approver=w["appr"])
+        approve(requisition=pr, approver=w["fin"])
+        return len(ApprovalRequest.objects.get(module=BX, target_object_id=pr.id).steps)
+
+    # overrun 10,000 -> one exception step; overrun 40,000 -> two
+    assert (routed(60000, w["cc"]), routed(90000, w["cc2"])) == (1, 2)
 
 
-def test_pr_exception_route_policy_is_appended_when_the_pr_overruns_the_budget(w):
-    policy(w, "PR exception", [Role.FINANCE_AP], is_exception_route=True)
+def test_pr_module_exception_route_policy_is_used_when_the_pr_overruns_the_budget(w):
+    policy(w, "PR exception", [Role.PROC_MGR, Role.FINANCE_AP], is_exception_route=True)
     pr = submit(requisition=make_pr(w, 60000), user=w["requester"])
     req = ApprovalRequest.objects.get(module=PR, target_object_id=pr.id)
-    assert [s["role_code"] for s in req.steps] == ["DEPT_APPROVER", "PROC_MGR", "FINANCE_AP"]
-    assert req.exception_reason.startswith("Budget overrun")
-    normal = submit(requisition=make_pr(w, 1000), user=w["requester"])
-    assert len(ApprovalRequest.objects.get(module=PR, target_object_id=normal.id).steps) == 2
+    assert [s["role_code"] for s in req.steps] == ["DEPT_APPROVER", "FINANCE_AP"]  # not appended
+    approve(requisition=pr, approver=w["appr"])
+    approve(requisition=pr, approver=w["fin"])
+    bx = ApprovalRequest.objects.get(module=BX, target_object_id=pr.id)
+    assert [s["role_code"] for s in bx.steps] == ["PROC_MGR", "FINANCE_AP"]
+    assert bx.exception_reason.startswith("Budget overrun")
+
+
+def test_budget_is_rechecked_when_finance_approves(w):
+    pr = submit(requisition=make_pr(w, 1000), user=w["requester"])  # within budget at submit
+    approve(requisition=pr, approver=w["appr"])
+    other = make_pr(w, 49500)  # another PR consumes the budget in the meantime
+    check_and_reserve_budget_service(requisition=other, requested_by_user=w["requester"])
+    pr = approve(requisition=pr, approver=w["fin"])
+    assert pr.status == PurchaseRequisition.STATUS_BUDGET_REVIEW  # now needs the exception
+    assert ApprovalRequest.objects.get(module=BX, target_object_id=pr.id).amount == D(500)
+    assert not BudgetReservation.objects.filter(
+        requisition=pr, status=BudgetReservation.STATUS_RESERVED
+    ).exists()
 
 
 # ======================================================================= cancel / legacy / escalation
@@ -362,6 +416,8 @@ def test_cancelling_via_api_withdraws_the_approval_requests_and_frees_the_budget
 
 def test_cancelling_from_the_web_ui_releases_the_reservation_and_withdraws_requests(w, client):
     pr = submit(requisition=make_pr(w), user=w["requester"])
+    # a reservation still held by a PR that was in flight before the Finance-first flow
+    check_and_reserve_budget_service(requisition=pr, requested_by_user=w["requester"])
     assert fresh(w["budget"]).reserved_amount == D(1000)
     client.force_login(w["requester"])
     client.post(f"/requisitions/{pr.pk}/cancel/")
@@ -391,14 +447,14 @@ def test_legacy_pr_without_a_request_is_picked_up_and_fast_forwarded(w):
     assert not ApprovalRequest.objects.filter(target_object_id=pr.id).exists()
     with pytest.raises(ValidationError, match="not authorized to approve step 2"):
         approve(requisition=pr, approver=w["appr"])  # lazily opened, resumed at step 2
-    assert approve(requisition=pr, approver=w["mgr"]).status == PurchaseRequisition.STATUS_APPROVED
+    assert approve(requisition=pr, approver=w["fin"]).status == PurchaseRequisition.STATUS_APPROVED
 
 
 def test_overdue_reminder_goes_to_the_current_step_approvers_only(w):
     from apps.notifications.services import scan_overdue_approvals_and_escalate_service
 
     pr = submit(requisition=make_pr(w), user=w["requester"])
-    approve(requisition=pr, approver=w["appr"])  # now waiting on the procurement manager (step 2)
+    approve(requisition=pr, approver=w["appr"])  # now waiting on Finance / AP (step 2)
     PurchaseRequisition.objects.filter(pk=pr.pk).update(
         updated_at=timezone.now() - datetime.timedelta(hours=50)
     )
@@ -409,4 +465,4 @@ def test_overdue_reminder_goes_to_the_current_step_approvers_only(w):
             "recipient__email", flat=True
         )
     )
-    assert reminded == {w["mgr"].email, w["mgr2"].email}
+    assert reminded == {w["fin"].email}

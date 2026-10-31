@@ -272,11 +272,70 @@
         </div>
     </div>
     
+    <!-- PR Budget Review queue -->
+    <div class="col-12 mt-4" id="pr-budget-review-section">
+        <div class="card border-0 shadow-sm rounded-4">
+            <div class="card-header bg-white border-bottom-0 pt-3 pt-sm-4 pb-0 px-3 px-sm-4">
+                <h5 class="fw-bold mb-0 fs-6 fs-sm-5"><i class="fa-solid fa-wallet text-primary me-2"></i> PR Budget Review ({{ metrics.pr_budget_review }})</h5>
+            </div>
+            <div class="card-body p-3 p-sm-4">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light text-muted small text-uppercase">
+                            <tr>
+                                <th class="ps-3">PR</th>
+                                <th>Cost Center</th>
+                                <th class="text-end">Total</th>
+                                <th class="text-end">Allocated</th>
+                                <th class="text-end">Reserved</th>
+                                <th class="text-end">Committed</th>
+                                <th class="text-end">Available</th>
+                                <th>Budget</th>
+                                <th class="text-end pe-3">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in pr_budget_queue %}
+                            <tr>
+                                <td class="ps-3 fw-bold"><a href="{% url 'requisition_detail' row.pr.id %}" class="text-decoration-none text-dark">{{ row.pr.pr_number }}</a></td>
+                                <td>{{ row.pr.cost_center.code }}</td>
+                                <td class="text-end">${{ row.position.total|floatformat:2 }}</td>
+                                <td class="text-end">${{ row.position.allocated|floatformat:2 }}</td>
+                                <td class="text-end">${{ row.position.reserved|floatformat:2 }}</td>
+                                <td class="text-end">${{ row.position.committed|floatformat:2 }}</td>
+                                <td class="text-end">${{ row.position.available|floatformat:2 }}</td>
+                                <td>
+                                    {% if row.position.within_budget %}
+                                    <span class="badge bg-success rounded-pill">Under budget</span>
+                                    {% else %}
+                                    <span class="badge bg-danger rounded-pill">Out of budget</span>
+                                    <div class="small text-danger">Shortfall ${{ row.position.shortfall|floatformat:2 }}</div>
+                                    {% endif %}
+                                </td>
+                                <td class="text-end pe-3">
+                                    <form method="POST" action="{% url 'approval_request_decide' row.request.id %}" class="d-inline-flex gap-1 align-items-center">
+                                        {% csrf_token %}
+                                        <input type="text" name="comments" class="form-control form-control-sm" placeholder="Comments (required to reject)">
+                                        <button type="submit" name="action" value="APPROVE" class="btn btn-sm btn-success rounded-pill px-3">Approve</button>
+                                        <button type="submit" name="action" value="REJECT" class="btn btn-sm btn-outline-danger rounded-pill px-3">Reject</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr><td colspan="9" class="text-center py-4 text-muted small">No requisitions are waiting for budget review.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- PR Budget Exceptions -->
     <div class="col-12 mt-4" id="budget-exceptions-section">
         <div class="card {% if metrics.pending_budget_exceptions > 0 %}border border-2 border-danger{% else %}border-0{% endif %} shadow-sm rounded-4">
             <div class="card-header bg-white border-bottom-0 pt-3 pt-sm-4 pb-0 px-3 px-sm-4 d-flex flex-wrap justify-content-between align-items-center gap-2">
-                <h5 class="fw-bold mb-0 fs-6 fs-sm-5"><i class="fa-solid fa-scale-unbalanced text-danger me-2"></i> Pending Budget Exceptions ({{ metrics.pending_budget_exceptions }})</h5>
+                <h5 class="fw-bold mb-0 fs-6 fs-sm-5"><i class="fa-solid fa-scale-unbalanced text-danger me-2"></i> PR Budget Exceptions Awaiting Approval ({{ metrics.pending_budget_exceptions }})</h5>
                 <a href="/budgets/exceptions/" class="btn btn-sm btn-outline-secondary rounded-pill px-3">View All Exceptions</a>
             </div>
             <div class="card-body p-3 p-sm-4">

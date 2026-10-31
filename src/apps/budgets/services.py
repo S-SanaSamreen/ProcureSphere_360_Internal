@@ -7,10 +7,11 @@ from django.db import transaction
 from django.db.models import Q, Sum
 from django.utils import timezone
 
+from apps.accounts.permissions import forbid_non_transacting_actor
 from apps.audit.models import AuditLog
 from apps.organization.models import CostCenter, FiscalPeriod
 
-from .models import Budget, BudgetReservation, SpendLedger
+from .models import Budget, BudgetReservation, BudgetTransfer, SpendLedger
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,14 @@ class BudgetOverrunException(Exception):
         super().__init__(self.message)
 
 
+def _assert_period_open(fiscal_period, action):
+    if fiscal_period.is_closed:
+        raise ValidationError(
+            f"Fiscal period '{fiscal_period.name}' is closed; cannot {action}. "
+            "Reopen the period to continue."
+        )
+
+
 @transaction.atomic
 def allocate_budget_service(
     *,
@@ -42,6 +51,7 @@ def allocate_budget_service(
     """
     Allocates budget to a CostCenter for a FiscalPeriod inside an atomic transaction.
     """
+    _assert_period_open(fiscal_period, "allocate budget")
     budget, created = Budget.objects.get_or_create(
         cost_center=cost_center,
         fiscal_period=fiscal_period,
@@ -96,13 +106,35 @@ def post_ledger_entry_service(
     A decrease can never take a bucket below zero; if it would, only what is actually held is
     moved (and logged), so ledger and counters stay equal.
     """
-    if entry_type not in LEDGER_BUCKETS:
+    if entry_type not in LEDGER_BUCKETS and entry_type != SpendLedger.ENTRY_TRANSFER:
         raise ValidationError(f"Unknown spend ledger entry type '{entry_type}'.")
     amount = Decimal(str(amount)).quantize(CENT)
     if amount == Decimal("0.00"):
         return None
 
-    locked = Budget.objects.select_for_update().get(pk=budget.pk)
+    locked = Budget.objects.select_for_update().select_related("fiscal_period").get(pk=budget.pk)
+    _assert_period_open(locked.fiscal_period, "post ledger entries")
+    if entry_type == SpendLedger.ENTRY_TRANSFER:
+        # Allocation moves are never clamped: allocated may not drop below what is consumed.
+        consumed = locked.reserved_amount + locked.committed_amount + locked.actual_amount
+        if locked.allocated_amount + amount < consumed:
+            raise ValidationError(
+                f"Transfer would reduce the allocation of '{locked.cost_center.code}' to "
+                f"${locked.allocated_amount + amount:,.2f}, below the consumed amount "
+                f"${consumed:,.2f}."
+            )
+        locked.allocated_amount = locked.allocated_amount + amount
+        locked.save(update_fields=["allocated_amount", "updated_at"])
+        entry = SpendLedger.objects.create(
+            budget=locked,
+            entry_type=entry_type,
+            amount=amount,
+            reference_number=reference_number,
+            description=description[:255],
+        )
+        budget.allocated_amount = locked.allocated_amount
+        budget.updated_at = locked.updated_at
+        return entry
     field = LEDGER_BUCKETS[entry_type]
     current = getattr(locked, field)
     if current + amount < Decimal("0.00"):
@@ -404,6 +436,58 @@ def validate_budget_availability_service(*, cost_center: CostCenter, amount: Dec
     return budget
 
 
+def pr_budget_position(requisition) -> dict:
+    """
+    Read-only (soft) budget check for a purchase requisition - nothing is reserved. Returns the
+    figures of the budget covering the PR's cost center and whether the PR total fits.
+
+    ``within_budget`` is True when the total fits the available amount (or the budget allows
+    overspend); ``shortfall`` is the amount above what is available (0 when within budget).
+    ``budget`` is None when no open-period allocation exists (then ``within_budget`` is False).
+    """
+    today = (
+        requisition.created_at.date()
+        if requisition.created_at
+        else requisition.requested_delivery_date
+    )
+    budget = (
+        Budget.objects.filter(
+            cost_center=requisition.cost_center,
+            fiscal_period__start_date__lte=today,
+            fiscal_period__end_date__gte=today,
+            fiscal_period__is_closed=False,
+        )
+        .select_related("fiscal_period")
+        .first()
+    )
+    total = requisition.total_amount
+    if budget is None:
+        return {
+            "budget": None,
+            "total": total,
+            "allocated": Decimal("0.00"),
+            "reserved": Decimal("0.00"),
+            "committed": Decimal("0.00"),
+            "available": Decimal("0.00"),
+            "within_budget": False,
+            "status": "OUT_OF_BUDGET",
+            "shortfall": total,
+        }
+    available = budget.available_amount
+    within = budget.allow_overspend or total <= available
+    return {
+        "budget": budget,
+        "total": total,
+        "allocated": budget.allocated_amount,
+        "reserved": budget.reserved_amount,
+        "committed": budget.committed_amount,
+        "available": available,
+        "within_budget": within,
+        "status": "WITHIN_BUDGET" if within else "OUT_OF_BUDGET",
+        "shortfall": Decimal("0.00") if within else max(total - available, Decimal("0.00")),
+    }
+
+
 @transaction.atomic
 def check_and_reserve_budget_service(
     *, requisition, requested_by_user, force_overrun=False
@@ -551,3 +635,223 @@ def release_budget_reservation_service(
             target_object_id=str(res.id),
             new_state={"status": res.status, "reason": reason},
         )
+
+
+# ==============================================================================
+# BUDGET TRANSFERS (Finance requests; approval engine decides; ledger posts)
+# ==============================================================================
+
+
+def _role_code(user):
+    return getattr(user, "role_code", None) if user else None
+
+
+def _budget_org(budget):
+    dept = budget.cost_center.department
+    return dept.organization if dept else None
+
+
+def _assert_transfer_feasible(source: Budget, destination: Budget, amount: Decimal):
+    consumed = source.reserved_amount + source.committed_amount + source.actual_amount
+    if source.allocated_amount - amount < consumed:
+        raise ValidationError(
+            f"Transfer of ${amount:,.2f} would drop '{source.cost_center.code}' below its "
+            f"consumed amount (allocated ${source.allocated_amount:,.2f}, consumed "
+            f"${consumed:,.2f}, transferable ${max(source.allocated_amount - consumed, Decimal('0.00')):,.2f})."
+        )
+    _assert_period_open(source.fiscal_period, "transfer budget")
+
+
+@transaction.atomic
+def request_budget_transfer_service(
+    *, source: Budget, destination: Budget, amount, reason: str, requested_by
+) -> BudgetTransfer:
+    """Finance requests a move of allocated budget; routed through the approval engine."""
+    forbid_non_transacting_actor(requested_by, "request budget transfers")
+    from apps.approvals import engine
+    from apps.approvals.models import ApprovalPolicy
+
+    if _role_code(requested_by) != "FINANCE_AP":
+        raise ValidationError("Only Finance can request budget transfers.")
+    try:
+        amount = Decimal(str(amount)).quantize(CENT)
+    except Exception:
+        raise ValidationError("Transfer amount must be a valid number.")
+    if amount <= Decimal("0.00"):
+        raise ValidationError("Transfer amount must be greater than zero.")
+    if not (reason or "").strip():
+        raise ValidationError("A reason is required for a budget transfer.")
+    if source.pk == destination.pk:
+        raise ValidationError("Source and destination budgets must differ.")
+
+    source = (
+        Budget.objects.select_for_update()
+        .select_related("cost_center__department", "fiscal_period")
+        .get(pk=source.pk)
+    )
+    destination = Budget.objects.select_related("cost_center__department", "fiscal_period").get(
+        pk=destination.pk
+    )
+    if source.fiscal_period_id != destination.fiscal_period_id:
+        raise ValidationError("Transfers are only allowed within the same fiscal period.")
+    src_org, dst_org = _budget_org(source), _budget_org(destination)
+    user_org = getattr(requested_by, "effective_organization", None)
+    if src_org is None or dst_org is None or src_org.pk != dst_org.pk:
+        raise ValidationError(
+            "Transfers are only allowed between cost centers of one organization."
+        )
+    if user_org is None or user_org.pk != src_org.pk:
+        raise ValidationError("You can only transfer budget inside your own organization.")
+    _assert_transfer_feasible(source, destination, amount)
+
+    transfer = BudgetTransfer.objects.create(
+        source=source,
+        destination=destination,
+        amount=amount,
+        reason=reason.strip(),
+        requested_by=requested_by,
+        created_by=requested_by,
+    )
+    engine.open_approval_request(
+        module=ApprovalPolicy.MODULE_BUDGET_TRANSFER,
+        target=transfer,
+        amount=amount,
+        maker=requested_by,
+        department=source.cost_center.department,
+        cost_center=source.cost_center,
+        exception_reason="",
+        required=True,
+    )
+    from apps.audit.services import create_audit_log_service
+
+    create_audit_log_service(
+        actor=requested_by,
+        action=AuditLog.ACTION_SUBMIT,
+        target_model="BudgetTransfer",
+        target_object_id=transfer.id,
+        new_state={
+            "source": source.cost_center.code,
+            "destination": destination.cost_center.code,
+            "amount": str(amount),
+            "reason": transfer.reason,
+        },
+    )
+    return transfer
+
+
+def _notify_transfer_approvers(transfer, request):
+    from apps.approvals import engine
+    from apps.notifications.models import Notification
+    from apps.notifications.services import notify_users
+
+    notify_users(
+        users=engine.step_approvers(request),
+        notification_type=Notification.TYPE_APPROVAL_REQUIRED,
+        title="Budget transfer approval required",
+        message=(
+            f"Transfer ${transfer.amount:,.2f} from {transfer.source.cost_center.code} to "
+            f"{transfer.destination.cost_center.code}. Reason: {transfer.reason[:300]}"
+        ),
+        target_url="/budgets/transfers/",
+    )
+
+
+@transaction.atomic
+def approve_budget_transfer_service(
+    *, transfer: BudgetTransfer, approver, comments: str = ""
+) -> BudgetTransfer:
+    """Engine approval; on the final step the allocation moves via the ledger choke point."""
+    forbid_non_transacting_actor(approver, "approve budget transfers")
+    from apps.approvals import engine
+    from apps.approvals.models import ApprovalPolicy
+    from apps.audit.services import create_audit_log_service
+
+    transfer = BudgetTransfer.objects.select_for_update().get(pk=transfer.pk)
+    if transfer.status != BudgetTransfer.STATUS_PENDING:
+        raise ValidationError(f"This transfer is already {transfer.status.lower()}.")
+    request = engine.get_pending_request(ApprovalPolicy.MODULE_BUDGET_TRANSFER, transfer)
+    if request is None:
+        raise ValidationError("No pending approval request exists for this transfer.")
+    is_final = request.current_step + 1 >= len(request.steps)
+    if is_final:
+        # Re-check feasibility under lock first: spend may have grown since the request.
+        source = (
+            Budget.objects.select_for_update()
+            .select_related("cost_center", "fiscal_period")
+            .get(pk=transfer.source_id)
+        )
+        _assert_transfer_feasible(source, transfer.destination, transfer.amount)
+    request = engine.approve_step(
+        request=request,
+        actor=approver,
+        comments=comments,
+        states=("PENDING", "APPROVED" if is_final else "PENDING"),
+    )
+    if request.status != "APPROVED":
+        _notify_transfer_approvers(transfer, request)
+        return transfer
+
+    ref = f"TRF-{str(transfer.id)[:8].upper()}"
+    label = f"{transfer.source.cost_center.code} -> {transfer.destination.cost_center.code}"
+    post_ledger_entry_service(
+        budget=transfer.source,
+        entry_type=SpendLedger.ENTRY_TRANSFER,
+        amount=-transfer.amount,
+        reference_number=ref,
+        description=f"Budget transfer out {label}",
+    )
+    post_ledger_entry_service(
+        budget=transfer.destination,
+        entry_type=SpendLedger.ENTRY_TRANSFER,
+        amount=transfer.amount,
+        reference_number=ref,
+        description=f"Budget transfer in {label}",
+    )
+    transfer.status = BudgetTransfer.STATUS_APPROVED
+    transfer.decided_by = approver
+    transfer.decided_at = timezone.now()
+    transfer.decision_comments = (comments or "").strip()
+    transfer.save()
+    create_audit_log_service(
+        actor=approver,
+        action=AuditLog.ACTION_APPROVE,
+        target_model="BudgetTransfer",
+        target_object_id=transfer.id,
+        previous_state={"status": BudgetTransfer.STATUS_PENDING},
+        new_state={"status": transfer.status, "amount": str(transfer.amount), "route": label},
+    )
+    return transfer
+
+
+@transaction.atomic
+def reject_budget_transfer_service(
+    *, transfer: BudgetTransfer, approver, comments: str
+) -> BudgetTransfer:
+    forbid_non_transacting_actor(approver, "reject budget transfers")
+    from apps.approvals import engine
+    from apps.approvals.models import ApprovalPolicy
+    from apps.audit.services import create_audit_log_service
+
+    transfer = BudgetTransfer.objects.select_for_update().get(pk=transfer.pk)
+    if transfer.status != BudgetTransfer.STATUS_PENDING:
+        raise ValidationError(f"This transfer is already {transfer.status.lower()}.")
+    request = engine.get_pending_request(ApprovalPolicy.MODULE_BUDGET_TRANSFER, transfer)
+    if request is None:
+        raise ValidationError("No pending approval request exists for this transfer.")
+    engine.reject_request(
+        request=request, actor=approver, comments=comments, states=("PENDING", "REJECTED")
+    )
+    transfer.status = BudgetTransfer.STATUS_REJECTED
+    transfer.decided_by = approver
+    transfer.decided_at = timezone.now()
+    transfer.decision_comments = (comments or "").strip()
+    transfer.save()
+    create_audit_log_service(
+        actor=approver,
+        action=AuditLog.ACTION_REJECT,
+        target_model="BudgetTransfer",
+        target_object_id=transfer.id,
+        previous_state={"status": BudgetTransfer.STATUS_PENDING},
+        new_state={"status": transfer.status, "comments": transfer.decision_comments},
+    )
+    return transfer

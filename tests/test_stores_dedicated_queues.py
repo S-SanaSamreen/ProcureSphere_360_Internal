@@ -30,6 +30,7 @@ def dedicated_queues_setup(db, db_roles):
     )
 
     receiver = User.objects.create_user(
+        organization=org,
         email="stores_queue_officer@test.com",
         password="Password123!",
         role=db_roles[Role.STORES_RECEIVER],

@@ -107,12 +107,29 @@ def test_demo_2_pr_multi_level_approval_and_budget_reservation(db_roles):
     assert pr.status == PurchaseRequisition.STATUS_DRAFT
     assert pr.total_amount == Decimal("75000.00")
 
-    # 5. Submit PR -> Triggers Budget Reservation & Multi-Level Approval Route
+    # 5. Submit PR -> multi-level approval route; budget is only soft-checked (PRD 4.2)
     pr = submit_purchase_requisition_service(requisition=pr, user=requester_user)
 
     assert pr.status == PurchaseRequisition.STATUS_MANAGER_REVIEW
 
-    # 6. Verify Budget Reservation locked in PostgreSQL
+    # 6. Nothing is reserved at submit
+    budget.refresh_from_db()
+    assert budget.reserved_amount == Decimal("0.00")
+    assert not BudgetReservation.objects.filter(requisition=pr).exists()
+
+    # 7. Step 1 Approval (Dept Manager) -> Step 2 Approval (Procurement Manager, an optional
+    #    step a Super Admin configured in this policy; it is not Finance so still manager review)
+    pr = approve_purchase_requisition_service(
+        requisition=pr, approver=dept_mgr_user, comments="Step 1 Dept approval granted."
+    )
+    assert pr.status == PurchaseRequisition.STATUS_MANAGER_REVIEW
+
+    pr = approve_purchase_requisition_service(
+        requisition=pr, approver=proc_mgr_user, comments="Step 2 Proc Mgr approval granted."
+    )
+    assert pr.status == PurchaseRequisition.STATUS_APPROVED
+
+    # 7b. The reservation is locked when the final approval is given
     budget.refresh_from_db()
     assert budget.reserved_amount == Decimal("75000.00")
     assert budget.available_amount == Decimal("125000.00")
@@ -124,17 +141,6 @@ def test_demo_2_pr_multi_level_approval_and_budget_reservation(db_roles):
     ledger_entry = SpendLedger.objects.get(budget=budget, reference_number=pr.pr_number)
     assert ledger_entry.entry_type == SpendLedger.ENTRY_RESERVATION
     assert ledger_entry.amount == Decimal("75000.00")
-
-    # 7. Step 1 Approval (Dept Manager) -> Step 2 Approval (Procurement Manager)
-    pr = approve_purchase_requisition_service(
-        requisition=pr, approver=dept_mgr_user, comments="Step 1 Dept approval granted."
-    )
-    assert pr.status == PurchaseRequisition.STATUS_MANAGER_REVIEW
-
-    pr = approve_purchase_requisition_service(
-        requisition=pr, approver=proc_mgr_user, comments="Step 2 Proc Mgr approval granted."
-    )
-    assert pr.status == PurchaseRequisition.STATUS_APPROVED
 
     # 8. Verify Approval Actions & Audit Trail
     actions = ApprovalAction.objects.filter(target_object_id=pr.id).order_by("created_at")
@@ -216,4 +222,10 @@ def test_pr_creation_fails_when_budget_exceeded(db_roles):
 
     pr = submit_purchase_requisition_service(requisition=pr, user=user)
 
-    assert pr.status == PurchaseRequisition.STATUS_BUDGET_REVIEW
+    # soft check at submit: flagged OUT_OF_BUDGET but not blocked and nothing reserved
+    assert pr.status == PurchaseRequisition.STATUS_MANAGER_REVIEW
+    assert not BudgetReservation.objects.filter(requisition=pr).exists()
+    submit_action = ApprovalAction.objects.get(
+        target_object_id=pr.id, action=ApprovalAction.ACTION_SUBMIT
+    )
+    assert "OUT_OF_BUDGET" in submit_action.comments

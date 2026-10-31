@@ -16,16 +16,24 @@ from apps.approvals.models import ApprovalPolicy
 from apps.audit.models import AuditLog
 from apps.budgets.models import Budget
 from apps.core.superadmin_forms import (
-    BudgetAdminForm,
+    BusinessUnitAdminForm,
     CostCenterAdminForm,
     DepartmentAdminForm,
     FiscalPeriodAdminForm,
+    LocationAdminForm,
     OrganizationAdminForm,
     PolicyAdminForm,
     UserAdminForm,
 )
 from apps.notifications.email_service import send_user_welcome_email
-from apps.organization.models import CostCenter, Department, FiscalPeriod, Organization
+from apps.organization.models import (
+    BusinessUnit,
+    CostCenter,
+    Department,
+    FiscalPeriod,
+    Location,
+    Organization,
+)
 
 
 @login_required
@@ -42,11 +50,15 @@ def superadmin_home_view(request):
 
 
 def _is_super_admin(user):
-    return user.is_authenticated and (
-        user.is_superuser
-        or getattr(user, "role_code", None) == Role.SUPER_ADMIN
-        or (hasattr(user, "role") and user.role and user.role.code == Role.SUPER_ADMIN)
+    if not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    is_org_admin_role = getattr(user, "role_code", None) == Role.SUPER_ADMIN or (
+        hasattr(user, "role") and user.role and user.role.code == Role.SUPER_ADMIN
     )
+    # Only the platform superuser is organisation-less; an org admin must belong to an org.
+    return bool(is_org_admin_role and getattr(user, "effective_organization", None))
 
 
 def super_admin_required(view_func):
@@ -202,7 +214,9 @@ def user_create_view(request):
                     messages.success(request, "User account created successfully.")
                     messages.info(request, f"Welcome email sent successfully to {user.email}.")
                 elif email_status == "QUEUED":
-                    messages.success(request, "User created successfully. Welcome email queued for delivery.")
+                    messages.success(
+                        request, "User created successfully. Welcome email queued for delivery."
+                    )
                 else:
                     messages.warning(
                         request,
@@ -214,7 +228,9 @@ def user_create_view(request):
             return HttpResponse("<script>window.location.reload();</script>")
     else:
         form = UserAdminForm(request=request)
-    return render(request, "pages/dashboards/superadmin/user_form.html", {"form": form, "is_edit": False})
+    return render(
+        request, "pages/dashboards/superadmin/user_form.html", {"form": form, "is_edit": False}
+    )
 
 
 @login_required
@@ -228,7 +244,9 @@ def user_edit_view(request, user_id):
     user = get_object_or_404(User, pk=user_id)
     scoped_org = get_user_scoped_org(request.user)
     if scoped_org:
-        user_org_id = user.organization_id or (user.department.organization_id if user.department else None)
+        user_org_id = user.organization_id or (
+            user.department.organization_id if user.department else None
+        )
         if user_org_id != scoped_org.id:
             return HttpResponse(
                 "<div class='alert alert-danger m-3'>Permission Denied: You cannot modify users from another organization.</div>",
@@ -262,11 +280,19 @@ def user_edit_view(request, user_id):
                         request=request,
                     )
                     if email_status == "SENT":
-                        messages.info(request, f"Updated credentials email successfully sent to {user.email}.")
+                        messages.info(
+                            request, f"Updated credentials email successfully sent to {user.email}."
+                        )
                     elif email_status == "QUEUED":
-                        messages.info(request, f"Updated credentials email queued for delivery to {user.email}.")
+                        messages.info(
+                            request,
+                            f"Updated credentials email queued for delivery to {user.email}.",
+                        )
                     else:
-                        messages.warning(request, f"Credentials updated, but email could not be delivered: {email_error}")
+                        messages.warning(
+                            request,
+                            f"Credentials updated, but email could not be delivered: {email_error}",
+                        )
             elif send_email_flag:
                 # If send_welcome_email is checked but password was left blank,
                 # generate a fresh temporary password so valid credentials can be emailed to the user
@@ -280,11 +306,18 @@ def user_edit_view(request, user_id):
                     request=request,
                 )
                 if email_status == "SENT":
-                    messages.info(request, f"Login credentials email successfully sent to {user.email}.")
+                    messages.info(
+                        request, f"Login credentials email successfully sent to {user.email}."
+                    )
                 elif email_status == "QUEUED":
-                    messages.info(request, f"Login credentials email queued for delivery to {user.email}.")
+                    messages.info(
+                        request, f"Login credentials email queued for delivery to {user.email}."
+                    )
                 else:
-                    messages.warning(request, f"User saved, but credentials email could not be delivered: {email_error}")
+                    messages.warning(
+                        request,
+                        f"User saved, but credentials email could not be delivered: {email_error}",
+                    )
             else:
                 user.save()
 
@@ -312,7 +345,11 @@ def user_edit_view(request, user_id):
             return HttpResponse("<script>window.location.reload();</script>")
     else:
         form = UserAdminForm(instance=user, request=request)
-    return render(request, "pages/dashboards/superadmin/user_form.html", {"form": form, "is_edit": True, "user_obj": user})
+    return render(
+        request,
+        "pages/dashboards/superadmin/user_form.html",
+        {"form": form, "is_edit": True, "user_obj": user},
+    )
 
 
 @login_required
@@ -330,7 +367,9 @@ def user_resend_welcome_email_view(request, user_id):
     user = get_object_or_404(User, pk=user_id)
     scoped_org = get_user_scoped_org(request.user)
     if scoped_org:
-        user_org_id = user.organization_id or (user.department.organization_id if user.department else None)
+        user_org_id = user.organization_id or (
+            user.department.organization_id if user.department else None
+        )
         if user_org_id != scoped_org.id:
             return HttpResponse(
                 "<div class='alert alert-danger m-3'>Permission Denied: You cannot modify users from another organization.</div>",
@@ -385,6 +424,7 @@ def cost_center_options_view(request):
     if dept_id:
         try:
             import uuid
+
             uuid.UUID(dept_id)
             cost_centers = CostCenter.objects.filter(department_id=dept_id)
             scoped_org = get_user_scoped_org(request.user)
@@ -399,6 +439,7 @@ def cost_center_options_view(request):
         {"cost_centers": cost_centers},
     )
 
+
 def org_list_view(request):
     if not _is_super_admin(request.user):
         return HttpResponse(
@@ -408,7 +449,11 @@ def org_list_view(request):
     scoped_org = get_user_scoped_org(request.user)
     if scoped_org:
         orgs = Organization.objects.select_related("admin_user").filter(id=scoped_org.id)
-        departments = Department.objects.select_related("organization").filter(organization=scoped_org).order_by("name")
+        departments = (
+            Department.objects.select_related("organization")
+            .filter(organization=scoped_org)
+            .order_by("name")
+        )
         cost_centers = (
             CostCenter.objects.select_related("department", "manager")
             .filter(department__organization=scoped_org)
@@ -437,6 +482,7 @@ def org_list_view(request):
     if selected_dept:
         try:
             import uuid
+
             uuid.UUID(selected_dept)
             cost_centers = cost_centers.filter(department_id=selected_dept)
         except (ValueError, AttributeError):
@@ -494,22 +540,32 @@ def org_create_view(request):
                 actor=request.user,
             )
             admin_info = f" with Administrator '{admin_user.email}'" if admin_user else ""
-            messages.success(request, f"Organization '{org.name}' ({org.code}){admin_info} created successfully.")
+            messages.success(
+                request, f"Organization '{org.name}' ({org.code}){admin_info} created successfully."
+            )
             if admin_user and send_welcome_flag:
                 email_status = getattr(org, "_welcome_email_status", None)
                 if email_status == "SENT":
-                    messages.info(request, f"Login email and password successfully sent to {admin_user.email} via Brevo.")
+                    messages.info(
+                        request,
+                        f"Login email and password successfully sent to {admin_user.email} via Brevo.",
+                    )
                 elif email_status == "FAILED":
                     messages.warning(
                         request,
                         f"Administrator account created, but welcome email could not be sent: {getattr(org, '_welcome_email_error', 'mail server error')}",
                     )
             elif admin_user and not send_welcome_flag:
-                messages.info(request, f"Administrator account '{admin_user.email}' created (welcome email was skipped per checkbox).")
+                messages.info(
+                    request,
+                    f"Administrator account '{admin_user.email}' created (welcome email was skipped per checkbox).",
+                )
             return HttpResponse("<script>window.location.reload();</script>")
     else:
         form = OrganizationAdminForm()
-    return render(request, "pages/dashboards/superadmin/org_form.html", {"form": form, "is_edit": False})
+    return render(
+        request, "pages/dashboards/superadmin/org_form.html", {"form": form, "is_edit": False}
+    )
 
 
 @login_required
@@ -545,9 +601,13 @@ def org_edit_view(request, org_id):
                     admin_user_dropdown.organization = org
                     admin_user_dropdown.save(update_fields=["organization"])
 
-            if admin_email and (not org.admin_user or org.admin_user.email != admin_email.strip().lower()):
+            if admin_email and (
+                not org.admin_user or org.admin_user.email != admin_email.strip().lower()
+            ):
                 norm_email = admin_email.strip().lower()
-                role, _ = Role.objects.get_or_create(code=Role.SUPER_ADMIN, defaults={"name": "Super Admin"})
+                role, _ = Role.objects.get_or_create(
+                    code=Role.SUPER_ADMIN, defaults={"name": "Super Admin"}
+                )
                 user = User.objects.filter(email__iexact=norm_email).first()
                 if not user:
                     user = User.objects.create_user(
@@ -578,7 +638,9 @@ def org_edit_view(request, org_id):
             elif org.admin_user:
                 admin_first_name = form.cleaned_data.get("admin_first_name", "")
                 admin_last_name = form.cleaned_data.get("admin_last_name", "")
-                role, _ = Role.objects.get_or_create(code=Role.SUPER_ADMIN, defaults={"name": "Super Admin"})
+                role, _ = Role.objects.get_or_create(
+                    code=Role.SUPER_ADMIN, defaults={"name": "Super Admin"}
+                )
                 org.admin_user.role = role
                 org.admin_user.organization = org
                 org.admin_user.is_staff = True
@@ -598,7 +660,8 @@ def org_edit_view(request, org_id):
 
             send_welcome_flag = _should_send_welcome_email(
                 request,
-                default=bool(admin_password and admin_password.strip()) or form.cleaned_data.get("send_welcome_email", False),
+                default=bool(admin_password and admin_password.strip())
+                or form.cleaned_data.get("send_welcome_email", False),
             )
             if send_welcome_flag:
                 if not target_user and org.admin_user:
@@ -616,17 +679,30 @@ def org_edit_view(request, org_id):
                         request=request,
                     )
                     if email_status == "SENT":
-                        messages.info(request, f"Login email and password successfully sent to {target_user.email} via Brevo.")
+                        messages.info(
+                            request,
+                            f"Login email and password successfully sent to {target_user.email} via Brevo.",
+                        )
                     elif email_status == "QUEUED":
-                        messages.info(request, f"Credentials email queued for delivery to {target_user.email}.")
+                        messages.info(
+                            request,
+                            f"Credentials email queued for delivery to {target_user.email}.",
+                        )
                     else:
-                        messages.warning(request, f"Credentials updated, but email could not be delivered: {email_error}")
+                        messages.warning(
+                            request,
+                            f"Credentials updated, but email could not be delivered: {email_error}",
+                        )
 
             messages.success(request, f"Organization '{org.name}' updated successfully.")
             return HttpResponse("<script>window.location.reload();</script>")
     else:
         form = OrganizationAdminForm(instance=org)
-    return render(request, "pages/dashboards/superadmin/org_form.html", {"form": form, "is_edit": True, "org": org})
+    return render(
+        request,
+        "pages/dashboards/superadmin/org_form.html",
+        {"form": form, "is_edit": True, "org": org},
+    )
 
 
 @login_required
@@ -639,7 +715,9 @@ def org_detail_view(request, org_id):
             status=403,
         )
     org = get_object_or_404(
-        Organization.objects.select_related("admin_user").prefetch_related("departments", "departments__cost_centers"),
+        Organization.objects.select_related("admin_user").prefetch_related(
+            "departments", "departments__cost_centers"
+        ),
         pk=org_id,
     )
     departments_count = org.departments.count()
@@ -669,7 +747,9 @@ def org_resend_credentials_view(request, org_id):
             status=403,
         )
     if request.method != "POST":
-        return HttpResponse("<div class='alert alert-danger m-3'>Method not allowed.</div>", status=405)
+        return HttpResponse(
+            "<div class='alert alert-danger m-3'>Method not allowed.</div>", status=405
+        )
 
     org = get_object_or_404(Organization.objects.select_related("admin_user"), pk=org_id)
     if not org.admin_user:
@@ -708,11 +788,16 @@ def org_resend_credentials_view(request, org_id):
     )
 
     if email_status == "SENT":
-        messages.success(request, f"Login credentials and password successfully sent to {admin_user.email} via Brevo!")
+        messages.success(
+            request,
+            f"Login credentials and password successfully sent to {admin_user.email} via Brevo!",
+        )
     elif email_status == "QUEUED":
         messages.info(request, f"Credentials email queued for delivery to {admin_user.email}.")
     else:
-        messages.warning(request, f"Credentials updated, but Brevo email delivery failed: {email_error}")
+        messages.warning(
+            request, f"Credentials updated, but Brevo email delivery failed: {email_error}"
+        )
 
     return HttpResponse("<script>window.location.reload();</script>")
 
@@ -739,7 +824,9 @@ def org_delete_view(request, org_id):
     if request.method == "POST":
         from apps.organization.services import delete_organization_service
 
-        success, message = delete_organization_service(organization=org, actor=request.user, request=request)
+        success, message = delete_organization_service(
+            organization=org, actor=request.user, request=request
+        )
         if success:
             messages.success(request, message)
             if request.headers.get("HX-Request"):
@@ -766,11 +853,6 @@ def org_delete_view(request, org_id):
             "users_count": users_count,
         },
     )
-
-
-
-
-
 
 
 @login_required
@@ -813,7 +895,9 @@ def dept_create_view(request):
             return HttpResponse("<script>window.location.reload();</script>")
     else:
         form = DepartmentAdminForm(request=request)
-    return render(request, "pages/dashboards/superadmin/dept_form.html", {"form": form, "is_edit": False})
+    return render(
+        request, "pages/dashboards/superadmin/dept_form.html", {"form": form, "is_edit": False}
+    )
 
 
 @login_required
@@ -864,7 +948,11 @@ def dept_edit_view(request, dept_id):
             return HttpResponse("<script>window.location.reload();</script>")
     else:
         form = DepartmentAdminForm(instance=dept, request=request)
-    return render(request, "pages/dashboards/superadmin/dept_form.html", {"form": form, "is_edit": True, "dept": dept})
+    return render(
+        request,
+        "pages/dashboards/superadmin/dept_form.html",
+        {"form": form, "is_edit": True, "dept": dept},
+    )
 
 
 @login_required
@@ -1145,9 +1233,22 @@ def _get_scoped_audit_logs(request):
     logs = AuditLog.objects.select_related("actor").all().order_by("-timestamp")
     scoped_org = get_user_scoped_org(request.user)
     if scoped_org:
-        dept_ids = [str(x) for x in Department.objects.filter(organization=scoped_org).values_list("id", flat=True)]
-        cc_ids = [str(x) for x in CostCenter.objects.filter(department__organization=scoped_org).values_list("id", flat=True)]
-        user_ids = [str(x) for x in User.objects.filter(Q(organization=scoped_org) | Q(department__organization=scoped_org)).values_list("id", flat=True)]
+        dept_ids = [
+            str(x)
+            for x in Department.objects.filter(organization=scoped_org).values_list("id", flat=True)
+        ]
+        cc_ids = [
+            str(x)
+            for x in CostCenter.objects.filter(department__organization=scoped_org).values_list(
+                "id", flat=True
+            )
+        ]
+        user_ids = [
+            str(x)
+            for x in User.objects.filter(
+                Q(organization=scoped_org) | Q(department__organization=scoped_org)
+            ).values_list("id", flat=True)
+        ]
 
         logs = logs.filter(
             Q(actor__organization=scoped_org)
@@ -1177,50 +1278,22 @@ def audit_list_view(request):
     return render(request, "pages/dashboards/superadmin/audit.html", {"page_obj": page_obj})
 
 
+_BUDGET_DENIED = (
+    "<div class='alert alert-danger m-3'>Permission Denied: budget allocation is owned by "
+    "Finance/AP. The Super Admin configures fiscal periods and reads budgets (PRD 3.6).</div>"
+)
+
+
 @login_required
 @super_admin_required
 def budget_create_view(request):
-    if not _is_super_admin(request.user):
-        return HttpResponse(
-            "<div class='alert alert-danger m-3'>Permission Denied: Super Admin access required.</div>",
-            status=403,
-        )
-
-    if request.method == "POST":
-        form = BudgetAdminForm(request.POST, request=request)
-        if form.is_valid():
-            form.save()
-            return HttpResponse("<script>window.location.reload();</script>")
-    else:
-        form = BudgetAdminForm(request=request)
-    return render(request, "pages/dashboards/superadmin/budget_form.html", {"form": form, "is_edit": False})
+    return HttpResponse(_BUDGET_DENIED, status=403)
 
 
 @login_required
 @super_admin_required
 def budget_edit_view(request, budget_id):
-    if not _is_super_admin(request.user):
-        return HttpResponse(
-            "<div class='alert alert-danger m-3'>Permission Denied: Super Admin access required.</div>",
-            status=403,
-        )
-
-    budget = get_object_or_404(Budget, pk=budget_id)
-    scoped_org = get_user_scoped_org(request.user)
-    if scoped_org and budget.cost_center.department.organization_id != scoped_org.id:
-        return HttpResponse(
-            "<div class='alert alert-danger m-3'>Permission Denied: You cannot modify budgets of other organizations.</div>",
-            status=403,
-        )
-
-    if request.method == "POST":
-        form = BudgetAdminForm(request.POST, instance=budget, request=request)
-        if form.is_valid():
-            form.save()
-            return HttpResponse("<script>window.location.reload();</script>")
-    else:
-        form = BudgetAdminForm(instance=budget, request=request)
-    return render(request, "pages/dashboards/superadmin/budget_form.html", {"form": form, "is_edit": True, "budget": budget})
+    return HttpResponse(_BUDGET_DENIED, status=403)
 
 
 @login_required
@@ -1239,7 +1312,9 @@ def policy_create_view(request):
             return HttpResponse("<script>window.location.reload();</script>")
     else:
         form = PolicyAdminForm(request=request)
-    return render(request, "pages/dashboards/superadmin/policy_form.html", {"form": form, "is_edit": False})
+    return render(
+        request, "pages/dashboards/superadmin/policy_form.html", {"form": form, "is_edit": False}
+    )
 
 
 @login_required
@@ -1276,7 +1351,274 @@ def policy_edit_view(request, policy_id):
             return HttpResponse("<script>window.location.reload();</script>")
     else:
         form = PolicyAdminForm(instance=policy, request=request)
-    return render(request, "pages/dashboards/superadmin/policy_form.html", {"form": form, "is_edit": True, "policy": policy})
+    return render(
+        request,
+        "pages/dashboards/superadmin/policy_form.html",
+        {"form": form, "is_edit": True, "policy": policy},
+    )
+
+
+ORG_DASHBOARD_TABS = (
+    "overview",
+    "users",
+    "departments",
+    "prs",
+    "approvals",
+    "sourcing",
+    "vendors",
+    "orders",
+    "finance",
+    "audit",
+)
+
+
+def _org_audit_logs(org):
+    """Audit entries that belong to one organization (its people, structure and documents)."""
+    from apps.requisitions.models import PurchaseRequisition
+
+    user_ids = [
+        str(x)
+        for x in User.objects.filter(
+            Q(organization=org) | Q(department__organization=org)
+        ).values_list("id", flat=True)
+    ]
+    dept_ids = [str(x) for x in org.departments.values_list("id", flat=True)]
+    cc_ids = [
+        str(x)
+        for x in CostCenter.objects.filter(department__organization=org).values_list(
+            "id", flat=True
+        )
+    ]
+    pr_ids = [
+        str(x)
+        for x in PurchaseRequisition.objects.filter(department__organization=org).values_list(
+            "id", flat=True
+        )
+    ]
+    return (
+        AuditLog.objects.select_related("actor")
+        .filter(
+            Q(actor__organization=org)
+            | Q(actor__department__organization=org)
+            | Q(target_model="Organization", target_object_id=str(org.id))
+            | Q(target_model="Department", target_object_id__in=dept_ids)
+            | Q(target_model="CostCenter", target_object_id__in=cc_ids)
+            | Q(target_model="User", target_object_id__in=user_ids)
+            | Q(target_model="PurchaseRequisition", target_object_id__in=pr_ids)
+        )
+        .order_by("-timestamp")
+    )
+
+
+@login_required
+@super_admin_required
+def org_dashboard_view(request, org_id):
+    """
+    Operational dashboard for ONE organization: its people, structure, requisitions and
+    approvals, sourcing, vendors, orders, receipts, finance and audit trail. Everything shown
+    is filtered to this organization, so data from other tenants can never appear. A tenant
+    admin may only open their own organization.
+    """
+    from django.db.models import Sum
+
+    from apps.approvals.models import ApprovalAction
+    from apps.invoices.models import MatchException, SupplierInvoice
+    from apps.orders.models import PurchaseOrder
+    from apps.receipts.models import GoodsReceipt
+    from apps.requisitions.models import PurchaseRequisition
+    from apps.sourcing.models import SourcingEvent
+    from apps.vendors.models import Vendor
+
+    scoped_org = get_user_scoped_org(request.user)
+    if scoped_org and scoped_org.id != org_id:
+        return HttpResponse(
+            "<div class='alert alert-danger m-3'>Permission Denied: You cannot view other organizations.</div>",
+            status=403,
+        )
+    org = get_object_or_404(Organization.objects.select_related("admin_user"), pk=org_id)
+
+    active_tab = request.GET.get("tab", "overview")
+    if active_tab not in ORG_DASHBOARD_TABS:
+        active_tab = "overview"
+
+    # ---- people (filterable, paginated)
+    users_qs = (
+        User.objects.filter(Q(organization=org) | Q(department__organization=org))
+        .select_related("role", "department")
+        .distinct()
+        .order_by("email")
+    )
+    total_users_count = users_qs.count()
+    active_users_count = users_qs.filter(is_active=True).count()
+
+    q_user = (request.GET.get("q_user") or "").strip()
+    role_filter = (request.GET.get("role") or "").strip()
+    dept_filter = (request.GET.get("dept") or "").strip()
+    status_filter = (request.GET.get("status") or "").strip()
+    filtered_users = users_qs
+    if q_user:
+        filtered_users = filtered_users.filter(
+            Q(email__icontains=q_user)
+            | Q(first_name__icontains=q_user)
+            | Q(last_name__icontains=q_user)
+        )
+    if role_filter:
+        filtered_users = filtered_users.filter(role__code=role_filter)
+    if dept_filter:
+        filtered_users = filtered_users.filter(department_id=dept_filter)
+    if status_filter == "active":
+        filtered_users = filtered_users.filter(is_active=True)
+    elif status_filter == "inactive":
+        filtered_users = filtered_users.filter(is_active=False)
+    users_page_obj = Paginator(filtered_users, 10).get_page(request.GET.get("users_page"))
+
+    # ---- structure
+    departments = list(org.departments.prefetch_related("cost_centers").order_by("name"))
+    cost_centers_count = CostCenter.objects.filter(department__organization=org).count()
+
+    # ---- requisitions & approvals
+    prs_qs = (
+        PurchaseRequisition.objects.filter(department__organization=org)
+        .select_related("requester", "department", "cost_center")
+        .order_by("-created_at")
+    )
+    pending_statuses = [
+        PurchaseRequisition.STATUS_SUBMITTED,
+        PurchaseRequisition.STATUS_MANAGER_REVIEW,
+        PurchaseRequisition.STATUS_BUDGET_REVIEW,
+    ]
+    approved_statuses = [
+        PurchaseRequisition.STATUS_APPROVED,
+        PurchaseRequisition.STATUS_SOURCING,
+        PurchaseRequisition.STATUS_PO_ISSUED,
+        PurchaseRequisition.STATUS_COMPLETED,
+    ]
+    pr_ids = list(prs_qs.values_list("id", flat=True))
+    approval_actions = (
+        ApprovalAction.objects.select_related("actor")
+        .filter(
+            Q(target_model_name="PurchaseRequisition", target_object_id__in=pr_ids)
+            | Q(approval_request__department__organization=org)
+            | Q(approval_request__cost_center__department__organization=org)
+        )
+        .order_by("-created_at")
+        .distinct()[:100]
+    )
+
+    # ---- sourcing, vendors, orders, receipts
+    events_qs = (
+        SourcingEvent.objects.filter(
+            Q(requisition__department__organization=org) | Q(created_by__organization=org)
+        )
+        .select_related("requisition")
+        .distinct()
+        .order_by("-created_at")
+    )
+    live_event_statuses = [
+        SourcingEvent.STATUS_PUBLISHED,
+        SourcingEvent.STATUS_BID_WINDOW,
+        SourcingEvent.STATUS_TECHNICAL_REVIEW,
+        SourcingEvent.STATUS_COMMERCIAL_REVIEW,
+        SourcingEvent.STATUS_AWARD_APPROVAL,
+    ]
+    vendors_qs = (
+        Vendor.objects.filter(organization=org).select_related("category").order_by("legal_name")
+    )
+    pos_qs = (
+        PurchaseOrder.objects.filter(cost_center__department__organization=org)
+        .select_related("vendor", "cost_center")
+        .order_by("-created_at")
+    )
+    receipts_qs = (
+        GoodsReceipt.objects.filter(po__cost_center__department__organization=org)
+        .select_related("po")
+        .order_by("-created_at")
+    )
+
+    # ---- finance
+    budgets_qs = (
+        Budget.objects.filter(cost_center__department__organization=org)
+        .select_related("cost_center", "fiscal_period")
+        .order_by("cost_center__code")
+    )
+    totals = budgets_qs.aggregate(
+        allocated=Sum("allocated_amount"),
+        reserved=Sum("reserved_amount"),
+        committed=Sum("committed_amount"),
+        actual=Sum("actual_amount"),
+    )
+    allocated = totals["allocated"] or 0
+    reserved = totals["reserved"] or 0
+    committed = totals["committed"] or 0
+    actual = totals["actual"] or 0
+    invoices_qs = (
+        SupplierInvoice.objects.filter(po__cost_center__department__organization=org)
+        .select_related("vendor", "po")
+        .order_by("-created_at")
+    )
+    exceptions_qs = (
+        MatchException.objects.filter(invoice__po__cost_center__department__organization=org)
+        .select_related("invoice")
+        .order_by("-created_at")
+    )
+
+    context = {
+        "org": org,
+        "is_global_superadmin": not scoped_org,
+        "active_tab": active_tab,
+        # people
+        "roles": Role.objects.exclude(code=Role.VENDOR_USER).order_by("name"),
+        "users_page_obj": users_page_obj,
+        "q_user": q_user,
+        "role_filter": role_filter,
+        "dept_filter": dept_filter,
+        "status_filter": status_filter,
+        "total_users_count": total_users_count,
+        "active_users_count": active_users_count,
+        "inactive_users_count": total_users_count - active_users_count,
+        # structure
+        "departments": departments,
+        "departments_count": len(departments),
+        "cost_centers_count": cost_centers_count,
+        # requisitions & approvals
+        "prs": prs_qs[:100],
+        "total_prs_count": prs_qs.count(),
+        "pending_prs_count": prs_qs.filter(status__in=pending_statuses).count(),
+        "approved_prs_count": prs_qs.filter(status__in=approved_statuses).count(),
+        "rejected_prs_count": prs_qs.filter(status=PurchaseRequisition.STATUS_REJECTED).count(),
+        "approval_actions": approval_actions,
+        # sourcing
+        "sourcing_events": events_qs[:100],
+        "total_rfqs_count": events_qs.count(),
+        "active_rfqs_count": events_qs.filter(status__in=live_event_statuses).count(),
+        "awarded_rfqs_count": events_qs.filter(status=SourcingEvent.STATUS_AWARDED).count(),
+        # vendors
+        "vendors": vendors_qs[:100],
+        "total_vendors_count": vendors_qs.count(),
+        "active_vendors_count": vendors_qs.filter(status=Vendor.STATUS_ACTIVE).count(),
+        "kyc_review_vendors_count": vendors_qs.filter(
+            status__in=[Vendor.STATUS_SUBMITTED, Vendor.STATUS_KYC_REVIEW]
+        ).count(),
+        # orders & receipts
+        "purchase_orders": pos_qs[:100],
+        "total_pos_count": pos_qs.count(),
+        "receipts": receipts_qs[:50],
+        "total_receipts_count": receipts_qs.count(),
+        # finance
+        "budgets": budgets_qs,
+        "allocated_budget": allocated,
+        "committed_budget": committed,
+        "reserved_budget": reserved,
+        "actual_budget": actual,
+        "available_budget": allocated - reserved - committed - actual,
+        "invoices": invoices_qs[:50],
+        "total_invoices_count": invoices_qs.count(),
+        "exceptions": exceptions_qs[:50],
+        "pending_exceptions_count": exceptions_qs.filter(status=MatchException.STATUS_OPEN).count(),
+        # audit
+        "audit_logs": _org_audit_logs(org)[:100],
+    }
+    return render(request, "pages/dashboards/superadmin/org_dashboard.html", context)
 
 
 @login_required
@@ -1365,3 +1707,189 @@ def audit_export_view(request):
         return response
 
     return HttpResponse("Invalid format", status=400)
+
+
+# ---------------------------------------------------------------------------
+# Locations & Business Units, fiscal period open/close
+# ---------------------------------------------------------------------------
+_DENIED = "<div class='alert alert-danger m-3'>Permission Denied: {}</div>"
+
+
+def _master_scope(request):
+    """Returns (allowed, scoped_org). Fail-closed: org-less non-superusers get nothing."""
+    user = request.user
+    scoped_org = get_user_scoped_org(user)
+    if scoped_org is None and not user.is_superuser:
+        return False, None
+    return True, scoped_org
+
+
+def _master_state(obj, kind):
+    state = {
+        "code": obj.code,
+        "name": obj.name,
+        "organization": obj.organization.code,
+        "is_active": obj.is_active,
+    }
+    if kind == "Location":
+        state["address"] = obj.address
+    else:
+        state["parent"] = obj.parent.code if obj.parent_id else None
+    return state
+
+
+@login_required
+@super_admin_required
+def location_bu_list_view(request):
+    allowed, scoped_org = _master_scope(request)
+    locations = Location.objects.none()
+    business_units = BusinessUnit.objects.none()
+    if allowed:
+        locations = Location.objects.select_related("organization")
+        business_units = BusinessUnit.objects.select_related("organization", "parent")
+        if scoped_org:
+            locations = locations.filter(organization=scoped_org)
+            business_units = business_units.filter(organization=scoped_org)
+    return render(
+        request,
+        "pages/dashboards/superadmin/locations.html",
+        {
+            "locations": locations.order_by("name"),
+            "business_units": business_units.order_by("name"),
+            "scoped_org": scoped_org,
+        },
+    )
+
+
+def _master_form_view(request, *, kind, form_class, template, model, pk=None):
+    allowed, scoped_org = _master_scope(request)
+    if not allowed:
+        return HttpResponse(_DENIED.format("Organization assignment required."), status=403)
+    instance = None
+    if pk is not None:
+        instance = get_object_or_404(model.objects.select_related("organization"), pk=pk)
+        if scoped_org and instance.organization_id != scoped_org.id:
+            return HttpResponse(
+                _DENIED.format(f"You cannot modify {kind.lower()}s of other organizations."),
+                status=403,
+            )
+    old_state = _master_state(instance, kind) if instance else None
+    if request.method == "POST":
+        form = form_class(request.POST, instance=instance, request=request)
+        if form.is_valid():
+            obj = form.save(commit=False)
+            if scoped_org:
+                obj.organization = scoped_org
+            if instance is None and not obj.created_by_id:
+                obj.created_by = request.user
+            obj.save()
+
+            from apps.audit.services import create_audit_log_service
+
+            create_audit_log_service(
+                actor=request.user,
+                action=AuditLog.ACTION_UPDATE if instance else AuditLog.ACTION_CREATE,
+                target_model=kind,
+                target_object_id=str(obj.id),
+                previous_state=old_state,
+                new_state=_master_state(obj, kind),
+                ip_address=request.META.get("REMOTE_ADDR"),
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+            )
+            return HttpResponse("<script>window.location.reload();</script>")
+    else:
+        form = form_class(instance=instance, request=request)
+    return render(request, template, {"form": form, "is_edit": instance is not None})
+
+
+@login_required
+@super_admin_required
+def location_create_view(request):
+    return _master_form_view(
+        request,
+        kind="Location",
+        form_class=LocationAdminForm,
+        template="pages/dashboards/superadmin/location_form.html",
+        model=Location,
+    )
+
+
+@login_required
+@super_admin_required
+def location_edit_view(request, location_id):
+    return _master_form_view(
+        request,
+        kind="Location",
+        form_class=LocationAdminForm,
+        template="pages/dashboards/superadmin/location_form.html",
+        model=Location,
+        pk=location_id,
+    )
+
+
+@login_required
+@super_admin_required
+def business_unit_create_view(request):
+    return _master_form_view(
+        request,
+        kind="BusinessUnit",
+        form_class=BusinessUnitAdminForm,
+        template="pages/dashboards/superadmin/business_unit_form.html",
+        model=BusinessUnit,
+    )
+
+
+@login_required
+@super_admin_required
+def business_unit_edit_view(request, bu_id):
+    return _master_form_view(
+        request,
+        kind="BusinessUnit",
+        form_class=BusinessUnitAdminForm,
+        template="pages/dashboards/superadmin/business_unit_form.html",
+        model=BusinessUnit,
+        pk=bu_id,
+    )
+
+
+@login_required
+@super_admin_required
+def fiscal_period_toggle_view(request, period_id):
+    """Open or close a fiscal period (POST only). Closing blocks new budget postings."""
+    if request.method != "POST":
+        return HttpResponse(status=405)
+    allowed, scoped_org = _master_scope(request)
+    if not allowed:
+        return HttpResponse(_DENIED.format("Organization assignment required."), status=403)
+    period = get_object_or_404(FiscalPeriod, pk=period_id)
+    if scoped_org and period.organization_id != scoped_org.id:
+        return HttpResponse(
+            _DENIED.format("You cannot modify fiscal periods of other organizations."),
+            status=403,
+        )
+    target_closed = request.POST.get("action") == "close"
+    if period.is_closed != target_closed:
+        previous = {"is_closed": period.is_closed}
+        period.is_closed = target_closed
+        period.save(update_fields=["is_closed", "updated_at"])
+
+        from apps.audit.services import create_audit_log_service
+
+        create_audit_log_service(
+            actor=request.user,
+            action=AuditLog.ACTION_UPDATE,
+            target_model="FiscalPeriod",
+            target_object_id=str(period.id),
+            previous_state=previous,
+            new_state={
+                "is_closed": period.is_closed,
+                "event": "period_closed" if target_closed else "period_reopened",
+                "name": period.name,
+            },
+            ip_address=request.META.get("REMOTE_ADDR"),
+            user_agent=request.META.get("HTTP_USER_AGENT", ""),
+        )
+        messages.success(
+            request, f"Fiscal period '{period.name}' {'closed' if target_closed else 'reopened'}."
+        )
+    return redirect("/superadmin/budgets/")

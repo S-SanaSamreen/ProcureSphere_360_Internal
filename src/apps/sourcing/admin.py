@@ -37,7 +37,9 @@ class SourcingEventAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
-            return qs.filter(requisition__department__organization=request.user.effective_organization)
+            return qs.filter(
+                requisition__department__organization=request.user.effective_organization
+            )
         return qs
 
 
@@ -85,7 +87,9 @@ class VendorBidAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
-            return qs.filter(event__requisition__department__organization=request.user.effective_organization)
+            return qs.filter(
+                event__requisition__department__organization=request.user.effective_organization
+            )
         return qs
 
 
@@ -109,7 +113,9 @@ class ClarificationAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
-            return qs.filter(event__requisition__department__organization=request.user.effective_organization)
+            return qs.filter(
+                event__requisition__department__organization=request.user.effective_organization
+            )
         return qs
 
 
@@ -127,7 +133,9 @@ class BidEvaluationAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
-            return qs.filter(event__requisition__department__organization=request.user.effective_organization)
+            return qs.filter(
+                event__requisition__department__organization=request.user.effective_organization
+            )
         return qs
 
 
@@ -148,5 +156,7 @@ class AwardDecisionAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
-            return qs.filter(event__requisition__department__organization=request.user.effective_organization)
+            return qs.filter(
+                event__requisition__department__organization=request.user.effective_organization
+            )
         return qs

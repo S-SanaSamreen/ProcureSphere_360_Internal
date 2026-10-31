@@ -10,35 +10,50 @@ class BaseTenantAdmin(admin.ModelAdmin):
     def has_module_permission(self, request):
         if not request.user or not request.user.is_authenticated or not request.user.is_staff:
             return False
-        if request.user.is_superuser or getattr(request.user, "role_code", None) == Role.SUPER_ADMIN:
+        if (
+            request.user.is_superuser
+            or getattr(request.user, "role_code", None) == Role.SUPER_ADMIN
+        ):
             return True
         return super().has_module_permission(request)
 
     def has_view_permission(self, request, obj=None):
         if not request.user or not request.user.is_authenticated or not request.user.is_staff:
             return False
-        if request.user.is_superuser or getattr(request.user, "role_code", None) == Role.SUPER_ADMIN:
+        if (
+            request.user.is_superuser
+            or getattr(request.user, "role_code", None) == Role.SUPER_ADMIN
+        ):
             return True
         return super().has_view_permission(request, obj)
 
     def has_change_permission(self, request, obj=None):
         if not request.user or not request.user.is_authenticated or not request.user.is_staff:
             return False
-        if request.user.is_superuser or getattr(request.user, "role_code", None) == Role.SUPER_ADMIN:
+        if (
+            request.user.is_superuser
+            or getattr(request.user, "role_code", None) == Role.SUPER_ADMIN
+        ):
             return True
         return super().has_change_permission(request, obj)
 
     def has_add_permission(self, request):
         if not request.user or not request.user.is_authenticated or not request.user.is_staff:
             return False
-        if request.user.is_superuser or getattr(request.user, "role_code", None) == Role.SUPER_ADMIN:
+        if (
+            request.user.is_superuser
+            or getattr(request.user, "role_code", None) == Role.SUPER_ADMIN
+        ):
             return True
         return super().has_add_permission(request)
 
     def has_delete_permission(self, request, obj=None):
         if not request.user or not request.user.is_authenticated or not request.user.is_staff:
             return False
-        if request.user.is_superuser or getattr(request.user, "role_code", None) == Role.SUPER_ADMIN:
+        if (
+            request.user.is_superuser
+            or getattr(request.user, "role_code", None) == Role.SUPER_ADMIN
+        ):
             return True
         return super().has_delete_permission(request, obj)
 
@@ -175,5 +190,3 @@ class VendorRiskRecordAdmin(BaseTenantAdmin):
         if request.user.is_superuser:
             return qs
         return qs.none()
-
-

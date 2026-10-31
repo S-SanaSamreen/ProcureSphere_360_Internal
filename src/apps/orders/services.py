@@ -5,6 +5,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.accounts.models import Role, User
+from apps.accounts.permissions import forbid_non_transacting_actor
 from apps.approvals import engine as approval_engine
 from apps.approvals.models import ApprovalPolicy, ApprovalRequest
 from apps.audit.models import AuditLog
@@ -65,17 +66,21 @@ def _notify_request_approvers(request, *, notification_type, title, message, tar
             role_codes=[Role.SUPER_ADMIN],
             notification_type=notification_type,
             title=f"No eligible approver: {title}",
-            message=message + " No user currently holds the authority (role / limit) for this step.",
+            message=message
+            + " No user currently holds the authority (role / limit) for this step. "
+            "Fix the approval policy or the users' roles/limits.",
             target_url=target_url,
         )
 
 
 def _assert_legacy_po_approver(user: User):
-    """No PO policy requires approval: the historical rule (Procurement Manager / Super Admin)."""
-    role_code = getattr(user, "role_code", None) or (user.role.code if getattr(user, "role", None) else None)
-    if not (getattr(user, "is_superuser", False) or role_code in (Role.PROC_MGR, Role.SUPER_ADMIN)):
+    """No PO policy requires approval: the historical rule (Procurement Manager only)."""
+    role_code = getattr(user, "role_code", None) or (
+        user.role.code if getattr(user, "role", None) else None
+    )
+    if role_code != Role.PROC_MGR or getattr(user, "is_superuser", False):
         raise ValidationError(
-            "Permission Denied: Only Procurement Managers or Super Admin can approve purchase orders."
+            "Permission Denied: Only Procurement Managers can approve purchase orders."
         )
 
 
@@ -112,6 +117,7 @@ def generate_purchase_order_service(
     commitment is refused if it would overspend the budget (see commit_po_budget_service).
     ``tax_rate`` defaults to settings.DEFAULT_PO_TAX_RATE and is stored on the PO.
     """
+    forbid_non_transacting_actor(created_by_user, "create purchase orders")
     from apps.orders.models import default_po_tax_rate
 
     tax_rate = default_po_tax_rate() if tax_rate is None else Decimal(str(tax_rate))
@@ -148,9 +154,13 @@ def generate_purchase_order_service(
         qty = Decimal(str(item["quantity"]))
         unit_price = Decimal(str(item["unit_price"]))
         if qty <= Decimal("0.00"):
-            raise ValidationError(f"Quantity for line item '{item.get('item_description', '')}' must be positive.")
+            raise ValidationError(
+                f"Quantity for line item '{item.get('item_description', '')}' must be positive."
+            )
         if unit_price < Decimal("0.00"):
-            raise ValidationError(f"Unit price for line item '{item.get('item_description', '')}' cannot be negative.")
+            raise ValidationError(
+                f"Unit price for line item '{item.get('item_description', '')}' cannot be negative."
+            )
 
         line = POLine.objects.create(
             po=po,
@@ -249,9 +259,7 @@ def acknowledge_purchase_order_service(
     Vendor acknowledges an issued PO. Transitions status to ACKNOWLEDGED.
     """
     if po.status != PurchaseOrder.STATUS_ISSUED:
-        raise ValidationError(
-            f"Cannot acknowledge PO in status '{po.status}'. Must be ISSUED."
-        )
+        raise ValidationError(f"Cannot acknowledge PO in status '{po.status}'. Must be ISSUED.")
 
     previous_status = po.status
     po.status = PurchaseOrder.STATUS_ACKNOWLEDGED
@@ -295,7 +303,7 @@ def acknowledge_purchase_order_service(
         )
 
     notify_role_users(
-        role_codes=[Role.PROC_EXEC, Role.PROC_MGR, Role.SUPER_ADMIN],
+        role_codes=[Role.PROC_EXEC, Role.PROC_MGR],
         notification_type=Notification.TYPE_PO_ACKNOWLEDGED,
         title=f"PO Acknowledged: {po.po_number}",
         message=f"Purchase Order {po.po_number} has been acknowledged by {vendor_user.get_full_name() or vendor_user.email} from {po.vendor.legal_name}.",
@@ -335,12 +343,17 @@ def request_po_amendment_service(
     - Sets PO status to AMENDMENT_PENDING.
     - Creates POAmendment in PENDING state awaiting managerial approval.
     """
+    forbid_non_transacting_actor(requested_by_user, "amend purchase orders")
     if not reason or not str(reason).strip():
         raise ValidationError("Amendment justification reason is required.")
 
     tax_rate = po.tax_rate if tax_rate is None else Decimal(str(tax_rate))
 
-    if po.status in (PurchaseOrder.STATUS_CANCELLED, PurchaseOrder.STATUS_DRAFT, PurchaseOrder.STATUS_COMPLETED):
+    if po.status in (
+        PurchaseOrder.STATUS_CANCELLED,
+        PurchaseOrder.STATUS_DRAFT,
+        PurchaseOrder.STATUS_COMPLETED,
+    ):
         raise ValidationError(
             f"Purchase orders in '{po.get_status_display()}' status cannot be amended."
         )
@@ -356,22 +369,15 @@ def request_po_amendment_service(
         )
 
     role_code = getattr(requested_by_user, "role_code", None) or (
-        requested_by_user.role.code
-        if getattr(requested_by_user, "role", None)
-        else None
+        requested_by_user.role.code if getattr(requested_by_user, "role", None) else None
     )
-    if not (
-        getattr(requested_by_user, "is_superuser", False)
-        or role_code in (Role.PROC_EXEC, Role.PROC_MGR, Role.SUPER_ADMIN)
-    ):
+    if role_code not in (Role.PROC_EXEC, Role.PROC_MGR):
         raise ValidationError(
-            "Permission Denied: Only procurement roles or Super Admin can amend purchase orders."
+            "Permission Denied: Only procurement roles can amend purchase orders."
         )
 
     if po.amendments.filter(status=POAmendment.STATUS_PENDING).exists():
-        raise ValidationError(
-            "A pending amendment already exists for this purchase order."
-        )
+        raise ValidationError("A pending amendment already exists for this purchase order.")
 
     # 1. Take JSON snapshot of previous version
     snapshot = {
@@ -466,9 +472,7 @@ def request_po_amendment_service(
     # Guard against removing lines referenced by goods receipts
     for line in existing_lines:
         if line.id not in matched_line_ids:
-            has_receipts = (
-                line.quantity_received > Decimal("0.00") or line.receipt_lines.exists()
-            )
+            has_receipts = line.quantity_received > Decimal("0.00") or line.receipt_lines.exists()
             if has_receipts:
                 raise ValidationError(
                     f"Cannot delete line '{line.item_description}' referenced by goods receipts."
@@ -564,6 +568,7 @@ def approve_po_amendment_service(
     - Transitions PO to ISSUED and resets vendor acknowledgement to mandate re-acknowledgement.
     - Emits formal notification to vendor to re-acknowledge amended order.
     """
+    forbid_non_transacting_actor(approver, "approve PO amendments")
     if amendment.status != POAmendment.STATUS_PENDING:
         raise ValidationError(
             f"Amendment #{amendment.amendment_number} is in '{amendment.status}' state and cannot be approved."
@@ -588,7 +593,10 @@ def approve_po_amendment_service(
         request=request,
         actor=approver,
         comments=comments,
-        states=("AMENDMENT_PENDING", "AMENDMENT_APPROVED" if is_final_step else "AMENDMENT_PENDING"),
+        states=(
+            "AMENDMENT_PENDING",
+            "AMENDMENT_APPROVED" if is_final_step else "AMENDMENT_PENDING",
+        ),
     )
     if request.status != ApprovalRequest.STATUS_APPROVED:
         step = request.active_step
@@ -665,9 +673,7 @@ def approve_po_amendment_service(
     # Guard against removing lines referenced by receipts
     for line in existing_lines:
         if line.id not in matched_line_ids:
-            has_receipts = (
-                line.quantity_received > Decimal("0.00") or line.receipt_lines.exists()
-            )
+            has_receipts = line.quantity_received > Decimal("0.00") or line.receipt_lines.exists()
             if has_receipts:
                 raise ValidationError(
                     f"Cannot delete line '{line.item_description}' referenced by goods receipts."
@@ -675,12 +681,8 @@ def approve_po_amendment_service(
             line.delete()
 
     subtotal_val = Decimal(str(proposed_changes.get("subtotal", subtotal)))
-    tax_val = Decimal(
-        str(proposed_changes.get("tax_amount", subtotal * po.tax_rate))
-    )
-    total_val = Decimal(
-        str(proposed_changes.get("total_amount", subtotal_val + tax_val))
-    )
+    tax_val = Decimal(str(proposed_changes.get("tax_amount", subtotal * po.tax_rate)))
+    total_val = Decimal(str(proposed_changes.get("total_amount", subtotal_val + tax_val)))
     diff = amendment.delta_amount
 
     # Update PO version, values, and reset vendor acknowledgement
@@ -710,9 +712,7 @@ def approve_po_amendment_service(
     # been consumed since the amendment was requested)
     if diff != Decimal("0.00"):
         budget = (
-            _assert_amendment_fits_budget(po, diff)
-            if diff > Decimal("0.00")
-            else get_po_budget(po)
+            _assert_amendment_fits_budget(po, diff) if diff > Decimal("0.00") else get_po_budget(po)
         )
         post_ledger_entry_service(
             budget=budget,
@@ -809,6 +809,7 @@ def reject_po_amendment_service(
     - Marks amendment as REJECTED with rejection note.
     - Notifies requester of rejection reason.
     """
+    forbid_non_transacting_actor(rejector, "reject PO amendments")
     if amendment.status != POAmendment.STATUS_PENDING:
         raise ValidationError(
             f"Amendment #{amendment.amendment_number} is in '{amendment.status}' state and cannot be rejected."
@@ -918,22 +919,18 @@ def amend_purchase_order_service(
     if auto_approve:
         eff_approver = approver
         if not eff_approver:
-            if getattr(requested_by_user, "is_superuser", False):
-                eff_approver = requested_by_user
-            else:
-                eff_approver = (
-                    User.objects.filter(role__code=Role.PROC_MGR, is_active=True)
-                    .exclude(id=requested_by_user.id)
-                    .first()
+            eff_approver = (
+                User.objects.filter(role__code=Role.PROC_MGR, is_active=True)
+                .exclude(id=requested_by_user.id)
+                .first()
+            )
+            if not eff_approver:
+                eff_approver = User.objects.create_user(
+                    email=f"system.manager.{po.id.hex[:6]}@procuresphere.com",
+                    role=Role.objects.filter(code=Role.PROC_MGR).first() or requested_by_user.role,
+                    first_name="System",
+                    last_name="Manager",
                 )
-                if not eff_approver:
-                    eff_approver = User.objects.create_user(
-                        email=f"system.manager.{po.id.hex[:6]}@procuresphere.com",
-                        role=Role.objects.filter(code=Role.PROC_MGR).first()
-                        or requested_by_user.role,
-                        first_name="System",
-                        last_name="Manager",
-                    )
         approve_po_amendment_service(amendment=amendment, approver=eff_approver)
         po.refresh_from_db()
 
@@ -951,6 +948,7 @@ def cancel_purchase_order_governance_service(
     - Creates a reversal SpendLedger entry.
     - Records an append-only AuditLog entry.
     """
+    forbid_non_transacting_actor(actor, "cancel purchase orders")
     if not reason or not str(reason).strip():
         raise ValidationError("Cancellation reason / justification is mandatory.")
 
@@ -958,9 +956,7 @@ def cancel_purchase_order_governance_service(
         raise ValidationError(f"Purchase Order {po.po_number} is already cancelled.")
 
     if po.status == PurchaseOrder.STATUS_COMPLETED:
-        raise ValidationError(
-            f"Cannot cancel completed/fulfilled Purchase Order {po.po_number}."
-        )
+        raise ValidationError(f"Cannot cancel completed/fulfilled Purchase Order {po.po_number}.")
 
     previous_status = po.status
     po.status = PurchaseOrder.STATUS_CANCELLED
@@ -969,7 +965,9 @@ def cancel_purchase_order_governance_service(
 
     # A cancelled PO must leave nothing waiting for approval (itself, a pending amendment, or a
     # budget exception for it).
-    approval_engine.cancel_pending_request(ApprovalPolicy.MODULE_PO, po, actor=actor, reason="PO cancelled")
+    approval_engine.cancel_pending_request(
+        ApprovalPolicy.MODULE_PO, po, actor=actor, reason="PO cancelled"
+    )
     approval_engine.cancel_pending_request(
         ApprovalPolicy.MODULE_BUDGET_EXCEPTION, po, actor=actor, reason="PO cancelled"
     )
@@ -987,9 +985,7 @@ def cancel_purchase_order_governance_service(
         if line.quantity_received:
             total_received_value += line.quantity_received * line.unit_price
 
-    unfulfilled_commitment = max(
-        Decimal("0.00"), po.total_amount - total_received_value
-    )
+    unfulfilled_commitment = max(Decimal("0.00"), po.total_amount - total_received_value)
 
     # Only release what this PO actually committed (a never-issued DRAFT/APPROVAL PO has none)
     budget = get_po_budget(po, required=False)
@@ -1025,13 +1021,12 @@ def cancel_purchase_order_governance_service(
 
 
 @transaction.atomic
-def submit_purchase_order_for_approval_service(
-    *, po: PurchaseOrder, actor: User
-) -> PurchaseOrder:
+def submit_purchase_order_for_approval_service(*, po: PurchaseOrder, actor: User) -> PurchaseOrder:
     """
     Submits a draft PO for managerial review and approval.
     Transitions DRAFT -> APPROVAL.
     """
+    forbid_non_transacting_actor(actor, "submit purchase orders")
     if po.status != PurchaseOrder.STATUS_DRAFT:
         raise ValidationError(
             f"Cannot submit PO in status '{po.status}' for approval. Must be DRAFT."
@@ -1069,6 +1064,7 @@ def approve_purchase_order_service(
     Approves a PO and transitions to ISSUED state.
     Commits funds against the designated Cost Center budget.
     """
+    forbid_non_transacting_actor(approver, "approve or issue purchase orders")
     if po.status not in [PurchaseOrder.STATUS_DRAFT, PurchaseOrder.STATUS_APPROVAL]:
         raise ValidationError(
             f"Cannot approve PO in status '{po.status}'. Must be DRAFT or APPROVAL."
@@ -1090,7 +1086,10 @@ def approve_purchase_order_service(
             request=request,
             actor=approver,
             comments=comments,
-            states=(po.status, PurchaseOrder.STATUS_ISSUED if is_final_step else PurchaseOrder.STATUS_APPROVAL),
+            states=(
+                po.status,
+                PurchaseOrder.STATUS_ISSUED if is_final_step else PurchaseOrder.STATUS_APPROVAL,
+            ),
         )
         if request.status != ApprovalRequest.STATUS_APPROVED:
             if po.status != PurchaseOrder.STATUS_APPROVAL:
@@ -1136,18 +1135,20 @@ def reject_purchase_order_service(
     """
     Rejects a PO in approval, returning it to DRAFT state.
     """
+    forbid_non_transacting_actor(approver, "reject purchase orders")
     if not reason:
         raise ValidationError("Rejection reason is required.")
 
     if po.status != PurchaseOrder.STATUS_APPROVAL:
-        raise ValidationError(
-            f"Cannot reject PO in status '{po.status}'. Must be APPROVAL."
-        )
+        raise ValidationError(f"Cannot reject PO in status '{po.status}'. Must be APPROVAL.")
 
     request = approval_engine.get_pending_request(ApprovalPolicy.MODULE_PO, po)
     if request is not None:
         approval_engine.reject_request(
-            request=request, actor=approver, comments=reason, states=(po.status, PurchaseOrder.STATUS_DRAFT)
+            request=request,
+            actor=approver,
+            comments=reason,
+            states=(po.status, PurchaseOrder.STATUS_DRAFT),
         )
     else:
         _assert_legacy_po_approver(approver)
@@ -1211,6 +1212,7 @@ def decide_po_budget_exception_service(
     *, po: PurchaseOrder, actor: User, approve: bool, comments: str = ""
 ) -> ApprovalRequest:
     """Approve (next step of) or reject the pending budget exception for a PO."""
+    forbid_non_transacting_actor(actor, "decide PO budget exceptions")
     request = approval_engine.get_pending_request(ApprovalPolicy.MODULE_BUDGET_EXCEPTION, po)
     if request is None:
         raise ValidationError(f"There is no pending budget exception for PO {po.po_number}.")

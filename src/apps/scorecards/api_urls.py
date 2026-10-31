@@ -55,7 +55,13 @@ class VendorScorecardSerializer(serializers.ModelSerializer):
             "quality_score",
             "price_score",
             "compliance_score",
+            "responsiveness_score",
+            "sla_score",
             "composite_score",
+            "rating_band",
+            "weights_used",
+            "period_start",
+            "period_end",
             "performance_status",
             "evaluator_comments",
             "evaluated_by",
@@ -63,6 +69,7 @@ class VendorScorecardSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        read_only_fields = ["rating_band", "weights_used", "period_start", "period_end"]
 
     def validate(self, attrs):
         score_fields = [
@@ -114,6 +121,9 @@ class VendorScorecardViewSet(viewsets.ModelViewSet):
                 return qs.filter(vendor_id=user.vendor_id)
             return qs.none()
 
+        from apps.core.tenancy import scope_scorecards
+
+        qs = scope_scorecards(qs, user)
         vendor_id = self.request.query_params.get("vendor_id")
         if vendor_id:
             qs = qs.filter(vendor_id=vendor_id)
@@ -233,7 +243,9 @@ class VendorScorecardViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            vendor = Vendor.objects.get(pk=vendor_id)
+            from apps.vendors.selectors import scope_vendors_queryset
+
+            vendor = scope_vendors_queryset(Vendor.objects.all(), request.user).get(pk=vendor_id)
         except (Vendor.DoesNotExist, Exception):
             return Response(
                 {

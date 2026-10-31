@@ -7,7 +7,9 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
+from apps.core.tenancy import scope_scorecards
 from apps.vendors.models import Vendor
+from apps.vendors.selectors import scope_vendors_queryset
 
 from .permissions import can_calculate_scorecards, can_view_scorecards
 from .services import calculate_vendor_scorecard_service, latest_scorecards_queryset
@@ -29,7 +31,7 @@ def scorecard_list_view(request):
     if not can_view_scorecards(request.user):
         raise PermissionDenied("Supplier scorecards are restricted to internal procurement roles.")
 
-    qs = latest_scorecards_queryset()
+    qs = scope_scorecards(latest_scorecards_queryset(), request.user)
     q = request.GET.get("q", "").strip()
     if q:
         qs = qs.filter(Q(vendor__legal_name__icontains=q) | Q(vendor__vendor_number__icontains=q))
@@ -40,6 +42,8 @@ def scorecard_list_view(request):
         qs = qs.filter(composite_score__gte=70, composite_score__lt=85)
     elif band == "good":
         qs = qs.filter(composite_score__gte=85)
+    elif band in ("A", "B", "C", "D"):
+        qs = qs.filter(rating_band=band)
     sort = request.GET.get("sort", "score_desc")
     qs = qs.order_by(*SORTS.get(sort, SORTS["score_desc"]))
 
@@ -59,7 +63,9 @@ def scorecard_list_view(request):
             "sort": sort,
             "can_calculate": can_calculate,
             "vendors": (
-                Vendor.objects.exclude(status=Vendor.STATUS_DRAFT).order_by("legal_name")
+                scope_vendors_queryset(
+                    Vendor.objects.exclude(status=Vendor.STATUS_DRAFT), request.user
+                ).order_by("legal_name")
                 if can_calculate
                 else []
             ),
@@ -72,7 +78,8 @@ def scorecard_list_view(request):
 def scorecard_calculate_view(request):
     if not can_calculate_scorecards(request.user):
         raise PermissionDenied("Your role cannot calculate supplier scorecards.")
-    vendor = get_object_or_404(Vendor, pk=request.POST.get("vendor_id"))
+    vendors = scope_vendors_queryset(Vendor.objects.all(), request.user)
+    vendor = get_object_or_404(vendors, pk=request.POST.get("vendor_id"))
     try:
         card = calculate_vendor_scorecard_service(
             vendor=vendor,

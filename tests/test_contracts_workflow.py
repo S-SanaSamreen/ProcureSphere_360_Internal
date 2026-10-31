@@ -23,6 +23,7 @@ from apps.contracts.services import (
 )
 from apps.vendors.models import VendorCategory
 from apps.vendors.services import register_vendor_service
+from tests.org_helpers import create_org_user
 
 
 def _get_or_create_role(code, name):
@@ -38,7 +39,7 @@ def _get_or_create_role(code, name):
 def _get_or_create_user(email, password, role):
     user = User.objects.filter(email=email).first()
     if not user:
-        user = User.objects.create_user(email=email, password=password, role=role)
+        user = create_org_user(email=email, password=password, role=role)
     else:
         if role:
             user.role = role
@@ -284,9 +285,9 @@ def test_contract_document_vault_upload_and_validation(client, contract_setup):
     # 3. REST API upload endpoint
     client.force_login(legal_user)
     api_file = SimpleUploadedFile(
-        "sow_appendix.docx",
-        b"dummy word content",
-        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "sow_appendix.pdf",
+        b"%PDF-1.4 dummy sow appendix content",
+        content_type="application/pdf",
     )
     response = client.post(
         f"/api/v1/contracts/{contract.id}/upload-document/",
@@ -313,7 +314,7 @@ def test_full_contract_lifecycle_view_and_api_workflow(client, contract_setup):
     requester_user = contract_setup["requester_user"]
 
     auditor_role, _ = Role.objects.get_or_create(code=Role.AUDITOR, defaults={"name": "Auditor"})
-    auditor_user = User.objects.create_user(
+    auditor_user = create_org_user(
         email="auditor.d15@hpe.com", password="Password123!", role=auditor_role
     )
 
@@ -572,7 +573,7 @@ def test_contract_obligations_milestones_and_document_evidence(client, contract_
 
     # Create Auditor user
     auditor_role = _get_or_create_role(Role.AUDITOR, "Auditor")
-    auditor_user = User.objects.create_user(
+    auditor_user = create_org_user(
         email="auditor@hpe.com", password="Password123!", role=auditor_role
     )
 
@@ -646,7 +647,9 @@ def test_contract_obligations_milestones_and_document_evidence(client, contract_
 
     # 3. Upload Contract Document Evidence
     sample_file = SimpleUploadedFile(
-        "executed_msa_agreement.pdf", b"PDF Document Content Bytes", content_type="application/pdf"
+        "executed_msa_agreement.pdf",
+        b"%PDF-1.4 PDF Document Content Bytes",
+        content_type="application/pdf",
     )
     resp = client.post(
         reverse("contract_document_upload", kwargs={"contract_id": contract.id}),
@@ -772,7 +775,7 @@ def test_day20_legal_rbac_contract_access_and_restricted_actions(client, contrac
     auditor_role = _get_or_create_role(Role.AUDITOR, "Auditor")
     vendor_role = _get_or_create_role(Role.VENDOR_USER, "Vendor User")
 
-    auditor_user = User.objects.create_user(
+    auditor_user = create_org_user(
         email="auditor.d20@hpe.com", password="Password123!", role=auditor_role
     )
 
@@ -785,13 +788,13 @@ def test_day20_legal_rbac_contract_access_and_restricted_actions(client, contrac
         address="300 Apex Tower",
     )
 
-    vendor_user1 = User.objects.create_user(
+    vendor_user1 = create_org_user(
         email="vendor1.d20@hpe.com",
         password="Password123!",
         role=vendor_role,
         vendor=contract_setup["vendor"],
     )
-    vendor_user2 = User.objects.create_user(
+    vendor_user2 = create_org_user(
         email="vendor2.d20@hpe.com", password="Password123!", role=vendor_role, vendor=vendor2
     )
 
@@ -858,10 +861,12 @@ def test_day20_legal_rbac_contract_access_and_restricted_actions(client, contrac
 
     # 3. Vendor User Scoping
     client.force_login(vendor_user1)
-    api_list = client.get("/api/v1/contracts/").json()
-    results = api_list.get("results", api_list) if isinstance(api_list, dict) else api_list
-    contract_ids = [c["id"] for c in results if isinstance(c, dict) and "id" in c]
-    assert str(contract.id) in contract_ids
+    # Vendor sessions are refused on the internal API by the vendor-isolation middleware;
+    # vendors see their own contracts through the vendor portal instead.
+    assert client.get("/api/v1/contracts/").status_code == 403
+    portal = client.get(reverse("vendor_contracts"))
+    assert portal.status_code == 200
+    assert contract.contract_number in portal.content.decode()
 
     # Vendor 2 cannot access Vendor 1 contract via API -> 403 or 404 object permission check
     client.force_login(vendor_user2)
@@ -912,7 +917,7 @@ def test_day21_contract_integration_and_regression_testing(client, contract_setu
     proc_user = contract_setup["proc_user"]
 
     auditor_role = _get_or_create_role(Role.AUDITOR, "Auditor")
-    auditor_user = User.objects.create_user(
+    auditor_user = create_org_user(
         email="auditor.d21@hpe.com", password="Password123!", role=auditor_role
     )
 
@@ -1109,7 +1114,7 @@ def test_day22_contract_validation_terms_documents_and_transitions(client, contr
     large_file = SimpleUploadedFile(
         "too_large.pdf", b"X" * (10 * 1024 * 1024 + 100), content_type="application/pdf"
     )
-    with pytest.raises(ValidationError, match="File size exceeds 10MB upload limit"):
+    with pytest.raises(ValidationError, match="File size exceeds maximum allowed limit of 10MB"):
         upload_contract_document_service(
             contract=contract,
             title="Large Doc",
@@ -1121,7 +1126,7 @@ def test_day22_contract_validation_terms_documents_and_transitions(client, contr
     invalid_ext_file = SimpleUploadedFile(
         "malware.exe", b"executable content", content_type="application/x-msdownload"
     )
-    with pytest.raises(ValidationError, match="Unsupported file extension"):
+    with pytest.raises(ValidationError, match="is not permitted"):
         upload_contract_document_service(
             contract=contract,
             title="Exe Doc",
@@ -1300,7 +1305,7 @@ def test_day23_contract_version_history_and_amendment_audit_trail(client, contra
 
     # 4. Auditor Access Verification
     auditor_role = _get_or_create_role(Role.AUDITOR, "Auditor")
-    auditor_user = User.objects.create_user(
+    auditor_user = create_org_user(
         email="auditor.d23@hpe.com", password="Password123!", role=auditor_role
     )
 
@@ -2072,7 +2077,7 @@ def test_day27_validate_document_vault_and_contract_document_access(
     # -------------------------------------------------------------
     # a. Empty title block
     dummy_file = SimpleUploadedFile(
-        "agreement.pdf", b"PDF content bytes", content_type="application/pdf"
+        "agreement.pdf", b"%PDF-1.4 content bytes", content_type="application/pdf"
     )
     with pytest.raises(ValidationError, match="Document title is required"):
         upload_contract_document_service(
@@ -2089,7 +2094,7 @@ def test_day27_validate_document_vault_and_contract_document_access(
     exe_file = SimpleUploadedFile(
         "executable.exe", b"binary data", content_type="application/x-msdownload"
     )
-    with pytest.raises(ValidationError, match="Unsupported file extension"):
+    with pytest.raises(ValidationError, match="is not permitted"):
         upload_contract_document_service(
             contract=contract_a, user=legal_user, title="Malicious Executable", file=exe_file
         )
@@ -2104,7 +2109,7 @@ def test_day27_validate_document_vault_and_contract_document_access(
     # e. Oversized file (> 10MB) block
     large_content = b"0" * (10 * 1024 * 1024 + 100)
     large_file = SimpleUploadedFile("big_file.pdf", large_content, content_type="application/pdf")
-    with pytest.raises(ValidationError, match="File size exceeds 10MB upload limit"):
+    with pytest.raises(ValidationError, match="File size exceeds maximum allowed limit of 10MB"):
         upload_contract_document_service(
             contract=contract_a, user=legal_user, title="Oversized File", file=large_file
         )
@@ -2547,7 +2552,7 @@ def test_day29_validate_contract_expiry_renewal_and_obligation_reporting(client,
     vendor2.save(update_fields=["status"])
 
     vendor_user_role = _get_or_create_role(Role.VENDOR_USER, "Vendor User")
-    vendor2_user = User.objects.create_user(
+    vendor2_user = create_org_user(
         email="supplier@acmecorp.com", password="Password123!", role=vendor_user_role
     )
     vendor2_user.vendor = vendor2
@@ -2744,8 +2749,5 @@ def test_day29_validate_contract_expiry_renewal_and_obligation_reporting(client,
     # Vendor 2 User API Access (RBAC)
     client.force_login(vendor2_user)
     resp_v2_exp = client.get("/api/v1/reports/contract-expiry/")
-    assert resp_v2_exp.status_code == 200
-    v2_exp_json = resp_v2_exp.json()
-    v2_nums = [item["contract_number"] for item in v2_exp_json]
-    assert c3.contract_number in v2_nums
-    assert c1.contract_number not in v2_nums
+    # internal reports API is closed to vendor sessions by the vendor-isolation middleware
+    assert resp_v2_exp.status_code == 403

@@ -2,11 +2,13 @@ from celery import shared_task
 
 from apps.audit.models import AuditLog
 from apps.audit.services import create_audit_log_service
+from apps.core.job_runs import record_job_run
 
 from .services import sync_all_event_windows
 
 
 @shared_task
+@record_job_run("apps.sourcing.tasks.sync_sourcing_bid_windows_task")
 def sync_sourcing_bid_windows_task():
     """
     Celery Beat: opens bid windows whose start time has been reached and closes those whose

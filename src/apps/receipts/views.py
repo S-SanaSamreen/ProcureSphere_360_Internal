@@ -10,14 +10,17 @@ from django.utils.dateparse import parse_date
 
 from apps.accounts.models import Role
 from apps.orders.models import PurchaseOrder
-from apps.receipts.models import (
-    GoodsReceipt,
-    ReceiptLine,
-    RejectionRecord,
+from apps.receipts.selectors import (
+    scoped_purchase_orders,
+    scoped_receipt_lines,
+    scoped_receipts,
+    scoped_rejections,
 )
 from apps.receipts.services import (
+    _org_users,
     correct_receipt_line_quantity_service,
     create_goods_receipt_service,
+    finance_users_for_po,
     handoff_goods_to_stock_service,
     process_vendor_return_service,
     record_inspection_service,
@@ -101,7 +104,8 @@ def receipts_list_view(request):
     date_to_str = request.GET.get("date_to", "").strip()
 
     base_qs = (
-        GoodsReceipt.objects.select_related("po__vendor", "received_by")
+        scoped_receipts(request.user)
+        .select_related("po__vendor", "received_by")
         .prefetch_related("lines__po_line", "lines__inspection", "lines__rejections")
         .order_by("-received_date")
     )
@@ -124,16 +128,21 @@ def receipts_list_view(request):
     except (PageNotAnInteger, EmptyPage):
         page_obj = paginator.get_page(1)
 
-    open_pos = PurchaseOrder.objects.filter(
-        status__in=[
-            PurchaseOrder.STATUS_ISSUED,
-            PurchaseOrder.STATUS_ACKNOWLEDGED,
-            PurchaseOrder.STATUS_PARTIAL_RECEIPT,
-        ]
-    ).select_related("vendor")
+    open_pos = (
+        scoped_purchase_orders(request.user)
+        .filter(
+            status__in=[
+                PurchaseOrder.STATUS_ISSUED,
+                PurchaseOrder.STATUS_ACKNOWLEDGED,
+                PurchaseOrder.STATUS_PARTIAL_RECEIPT,
+            ]
+        )
+        .select_related("vendor")
+    )
 
     po_list = (
-        PurchaseOrder.objects.filter(receipts__isnull=False)
+        scoped_purchase_orders(request.user)
+        .filter(receipts__isnull=False)
         .distinct()
         .order_by("po_number")
         .values("id", "po_number")
@@ -171,11 +180,9 @@ def receipts_list_view(request):
 @login_required(login_url="/login/")
 def receipt_detail_view(request, grn_id):
     grn = get_object_or_404(
-        GoodsReceipt.objects.select_related(
-            "po__vendor", "po__cost_center", "received_by"
-        ).prefetch_related(
-            "lines__po_line", "lines__inspection__inspected_by", "lines__rejections"
-        ),
+        scoped_receipts(request.user)
+        .select_related("po__vendor", "po__cost_center", "received_by")
+        .prefetch_related("lines__po_line", "lines__inspection__inspected_by", "lines__rejections"),
         id=grn_id,
     )
     from apps.audit.models import AuditLog
@@ -270,19 +277,16 @@ def _extract_inspection_form_data(request, lines):
 @login_required(login_url="/login/")
 def receipt_inspect_view(request, grn_id):
     grn = get_object_or_404(
-        GoodsReceipt.objects.select_related(
-            "po__vendor", "po__cost_center", "received_by"
-        ).prefetch_related(
-            "lines__po_line", "lines__inspection__inspected_by", "lines__rejections"
-        ),
+        scoped_receipts(request.user)
+        .select_related("po__vendor", "po__cost_center", "received_by")
+        .prefetch_related("lines__po_line", "lines__inspection__inspected_by", "lines__rejections"),
         id=grn_id,
     )
     role_code = getattr(request.user, "role_code", None) or (
         request.user.role.code if hasattr(request.user, "role") and request.user.role else None
     )
-    is_authorized = request.user.is_superuser or role_code in [
+    is_authorized = role_code in [
         Role.STORES_RECEIVER,
-        Role.SUPER_ADMIN,
     ]
     if role_code == Role.VENDOR_USER:
         messages.error(
@@ -294,7 +298,7 @@ def receipt_inspect_view(request, grn_id):
     if not is_authorized:
         messages.error(
             request,
-            "Permission Denied: Only Stores Receiver or Super Admin can perform quality inspections.",
+            "Permission Denied: Only the Stores Receiver can perform quality inspections.",
         )
         return redirect("receipt_detail", grn_id=grn.id)
 
@@ -400,9 +404,8 @@ def receipt_create_view(request, po_id):
     role_code = getattr(request.user, "role_code", None) or (
         request.user.role.code if hasattr(request.user, "role") and request.user.role else None
     )
-    is_authorized = request.user.is_superuser or role_code in [
+    is_authorized = role_code in [
         Role.STORES_RECEIVER,
-        Role.SUPER_ADMIN,
     ]
     if role_code == Role.VENDOR_USER:
         messages.error(
@@ -414,12 +417,14 @@ def receipt_create_view(request, po_id):
     if not is_authorized:
         messages.error(
             request,
-            "Permission Denied: Only Stores Receiver or Super Admin can create goods receipts.",
+            "Permission Denied: Only the Stores Receiver can create goods receipts.",
         )
         return redirect("receipts_list")
 
     po = get_object_or_404(
-        PurchaseOrder.objects.select_related("vendor", "cost_center").prefetch_related("lines"),
+        scoped_purchase_orders(request.user)
+        .select_related("vendor", "cost_center")
+        .prefetch_related("lines"),
         id=po_id,
     )
 
@@ -529,9 +534,8 @@ def receipt_stock_handoff_view(request, grn_id):
     role_code = getattr(request.user, "role_code", None) or (
         request.user.role.code if hasattr(request.user, "role") and request.user.role else None
     )
-    is_authorized = request.user.is_superuser or role_code in [
+    is_authorized = role_code in [
         Role.STORES_RECEIVER,
-        Role.SUPER_ADMIN,
     ]
     if role_code == Role.VENDOR_USER:
         messages.error(
@@ -545,9 +549,9 @@ def receipt_stock_handoff_view(request, grn_id):
         return redirect("receipt_detail", grn_id=grn_id)
 
     grn = get_object_or_404(
-        GoodsReceipt.objects.select_related(
-            "po__vendor", "po__cost_center", "received_by"
-        ).prefetch_related(
+        scoped_receipts(request.user)
+        .select_related("po__vendor", "po__cost_center", "received_by")
+        .prefetch_related(
             "lines__po_line",
             "lines__inspection__inspected_by",
             "lines__rejections",
@@ -618,7 +622,8 @@ def receipt_inspection_queue_view(request):
     status_filter = request.GET.get("status", "").strip().upper()
 
     base_qs = (
-        GoodsReceipt.objects.select_related("po__vendor", "received_by")
+        scoped_receipts(request.user)
+        .select_related("po__vendor", "received_by")
         .prefetch_related(
             "lines__po_line",
             "lines__inspection__inspected_by",
@@ -703,7 +708,8 @@ def receipt_stock_handoff_queue_view(request):
     status_filter = request.GET.get("status", "").strip().upper()
 
     base_qs = (
-        GoodsReceipt.objects.select_related("po__vendor", "received_by")
+        scoped_receipts(request.user)
+        .select_related("po__vendor", "received_by")
         .prefetch_related(
             "lines__po_line",
             "lines__stock_handoff__handed_off_by",
@@ -742,7 +748,7 @@ def receipt_stock_handoff_queue_view(request):
     # Real operational metrics
     all_eligible = [
         g
-        for g in GoodsReceipt.objects.prefetch_related("lines__stock_handoff")
+        for g in scoped_receipts(request.user).prefetch_related("lines__stock_handoff")
         if any(line.quantity_accepted > Decimal("0.00") for line in g.lines.all())
     ]
     pending_handoff_count = sum(
@@ -797,9 +803,8 @@ def receipt_rejections_queue_view(request):
     status_filter = request.GET.get("status", "").strip().upper()
 
     base_qs = (
-        ReceiptLine.objects.filter(
-            Q(quantity_rejected__gt=Decimal("0.00")) | Q(rejections__isnull=False)
-        )
+        scoped_receipt_lines(request.user)
+        .filter(Q(quantity_rejected__gt=Decimal("0.00")) | Q(rejections__isnull=False))
         .select_related(
             "receipt__po__vendor",
             "receipt__received_by",
@@ -828,15 +833,14 @@ def receipt_rejections_queue_view(request):
         ).distinct()
 
     total_rejected_lines = (
-        ReceiptLine.objects.filter(
-            Q(quantity_rejected__gt=Decimal("0.00")) | Q(rejections__isnull=False)
-        )
+        scoped_receipt_lines(request.user)
+        .filter(Q(quantity_rejected__gt=Decimal("0.00")) | Q(rejections__isnull=False))
         .distinct()
         .count()
     )
 
-    returned_count = RejectionRecord.objects.filter(returned_to_vendor=True).count()
-    pending_return_count = RejectionRecord.objects.filter(returned_to_vendor=False).count()
+    returned_count = scoped_rejections(request.user).filter(returned_to_vendor=True).count()
+    pending_return_count = scoped_rejections(request.user).filter(returned_to_vendor=False).count()
 
     paginator = Paginator(base_qs, 15)
     page_number = request.GET.get("page", 1)
@@ -865,19 +869,18 @@ def record_vendor_return_view(request, rejection_id):
     role_code = getattr(request.user, "role_code", None) or (
         request.user.role.code if hasattr(request.user, "role") and request.user.role else None
     )
-    is_authorized = request.user.is_superuser or role_code in [
+    is_authorized = role_code in [
         Role.STORES_RECEIVER,
-        Role.SUPER_ADMIN,
     ]
     if not is_authorized:
         messages.error(
             request,
-            "Permission Denied: Only Stores Receiver or Super Admin can process vendor returns.",
+            "Permission Denied: Only the Stores Receiver can process vendor returns.",
         )
         return redirect("receipts_rejections_queue")
 
     rejection = get_object_or_404(
-        RejectionRecord.objects.select_related(
+        scoped_rejections(request.user).select_related(
             "receipt_line__receipt__po", "receipt_line__po_line"
         ),
         id=rejection_id,
@@ -918,19 +921,18 @@ def receipt_line_correct_view(request, line_id):
     role_code = getattr(request.user, "role_code", None) or (
         request.user.role.code if hasattr(request.user, "role") and request.user.role else None
     )
-    is_authorized = request.user.is_superuser or role_code in [
+    is_authorized = role_code in [
         Role.STORES_RECEIVER,
-        Role.SUPER_ADMIN,
     ]
     if not is_authorized:
         messages.error(
             request,
-            "Permission Denied: Only Stores Receiver or Super Admin can correct receipt quantities.",
+            "Permission Denied: Only the Stores Receiver can correct receipt quantities.",
         )
         return redirect("receipts_list")
 
     line = get_object_or_404(
-        ReceiptLine.objects.select_related("receipt__po", "po_line"),
+        scoped_receipt_lines(request.user).select_related("receipt__po", "po_line"),
         id=line_id,
     )
 
@@ -969,15 +971,11 @@ def get_stores_dashboard_data(user=None):
     """
     from apps.audit.models import AuditLog
     from apps.orders.models import PurchaseOrder
-    from apps.receipts.models import (
-        GoodsReceipt,
-        InspectionRecord,
-        RejectionRecord,
-        StockHandoffRecord,
-    )
+    from apps.receipts.models import InspectionRecord, StockHandoffRecord
 
     all_grns = list(
-        GoodsReceipt.objects.select_related("po__vendor", "received_by")
+        scoped_receipts(user)
+        .select_related("po__vendor", "received_by")
         .prefetch_related(
             "lines__po_line",
             "lines__inspection",
@@ -997,26 +995,34 @@ def get_stores_dashboard_data(user=None):
         1 for g in all_grns if g.overall_inspection_status == "PARTIALLY_INSPECTED"
     )
 
-    pending_deliveries = PurchaseOrder.objects.filter(
-        status__in=[
-            PurchaseOrder.STATUS_ISSUED,
-            PurchaseOrder.STATUS_ACKNOWLEDGED,
-            PurchaseOrder.STATUS_PARTIAL_RECEIPT,
-        ]
-    ).count()
-    partially_received_pos = PurchaseOrder.objects.filter(
-        status=PurchaseOrder.STATUS_PARTIAL_RECEIPT
-    ).count()
-    completed_pos = PurchaseOrder.objects.filter(status=PurchaseOrder.STATUS_COMPLETED).count()
+    pending_deliveries = (
+        scoped_purchase_orders(user)
+        .filter(
+            status__in=[
+                PurchaseOrder.STATUS_ISSUED,
+                PurchaseOrder.STATUS_ACKNOWLEDGED,
+                PurchaseOrder.STATUS_PARTIAL_RECEIPT,
+            ]
+        )
+        .count()
+    )
+    partially_received_pos = (
+        scoped_purchase_orders(user).filter(status=PurchaseOrder.STATUS_PARTIAL_RECEIPT).count()
+    )
+    completed_pos = (
+        scoped_purchase_orders(user).filter(status=PurchaseOrder.STATUS_COMPLETED).count()
+    )
 
     all_rejections = list(
-        RejectionRecord.objects.select_related("receipt_line__receipt", "receipt_line__po_line")
+        scoped_rejections(user).select_related("receipt_line__receipt", "receipt_line__po_line")
     )
     total_rejections = len(all_rejections)
     returned_to_vendor_count = sum(1 for r in all_rejections if r.returned_to_vendor)
     pending_vendor_returns_count = sum(1 for r in all_rejections if not r.returned_to_vendor)
 
-    stock_handoffs_count = StockHandoffRecord.objects.count()
+    stock_handoffs_count = StockHandoffRecord.objects.filter(
+        receipt_line__in=scoped_receipt_lines(user)
+    ).count()
     eligible_handoff_grns = [
         g
         for g in all_grns
@@ -1038,7 +1044,9 @@ def get_stores_dashboard_data(user=None):
         .count()
     )
 
-    total_inspections = InspectionRecord.objects.count()
+    total_inspections = InspectionRecord.objects.filter(
+        receipt_line__in=scoped_receipt_lines(user)
+    ).count()
 
     metrics = {
         "total_grns": total_grns,
@@ -1064,7 +1072,8 @@ def get_stores_dashboard_data(user=None):
 
     # 1. Pending Deliveries: POs issued or in partial receipt awaiting dock receiving
     pending_deliveries_items = list(
-        PurchaseOrder.objects.filter(
+        scoped_purchase_orders(user)
+        .filter(
             status__in=[
                 PurchaseOrder.STATUS_ISSUED,
                 PurchaseOrder.STATUS_ACKNOWLEDGED,
@@ -1090,9 +1099,8 @@ def get_stores_dashboard_data(user=None):
 
     # 4. Rejections & Returns: Receipt lines rejected during quality inspection
     pending_rejections_items = list(
-        ReceiptLine.objects.filter(
-            Q(quantity_rejected__gt=Decimal("0.00")) | Q(rejections__isnull=False)
-        )
+        scoped_receipt_lines(user)
+        .filter(Q(quantity_rejected__gt=Decimal("0.00")) | Q(rejections__isnull=False))
         .select_related(
             "receipt__po__vendor",
             "receipt__received_by",
@@ -1130,9 +1138,9 @@ def receipt_dashboard_view(request):
         )
         return redirect("vendor_dashboard")
 
-    is_authorized = request.user.is_superuser or role_code in [
+    is_authorized = role_code in [
         Role.STORES_RECEIVER,
-        Role.SUPER_ADMIN,
+        Role.SUPER_ADMIN,  # read-only visibility (PRD 3.1)
         Role.AUDITOR,
     ]
     if not is_authorized:
@@ -1159,14 +1167,14 @@ def receipt_delivery_performance_report_view(request):
     """
     Day 16: Receipt, Rejection & Delivery Performance Report view.
     Provides filtered reports, summary KPIs, and export capabilities.
-    Restricted to Stores Receiver, Super Admin, and Auditor (read-only audit).
+    Stores Receiver, plus read-only Super Admin and Auditor.
     """
     role_code = getattr(request.user, "role_code", None) or (
         request.user.role.code if hasattr(request.user, "role") and request.user.role else None
     )
-    is_authorized = request.user.is_superuser or role_code in [
+    is_authorized = role_code in [
         Role.STORES_RECEIVER,
-        Role.SUPER_ADMIN,
+        Role.SUPER_ADMIN,  # read-only visibility (PRD 3.1)
         Role.AUDITOR,
     ]
     if not is_authorized:
@@ -1298,17 +1306,17 @@ def receipt_send_notification_view(request, grn_id):
     role_code = getattr(request.user, "role_code", None) or (
         request.user.role.code if hasattr(request.user, "role") and request.user.role else None
     )
-    if not (request.user.is_superuser or role_code in [Role.STORES_RECEIVER, Role.SUPER_ADMIN]):
-        raise PermissionDenied("Only Stores Receiver or Super Admin can send GRN notifications.")
+    if role_code != Role.STORES_RECEIVER:
+        raise PermissionDenied("Only the Stores Receiver can send GRN notifications.")
 
     grn = get_object_or_404(
-        GoodsReceipt.objects.select_related("po__vendor"),
+        scoped_receipts(request.user).select_related("po__vendor"),
         id=grn_id,
     )
     po = grn.po
 
     # 1. Notify Finance & AP
-    fin_users = User.objects.filter(role__code=Role.FINANCE_AP, is_active=True)
+    fin_users = finance_users_for_po(po)
     for fin_u in fin_users:
         Notification.objects.create(
             recipient=fin_u,
@@ -1336,9 +1344,7 @@ def receipt_send_notification_view(request, grn_id):
             )
 
     # 3. Notify Procurement Executive & Manager
-    pe_pm_users = User.objects.filter(
-        role__code__in=[Role.PROC_EXEC, Role.PROC_MGR], is_active=True
-    )
+    pe_pm_users = _org_users(po, role__code__in=[Role.PROC_EXEC, Role.PROC_MGR])
     for staff_u in pe_pm_users:
         Notification.objects.create(
             recipient=staff_u,
@@ -1353,4 +1359,3 @@ def receipt_send_notification_view(request, grn_id):
         f"Goods Receipt Note {grn.grn_number} successfully dispatched to Finance & Accounts Payable and Vendor ({po.vendor.legal_name}).",
     )
     return redirect("receipt_detail", grn_id=grn.id)
-

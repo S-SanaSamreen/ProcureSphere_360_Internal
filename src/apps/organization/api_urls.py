@@ -42,16 +42,39 @@ class IsAdminOrReadOnly(BasePermission):
         return request.method in SAFE_METHODS
 
 
+def _user_org(user):
+    """Fail-closed tenant lookup: None means the user may see no organisation data."""
+    if not user or not user.is_authenticated:
+        return None
+    return getattr(user, "effective_organization", None)
+
+
 class OrganizationViewSet(viewsets.ModelViewSet):
     queryset = Organization.objects.all()
     serializer_class = OrganizationSerializer
     permission_classes = [IsAdminOrReadOnly]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Organization.objects.all().order_by("name")
+        if user and user.is_authenticated and user.is_superuser:
+            return qs
+        org = _user_org(user)
+        return qs.filter(pk=org.pk) if org else qs.none()
 
 
 class DepartmentViewSet(viewsets.ModelViewSet):
     queryset = Department.objects.all()
     serializer_class = DepartmentSerializer
     permission_classes = [IsAdminOrReadOnly]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Department.objects.all().order_by("name")
+        if user and user.is_authenticated and user.is_superuser:
+            return qs
+        org = _user_org(user)
+        return qs.filter(organization=org) if org else qs.none()
 
 
 class CostCenterViewSet(viewsets.ModelViewSet):
@@ -61,10 +84,16 @@ class CostCenterViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = CostCenter.objects.all()
+        qs = CostCenter.objects.all().order_by("code")
         if not user or not user.is_authenticated:
             return qs.none()
-        if user.is_superuser or getattr(user, "role_code", None) in [
+        if user.is_superuser:
+            return qs
+        org = _user_org(user)
+        if not org:
+            return qs.none()
+        qs = qs.filter(department__organization=org)
+        if getattr(user, "role_code", None) in [
             Role.SUPER_ADMIN,
             Role.FINANCE_AP,
             Role.AUDITOR,

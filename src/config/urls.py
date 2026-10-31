@@ -10,6 +10,7 @@ from apps.accounts.views import (
     portal_login_view,
     portal_logout_view,
 )
+from apps.core.admin_lockdown import lock_business_models
 from apps.core.views import (
     custom_404_view,
     protected_media_view,
@@ -17,6 +18,8 @@ from apps.core.views import (
 )
 
 from .healthchecks import health, readyz
+
+lock_business_models(admin.site)
 
 urlpatterns = [
     path("health", health, name="health"),
@@ -28,17 +31,14 @@ urlpatterns = [
     path("logout/", portal_logout_view, name="logout"),
     path("password-change/", password_change_view, name="password_change"),
     path("accounts/change-password/", change_password_view, name="change_password"),
-
     # Superadmin, Manager & Vendor Portals
     path("superadmin/", include("apps.core.superadmin_urls")),
     path("manager/", include("apps.core.manager_urls")),
     path("vendor/", include("apps.vendors.vendor_dashboard_urls")),
-
     # Public landing website - included BEFORE apps.core.urls so that
     # anonymous traffic to "/" resolves to landing_home. Authenticated
     # users are forwarded inside landing_home via direct Python call.
     path("", include("apps.core.landing_urls")),
-
     # Core & Auth & Page Views
     path("", include("apps.core.urls")),
     path("", include("apps.accounts.urls")),
@@ -55,17 +55,14 @@ urlpatterns = [
     path("reports/", include("apps.reports.urls")),
     path("", include("apps.audit.urls")),
     path("budgets/", include("apps.budgets.urls")),
-
     # OpenAPI Schema & Swagger Docs
     path("api/schema", SpectacularAPIView.as_view()),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs", SpectacularSwaggerView.as_view(url_name="schema")),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
-
     # Session Authentication Endpoints
     path("api/v1/auth/login/", SessionLoginView.as_view(), name="session_login"),
     path("api/v1/auth/logout/", SessionLogoutView.as_view(), name="session_logout"),
-
     # Domain App API Endpoints (/api/v1/...)
     path("api/v1/accounts/", include("apps.accounts.api_urls")),
     path("api/v1/organization/", include("apps.organization.api_urls")),
@@ -83,11 +80,13 @@ urlpatterns = [
     path("api/v1/reports/", include("apps.reports.api_urls")),
     path("api/v1/audit/", include("apps.audit.api_urls")),
     path("api/v1/manager/", include("apps.core.manager_api_urls")),
-
     # Protected Media Routes (enforces authentication and RBAC)
-    path("media/vendor_documents/<path:file_path>", protected_vendor_document_view, name="protected_vendor_document"),
+    path(
+        "media/vendor_documents/<path:file_path>",
+        protected_vendor_document_view,
+        name="protected_vendor_document",
+    ),
     re_path(r"^media/(?P<file_path>.*)$", protected_media_view, name="protected_media"),
-
     re_path(r"^api/.*$", custom_404_view),
 ]
 

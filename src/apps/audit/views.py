@@ -46,14 +46,14 @@ def auditor_dashboard_view(request):
             period_days = 30
     except (ValueError, TypeError):
         period_days = 30
-    dashboard_data = get_auditor_dashboard_data(period_days=period_days)
-    vendor_compliance = get_vendor_compliance_audit(limit=10)
-    approval_history = get_approval_history_audit(limit=10)
-    po_changes = get_po_changes_audit(limit=10)
-    invoice_exceptions = get_invoice_exceptions_audit(limit=10)
-    contract_changes = get_contract_changes_audit(limit=10)
-    security_events = get_security_events_audit(limit=10)
-    sourcing_activity = get_sourcing_activity_audit(limit=10)
+    dashboard_data = get_auditor_dashboard_data(period_days=period_days, user=request.user)
+    vendor_compliance = get_vendor_compliance_audit(limit=10, user=request.user)
+    approval_history = get_approval_history_audit(limit=10, user=request.user)
+    po_changes = get_po_changes_audit(limit=10, user=request.user)
+    invoice_exceptions = get_invoice_exceptions_audit(limit=10, user=request.user)
+    contract_changes = get_contract_changes_audit(limit=10, user=request.user)
+    security_events = get_security_events_audit(limit=10, user=request.user)
+    sourcing_activity = get_sourcing_activity_audit(limit=10, user=request.user)
 
     context = {
         "metrics": {
@@ -119,6 +119,7 @@ def audit_log_view(request):
         action=action_filter if action_filter else None,
         search_term=search_query if search_query else None,
         target_model=model_filter if model_filter else None,
+        user=request.user,
     )
     total_count = data.get("total_count", 0)
     total_pages = max(1, (total_count + limit - 1) // limit)
@@ -177,6 +178,7 @@ def audit_approvals_view(request):
         search=search_query if search_query else None,
         limit=limit,
         offset=offset,
+        user=request.user,
     )
     total_count = data["total_count"]
     total_pages = max(1, (total_count + limit - 1) // limit)
@@ -211,6 +213,7 @@ def audit_po_changes_view(request):
         status=status_filter if status_filter else None,
         limit=limit,
         offset=offset,
+        user=request.user,
     )
     total_count = data["total_count"]
     total_pages = max(1, (total_count + limit - 1) // limit)
@@ -246,6 +249,7 @@ def audit_vendors_view(request):
         search=search_query if search_query else None,
         limit=limit,
         offset=offset,
+        user=request.user,
     )
     total_count = data["total_count"]
     total_pages = max(1, (total_count + limit - 1) // limit)
@@ -282,6 +286,7 @@ def audit_invoice_exceptions_view(request):
         search=search_query if search_query else None,
         limit=limit,
         offset=offset,
+        user=request.user,
     )
     total_count = data["total_count"]
     total_pages = max(1, (total_count + limit - 1) // limit)
@@ -316,6 +321,7 @@ def audit_contract_changes_view(request):
         status=status_filter if status_filter else None,
         limit=limit,
         offset=offset,
+        user=request.user,
     )
     total_count = data["total_count"]
     total_pages = max(1, (total_count + limit - 1) // limit)
@@ -349,6 +355,7 @@ def audit_security_events_view(request):
         action=action_filter if action_filter else None,
         limit=limit,
         offset=offset,
+        user=request.user,
     )
     total_count = data["total_count"]
     total_pages = max(1, (total_count + limit - 1) // limit)
@@ -384,6 +391,7 @@ def audit_sourcing_activity_view(request):
         search=search_query if search_query else None,
         limit=limit,
         offset=offset,
+        user=request.user,
     )
     total_count = data["total_count"]
     total_pages = max(1, (total_count + limit - 1) // limit)
@@ -415,6 +423,7 @@ def audit_lifecycle_view(request):
         lifecycle = get_transaction_lifecycle_service(
             entity_type=entity_type,
             entity_identifier=identifier,
+            user=request.user,
         )
 
     context = {
@@ -435,5 +444,5 @@ def audit_metrics_api_view(request):
         period_days = int(request.GET.get("period_days", 30))
     except (ValueError, TypeError):
         period_days = 30
-    data = get_audit_metrics(period_days=period_days)
+    data = get_audit_metrics(period_days=period_days, user=request.user)
     return JsonResponse(data)

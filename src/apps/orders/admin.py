@@ -45,7 +45,9 @@ class PurchaseOrderAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
-            return qs.filter(cost_center__department__organization=request.user.effective_organization)
+            return qs.filter(
+                cost_center__department__organization=request.user.effective_organization
+            )
         return qs
 
 
@@ -63,7 +65,9 @@ class POLineAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
-            return qs.filter(po__cost_center__department__organization=request.user.effective_organization)
+            return qs.filter(
+                po__cost_center__department__organization=request.user.effective_organization
+            )
         return qs
 
 
@@ -75,7 +79,9 @@ class POAmendmentAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
-            return qs.filter(po__cost_center__department__organization=request.user.effective_organization)
+            return qs.filter(
+                po__cost_center__department__organization=request.user.effective_organization
+            )
         return qs
 
 
@@ -94,5 +100,7 @@ class DeliveryScheduleAdmin(admin.ModelAdmin):
     def get_queryset(self, request):
         qs = super().get_queryset(request)
         if not request.user.is_superuser and getattr(request.user, "effective_organization", None):
-            return qs.filter(po__cost_center__department__organization=request.user.effective_organization)
+            return qs.filter(
+                po__cost_center__department__organization=request.user.effective_organization
+            )
         return qs

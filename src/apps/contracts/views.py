@@ -9,6 +9,7 @@ from django.views.decorators.http import require_POST
 
 from apps.accounts.models import Role
 from apps.audit.models import AuditLog
+from apps.core import tenancy
 
 from .forms import (
     ContractAmendmentForm,
@@ -48,13 +49,30 @@ def _enforce_internal_contracts_access(request):
     )
     if not user.is_authenticated:
         from django.core.exceptions import PermissionDenied
+
         raise PermissionDenied("Authentication required.")
     if user.is_superuser:
         return
     if role_code == Role.VENDOR_USER or getattr(user, "is_vendor", False):
         from django.core.exceptions import PermissionDenied
-        raise PermissionDenied("External vendors are not authorized to access internal contracts. Use the Vendor Portal.")
 
+        raise PermissionDenied(
+            "External vendors are not authorized to access internal contracts. Use the Vendor Portal."
+        )
+
+
+def _contract_or_404(request, contract_id):
+    """Contract lookup limited to what the requesting user's organisation / vendor may see."""
+    return get_object_or_404(
+        tenancy.scope_contracts(Contract.objects.all(), request.user), id=contract_id
+    )
+
+
+def _vendor_visible_or_404(request, vendor_id):
+    from apps.vendors.models import Vendor
+    from apps.vendors.selectors import scope_vendors_queryset
+
+    get_object_or_404(scope_vendors_queryset(Vendor.objects.all(), request.user), pk=vendor_id)
 
 
 def _get_user_role(user):
@@ -127,7 +145,7 @@ def list_view(request):
     search_query = request.GET.get("q", "").strip()
 
     items = get_contracts_qs(user=request.user, status=status_filter, search=search_query)
-    metrics = get_legal_dashboard_metrics()
+    metrics = get_legal_dashboard_metrics(user=request.user)
 
     context = {
         "items": items,
@@ -149,16 +167,14 @@ def create_view(request):
         request.user.role.code if getattr(request.user, "role", None) else None
     )
     allowed_roles = [
-        Role.SUPER_ADMIN,
         Role.LEGAL_MGR,
         Role.PROC_MGR,
         Role.PROC_EXEC,
-        "SUPER_ADMIN",
         "LEGAL_MGR",
         "PROC_MGR",
         "PROC_EXEC",
     ]
-    if not (request.user.is_superuser or role_code in allowed_roles):
+    if role_code not in allowed_roles:
         messages.error(
             request,
             "Permission Denied: Contract drafting is restricted to Legal and Procurement Managers.",
@@ -166,7 +182,7 @@ def create_view(request):
         return redirect("contracts_list")
 
     if request.method == "POST":
-        form = ContractCreateForm(request.POST)
+        form = ContractCreateForm(request.POST, user=request.user)
         if form.is_valid():
             try:
                 contract = create_contract_service(
@@ -189,7 +205,7 @@ def create_view(request):
             except Exception as e:
                 messages.error(request, f"Failed to create contract: {str(e)}")
     else:
-        form = ContractCreateForm()
+        form = ContractCreateForm(user=request.user)
 
     return render(request, "pages/contracts/create.html", {"form": form})
 
@@ -199,7 +215,7 @@ def detail_view(request, contract_id):
     """
     Contract Lifecycle & SLA Workspace Detail View.
     """
-    contract = get_contract_by_id(contract_id)
+    contract = get_contract_by_id(contract_id, user=request.user)
     if not contract:
         messages.error(request, "Contract record not found.")
         return redirect("contracts_list")
@@ -232,8 +248,8 @@ def detail_view(request, contract_id):
     role_code = getattr(request.user, "role_code", None) or (
         request.user.role.code if getattr(request.user, "role", None) else None
     )
-    is_legal_mgr = role_code in [Role.LEGAL_MGR, Role.SUPER_ADMIN]
-    is_proc_mgr = role_code in [Role.PROC_MGR, Role.SUPER_ADMIN]
+    is_legal_mgr = role_code == Role.LEGAL_MGR
+    is_proc_mgr = role_code == Role.PROC_MGR
 
     context = {
         "contract": contract,
@@ -257,11 +273,10 @@ def detail_view(request, contract_id):
 @login_required(login_url="/login/")
 @require_POST
 def submit_legal_view(request, contract_id):
-    contract = get_object_or_404(Contract, id=contract_id)
+    contract = _contract_or_404(request, contract_id)
     role_code = _get_user_role(request.user)
     if not (
-        request.user.is_superuser
-        or role_code in [Role.SUPER_ADMIN, Role.LEGAL_MGR, Role.PROC_MGR, Role.PROC_EXEC]
+        role_code in [Role.LEGAL_MGR, Role.PROC_MGR, Role.PROC_EXEC]
         or contract.contract_owner_id == request.user.id
     ):
         messages.error(
@@ -283,12 +298,12 @@ def submit_legal_view(request, contract_id):
 @login_required(login_url="/login/")
 @require_POST
 def legal_approve_view(request, contract_id):
-    contract = get_object_or_404(Contract, id=contract_id)
+    contract = _contract_or_404(request, contract_id)
     role_code = _get_user_role(request.user)
-    if not (request.user.is_superuser or role_code in [Role.LEGAL_MGR, Role.SUPER_ADMIN]):
+    if not (role_code == Role.LEGAL_MGR):
         messages.error(
             request,
-            "Permission Denied: Only Legal Managers or Super Admins can approve legal reviews.",
+            "Permission Denied: Only Legal Managers can approve legal reviews.",
         )
         return redirect("contract_detail", contract_id=contract.id)
     notes = request.POST.get("notes", "")
@@ -306,12 +321,12 @@ def legal_approve_view(request, contract_id):
 @login_required(login_url="/login/")
 @require_POST
 def legal_reject_view(request, contract_id):
-    contract = get_object_or_404(Contract, id=contract_id)
+    contract = _contract_or_404(request, contract_id)
     role_code = _get_user_role(request.user)
-    if not (request.user.is_superuser or role_code in [Role.LEGAL_MGR, Role.SUPER_ADMIN]):
+    if not (role_code == Role.LEGAL_MGR):
         messages.error(
             request,
-            "Permission Denied: Only Legal Managers or Super Admins can reject legal reviews.",
+            "Permission Denied: Only Legal Managers can reject legal reviews.",
         )
         return redirect("contract_detail", contract_id=contract.id)
     reason = request.POST.get("reason", "").strip()
@@ -332,12 +347,9 @@ def legal_reject_view(request, contract_id):
 @login_required(login_url="/login/")
 @require_POST
 def business_approve_view(request, contract_id):
-    contract = get_object_or_404(Contract, id=contract_id)
+    contract = _contract_or_404(request, contract_id)
     role_code = _get_user_role(request.user)
-    if not (
-        request.user.is_superuser
-        or role_code in [Role.PROC_MGR, Role.DEPT_APPROVER, Role.SUPER_ADMIN]
-    ):
+    if role_code not in [Role.PROC_MGR, Role.DEPT_APPROVER]:
         messages.error(
             request,
             "Permission Denied: Only Procurement Managers or Department Approvers can perform business approval.",
@@ -358,14 +370,12 @@ def business_approve_view(request, contract_id):
 @login_required(login_url="/login/")
 @require_POST
 def amend_view(request, contract_id):
-    contract = get_object_or_404(Contract, id=contract_id)
+    contract = _contract_or_404(request, contract_id)
     role_code = _get_user_role(request.user)
-    if not (
-        request.user.is_superuser or role_code in [Role.LEGAL_MGR, Role.PROC_MGR, Role.SUPER_ADMIN]
-    ):
+    if role_code not in [Role.LEGAL_MGR, Role.PROC_MGR]:
         messages.error(
             request,
-            "Permission Denied: Only Legal Managers, Procurement Managers, or Super Admins can amend contracts.",
+            "Permission Denied: Only Legal Managers, or Procurement Managers can amend contracts.",
         )
         return redirect("contract_detail", contract_id=contract.id)
     form = ContractAmendmentForm(request.POST)
@@ -393,12 +403,9 @@ def amend_view(request, contract_id):
 @login_required(login_url="/login/")
 @require_POST
 def milestone_create_view(request, contract_id):
-    contract = get_object_or_404(Contract, id=contract_id)
+    contract = _contract_or_404(request, contract_id)
     role_code = _get_user_role(request.user)
-    if not (
-        request.user.is_superuser
-        or role_code in [Role.LEGAL_MGR, Role.PROC_MGR, Role.PROC_EXEC, Role.SUPER_ADMIN]
-    ):
+    if role_code not in [Role.LEGAL_MGR, Role.PROC_MGR, Role.PROC_EXEC]:
         messages.error(
             request,
             "Permission Denied: You do not have permission to create milestones.",
@@ -424,10 +431,7 @@ def milestone_create_view(request, contract_id):
 def milestone_toggle_view(request, contract_id, milestone_id):
     milestone = get_object_or_404(ContractMilestone, id=milestone_id, contract_id=contract_id)
     role_code = _get_user_role(request.user)
-    if not (
-        request.user.is_superuser
-        or role_code in [Role.LEGAL_MGR, Role.PROC_MGR, Role.PROC_EXEC, Role.SUPER_ADMIN]
-    ):
+    if role_code not in [Role.LEGAL_MGR, Role.PROC_MGR, Role.PROC_EXEC]:
         messages.error(
             request,
             "Permission Denied: You do not have permission to modify milestones.",
@@ -441,12 +445,9 @@ def milestone_toggle_view(request, contract_id, milestone_id):
 @login_required(login_url="/login/")
 @require_POST
 def obligation_create_view(request, contract_id):
-    contract = get_object_or_404(Contract, id=contract_id)
+    contract = _contract_or_404(request, contract_id)
     role_code = _get_user_role(request.user)
-    if not (
-        request.user.is_superuser
-        or role_code in [Role.LEGAL_MGR, Role.PROC_MGR, Role.PROC_EXEC, Role.SUPER_ADMIN]
-    ):
+    if role_code not in [Role.LEGAL_MGR, Role.PROC_MGR, Role.PROC_EXEC]:
         messages.error(
             request,
             "Permission Denied: You do not have permission to create obligations.",
@@ -472,10 +473,7 @@ def obligation_create_view(request, contract_id):
 def obligation_toggle_view(request, contract_id, obligation_id):
     obligation = get_object_or_404(ContractObligation, id=obligation_id, contract_id=contract_id)
     role_code = _get_user_role(request.user)
-    if not (
-        request.user.is_superuser
-        or role_code in [Role.LEGAL_MGR, Role.PROC_MGR, Role.PROC_EXEC, Role.SUPER_ADMIN]
-    ):
+    if role_code not in [Role.LEGAL_MGR, Role.PROC_MGR, Role.PROC_EXEC]:
         messages.error(
             request,
             "Permission Denied: You do not have permission to fulfill obligations.",
@@ -489,12 +487,9 @@ def obligation_toggle_view(request, contract_id, obligation_id):
 @login_required(login_url="/login/")
 @require_POST
 def document_upload_view(request, contract_id):
-    contract = get_object_or_404(Contract, id=contract_id)
+    contract = _contract_or_404(request, contract_id)
     role_code = _get_user_role(request.user)
-    if not (
-        request.user.is_superuser
-        or role_code in [Role.LEGAL_MGR, Role.PROC_MGR, Role.PROC_EXEC, Role.SUPER_ADMIN]
-    ):
+    if role_code not in [Role.LEGAL_MGR, Role.PROC_MGR, Role.PROC_EXEC]:
         messages.error(
             request,
             "Permission Denied: You do not have permission to upload contract documents.",
@@ -519,7 +514,7 @@ def document_download_view(request, contract_id, document_id):
     """
     Safely downloads/retrieves a contract document with RBAC, object scoping, and audit logging.
     """
-    contract = get_object_or_404(Contract, id=contract_id)
+    contract = _contract_or_404(request, contract_id)
     if not _can_view_contract(request.user, contract):
         messages.error(
             request,
@@ -559,14 +554,12 @@ def document_download_view(request, contract_id, document_id):
 @login_required(login_url="/login/")
 @require_POST
 def renew_view(request, contract_id):
-    contract = get_object_or_404(Contract, id=contract_id)
+    contract = _contract_or_404(request, contract_id)
     role_code = _get_user_role(request.user)
-    if not (
-        request.user.is_superuser or role_code in [Role.LEGAL_MGR, Role.PROC_MGR, Role.SUPER_ADMIN]
-    ):
+    if role_code not in [Role.LEGAL_MGR, Role.PROC_MGR]:
         messages.error(
             request,
-            "Permission Denied: Only Legal Managers, Procurement Managers, or Super Admins can renew contracts.",
+            "Permission Denied: Only Legal Managers, or Procurement Managers can renew contracts.",
         )
         return redirect("contract_detail", contract_id=contract.id)
     form = ContractRenewalForm(request.POST)
@@ -592,14 +585,12 @@ def renew_view(request, contract_id):
 @login_required(login_url="/login/")
 @require_POST
 def terminate_view(request, contract_id):
-    contract = get_object_or_404(Contract, id=contract_id)
+    contract = _contract_or_404(request, contract_id)
     role_code = _get_user_role(request.user)
-    if not (
-        request.user.is_superuser or role_code in [Role.LEGAL_MGR, Role.PROC_MGR, Role.SUPER_ADMIN]
-    ):
+    if role_code not in [Role.LEGAL_MGR, Role.PROC_MGR]:
         messages.error(
             request,
-            "Permission Denied: Only Legal Managers, Procurement Managers, or Super Admins can terminate contracts.",
+            "Permission Denied: Only Legal Managers, or Procurement Managers can terminate contracts.",
         )
         return redirect("contract_detail", contract_id=contract.id)
     reason = request.POST.get("reason", "").strip()
@@ -620,10 +611,10 @@ def dashboard_view(request):
     Legal & SLA Governance Desk Dashboard View for Legal Managers.
     """
     role_code = _get_user_role(request.user)
-    if not (request.user.is_superuser or role_code in [Role.LEGAL_MGR, Role.SUPER_ADMIN]):
+    if not (role_code == Role.LEGAL_MGR):
         messages.error(
             request,
-            "Permission Denied: Access to Legal Dashboard is restricted to Legal Managers and Super Admins.",
+            "Permission Denied: Access to Legal Dashboard is restricted to Legal Managers.",
         )
         return redirect("home")
 
@@ -645,7 +636,7 @@ def dashboard_view(request):
     pending_obligations = get_pending_obligations(user=request.user)
     pending_milestones = get_pending_milestones(user=request.user)
     metrics = get_legal_dashboard_metrics(user=request.user)
-    pending_vendor_verifications = get_pending_vendor_verifications_qs()
+    pending_vendor_verifications = get_pending_vendor_verifications_qs(user=request.user)
 
     context = {
         "metrics": metrics,
@@ -670,10 +661,15 @@ def legal_validate_vendor_credentials_view(request, dispatch_id):
     if not can_legal_verify_vendor(request.user):
         messages.error(
             request,
-            "Permission Denied: Only Legal Managers and Super Admins can verify vendor credentials.",
+            "Permission Denied: Only Legal Managers can verify vendor credentials.",
         )
         return redirect("contracts_dashboard")
 
+    from apps.vendors.models import VendorCredentialDispatch
+
+    _vendor_visible_or_404(
+        request, get_object_or_404(VendorCredentialDispatch, pk=dispatch_id).vendor_id
+    )
     notes = request.POST.get("notes", "").strip()
     try:
         dispatch = legal_validate_vendor_credentials_service(
@@ -703,10 +699,15 @@ def legal_reject_vendor_credentials_view(request, dispatch_id):
     if not can_legal_verify_vendor(request.user):
         messages.error(
             request,
-            "Permission Denied: Only Legal Managers and Super Admins can verify vendor credentials.",
+            "Permission Denied: Only Legal Managers can verify vendor credentials.",
         )
         return redirect("contracts_dashboard")
 
+    from apps.vendors.models import VendorCredentialDispatch
+
+    _vendor_visible_or_404(
+        request, get_object_or_404(VendorCredentialDispatch, pk=dispatch_id).vendor_id
+    )
     notes = request.POST.get("notes", "").strip()
     if not notes:
         messages.error(request, "Reviewer notes are required when rejecting vendor credentials.")
@@ -741,10 +742,13 @@ def legal_document_decision_view(request, document_id):
     if not can_legal_verify_vendor(request.user):
         messages.error(
             request,
-            "Permission Denied: Only Legal Managers and Super Admins can verify vendor documents.",
+            "Permission Denied: Only Legal Managers can verify vendor documents.",
         )
         return redirect("contracts_dashboard")
 
+    from apps.vendors.models import VendorDocument
+
+    _vendor_visible_or_404(request, get_object_or_404(VendorDocument, pk=document_id).vendor_id)
     decision = request.POST.get("decision", "").strip().upper()
     notes = request.POST.get("reviewer_notes", "").strip()
 

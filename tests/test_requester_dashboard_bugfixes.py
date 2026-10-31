@@ -17,8 +17,12 @@ class TestRequesterDashboardBugfixes:
         self.dept = Department.objects.create(name="Engineering", code="ENG", organization=self.org)
         self.cc = CostCenter.objects.create(name="R&D Lab", code="CC-ENG-01", department=self.dept)
 
-        self.requester_role, _ = Role.objects.get_or_create(code=Role.REQUESTER, defaults={"name": "Requester"})
-        self.approver_role, _ = Role.objects.get_or_create(code=Role.DEPT_APPROVER, defaults={"name": "Department Approver"})
+        self.requester_role, _ = Role.objects.get_or_create(
+            code=Role.REQUESTER, defaults={"name": "Requester"}
+        )
+        self.approver_role, _ = Role.objects.get_or_create(
+            code=Role.DEPT_APPROVER, defaults={"name": "Department Approver"}
+        )
 
         self.requester = User.objects.create_user(
             email="requester.test@example.com",
@@ -93,7 +97,7 @@ class TestRequesterDashboardBugfixes:
                 cost_center=self.cc,
                 total_amount=Decimal("200.00"),
                 requested_delivery_date=timezone.now().date() + timezone.timedelta(days=10),
-                status=PurchaseRequisition.STATUS_SUBMITTED,
+                status=PurchaseRequisition.STATUS_MANAGER_REVIEW,
             )
             PRLine.objects.create(
                 requisition=pr,
@@ -114,7 +118,10 @@ class TestRequesterDashboardBugfixes:
         content = resp.content.decode()
         assert "Pending (12)" in content
         # Check that onchange="this.form.submit()" is removed from the status filter to avoid premature submit
-        assert '<select name="status" class="form-select text-secondary fw-medium" onchange="this.form.submit()">' not in content
+        assert (
+            '<select name="status" class="form-select text-secondary fw-medium" onchange="this.form.submit()">'
+            not in content
+        )
         assert '<select name="status" class="form-select text-secondary fw-medium">' in content
 
         # History tab
@@ -151,8 +158,8 @@ class TestRequesterDashboardBugfixes:
         # Check button opens submitConfirmModal
         assert 'data-bs-target="#submitConfirmModal"' in content
         assert 'id="submitConfirmModal"' in content
-        assert 'Confirm Requisition Submission' in content
-        assert 'Yes, Submit PR' in content
+        assert "Confirm Requisition Submission" in content
+        assert "Yes, Submit PR" in content
         assert 'data-bs-target="#cancelConfirmModal"' in content
 
     def test_edit_requisition_save_button_disabled_initially(self, client):
@@ -182,13 +189,16 @@ class TestRequesterDashboardBugfixes:
         content = resp.content.decode()
 
         assert 'id="save_changes_btn"' in content
-        assert 'disabled' in content
-        assert 'markFormDirty' in content
+        assert "disabled" in content
+        assert "markFormDirty" in content
 
     def test_vendor_navbar_text_contrast(self, client):
         """Vendor BUG-001 & BUG-002: Vendor navbar text has high contrast text-white-50 instead of text-muted."""
         from apps.vendors.models import Vendor, VendorCategory
-        cat, _ = VendorCategory.objects.get_or_create(code="IT-HW", defaults={"name": "IT Hardware"})
+
+        cat, _ = VendorCategory.objects.get_or_create(
+            code="IT-HW", defaults={"name": "IT Hardware"}
+        )
         vendor = Vendor.objects.create(
             legal_name="Cisco Systems Inc.",
             vendor_number="VEN-0001",
@@ -196,7 +206,9 @@ class TestRequesterDashboardBugfixes:
             category=cat,
             status="ACTIVE",
         )
-        vendor_role, _ = Role.objects.get_or_create(code=Role.VENDOR_USER, defaults={"name": "Vendor Portal User"})
+        vendor_role, _ = Role.objects.get_or_create(
+            code=Role.VENDOR_USER, defaults={"name": "Vendor Portal User"}
+        )
         vendor_user = User.objects.create_user(
             email="vendoruser@cisco.com",
             password="Password123!",
@@ -210,9 +222,9 @@ class TestRequesterDashboardBugfixes:
         content = resp.content.decode()
 
         # Check vendor info and designation use text-white-50 for high contrast
-        assert 'text-white-50 d-block' in content
-        assert 'VEN-0001 &bull; US-123456789' in content
-        assert 'Authorized Representative' in content
+        assert "text-white-50 d-block" in content
+        assert "VEN-0001 &bull; US-123456789" in content
+        assert "Authorized Representative" in content
 
     def test_approvals_status_filter_tab_isolation(self, client):
         """Dept Approver BUG-004: Incompatible status filters do not cross-apply across tabs."""
@@ -224,7 +236,7 @@ class TestRequesterDashboardBugfixes:
             cost_center=self.cc,
             total_amount=Decimal("100.00"),
             requested_delivery_date=timezone.now().date() + timezone.timedelta(days=10),
-            status=PurchaseRequisition.STATUS_SUBMITTED,
+            status=PurchaseRequisition.STATUS_MANAGER_REVIEW,
         )
         PRLine.objects.create(
             requisition=pr_pending,
@@ -276,7 +288,7 @@ class TestRequesterDashboardBugfixes:
         assert 'href="/requisitions/"' in content
         assert 'href="/requisitions/?status=PENDING"' in content
         assert 'href="/requisitions/?status=APPROVED"' in content
-        assert 'metric-card-link' in content
+        assert "metric-card-link" in content
 
     def test_requester_dashboard_notifications(self, client):
         """Verify notification bell, sidebar link, and alert banner in Requester layout/dashboard."""
@@ -295,7 +307,7 @@ class TestRequesterDashboardBugfixes:
 
         # Check navbar notification bell and sidebar links
         assert 'href="/notifications/"' in content
-        assert 'fa-bell' in content
+        assert "fa-bell" in content
         assert "You have 1 unread notification" in content
         assert "View Notifications" in content
 
@@ -309,7 +321,9 @@ class TestRequesterDashboardBugfixes:
 
     def test_finance_dashboard_notifications(self, client):
         """Verify notification bell, sidebar link, and alert banner in Finance layout/dashboard."""
-        finance_role, _ = Role.objects.get_or_create(code=Role.FINANCE_AP, defaults={"name": "Finance AP"})
+        finance_role, _ = Role.objects.get_or_create(
+            code=Role.FINANCE_AP, defaults={"name": "Finance AP"}
+        )
         finance_user = User.objects.create_user(
             email="finance.test@example.com",
             password="Password123!",
@@ -332,7 +346,8 @@ class TestRequesterDashboardBugfixes:
 
         # Check navbar notification bell and sidebar links
         assert 'href="/notifications/"' in content
-        assert 'fa-bell' in content
+        assert "fa-bell" in content
         assert "You have 1 unread notification" in content
-        assert "Review budget alerts, invoice match exceptions, and approval escalations." in content
-
+        assert (
+            "Review budget alerts, invoice match exceptions, and approval escalations." in content
+        )
