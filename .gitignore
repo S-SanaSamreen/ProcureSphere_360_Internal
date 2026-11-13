@@ -61,4 +61,8 @@ docker-compose.override.yml
 ProcureSphere_360_cursor/
 __zip_inspect/
 
+# Scratch & Temporary
+scratch/
+~$*
+
 
