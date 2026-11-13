@@ -548,7 +548,81 @@ class MatchExceptionViewSet(viewsets.ModelViewSet):
             if getattr(user, "vendor_id", None):
                 return qs.filter(invoice__vendor_id=user.vendor_id)
             return qs.none()
-        return qs
+
+        from django.db.models import Q
+
+        from apps.organization.models import CostCenter, Department
+
+        raw_dept = (
+            self.request.query_params.get("dept")
+            or self.request.query_params.get("department")
+            or self.request.query_params.get("department_id")
+            or ""
+        ).strip()
+        if raw_dept:
+            dept_obj = None
+            import uuid
+
+            is_uuid = False
+            try:
+                uuid.UUID(str(raw_dept))
+                is_uuid = True
+            except (ValueError, AttributeError, TypeError):
+                is_uuid = False
+
+            if is_uuid:
+                dept_obj = Department.objects.filter(id=raw_dept).first()
+            if not dept_obj:
+                dept_obj = Department.objects.filter(
+                    Q(code__iexact=raw_dept) | Q(name__iexact=raw_dept)
+                ).first()
+
+            if dept_obj:
+                qs = qs.filter(
+                    Q(invoice__po__cost_center__department_id=dept_obj.id)
+                    | Q(invoice__po__requisition__department_id=dept_obj.id)
+                    | Q(invoice__po__requisition__cost_center__department_id=dept_obj.id)
+                ).distinct()
+            else:
+                qs = qs.none()
+
+        raw_cc = (
+            self.request.query_params.get("cost_center")
+            or self.request.query_params.get("cost_center_id")
+            or self.request.query_params.get("cc")
+            or ""
+        ).strip()
+        if raw_cc:
+            cc_obj = None
+            import uuid
+
+            is_uuid = False
+            try:
+                uuid.UUID(str(raw_cc))
+                is_uuid = True
+            except (ValueError, AttributeError, TypeError):
+                is_uuid = False
+
+            if is_uuid:
+                cc_obj = CostCenter.objects.filter(id=raw_cc).first()
+            if not cc_obj:
+                cc_obj = CostCenter.objects.filter(
+                    Q(code__iexact=raw_cc) | Q(name__iexact=raw_cc)
+                ).first()
+
+            if cc_obj:
+                qs = qs.filter(
+                    Q(invoice__po__cost_center_id=cc_obj.id)
+                    | Q(invoice__po__requisition__cost_center_id=cc_obj.id)
+                ).distinct()
+            else:
+                qs = qs.none()
+
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            qs = qs.filter(status=status_param.upper())
+
+        return qs.order_by("-created_at")
 
     @action(detail=True, methods=["post"], url_path="resolve")
     def resolve_exception(self, request, pk=None):

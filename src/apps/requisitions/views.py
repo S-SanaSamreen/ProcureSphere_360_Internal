@@ -64,7 +64,18 @@ def list_view(request):
     status_filter = request.GET.get("status", "").strip()
 
     if role_code == Role.REQUESTER:
-        items = PurchaseRequisition.objects.filter(requester=user).order_by("-created_at")
+        if user.department_id:
+            items = (
+                PurchaseRequisition.objects.filter(
+                    Q(requester=user)
+                    | Q(department_id=user.department_id)
+                    | Q(cost_center__department_id=user.department_id)
+                )
+                .distinct()
+                .order_by("-created_at")
+            )
+        else:
+            items = PurchaseRequisition.objects.filter(requester=user).order_by("-created_at")
     elif role_code == Role.DEPT_APPROVER:
         user_department = getattr(user, "department", None)
         if not user_department:
@@ -399,9 +410,34 @@ def _attach_available_budgets(cost_centers):
     return cc_list
 
 
+def _get_pr_by_pk_or_number(pk, qs=None):
+    """
+    Resolves a PurchaseRequisition by either its UUID primary key or business PR number.
+    Gracefully prevents invalid UUID format exceptions.
+    """
+    if qs is None:
+        qs = PurchaseRequisition.objects.all()
+    import uuid
+
+    is_uuid = False
+    try:
+        uuid.UUID(str(pk))
+        is_uuid = True
+    except (ValueError, AttributeError, TypeError):
+        is_uuid = False
+
+    if is_uuid:
+        return qs.filter(Q(pk=pk) | Q(pr_number__iexact=str(pk))).first()
+    return qs.filter(pr_number__iexact=str(pk)).first()
+
+
 @login_required(login_url="/login/")
 def edit_view(request, pk):
-    pr = get_object_or_404(PurchaseRequisition, pk=pk)
+    pr = _get_pr_by_pk_or_number(pk)
+    if not pr:
+        from django.http import Http404
+
+        raise Http404("Purchase requisition not found.")
     if pr.requester != request.user and not request.user.is_superuser:
         messages.error(request, "You do not have permission to edit this requisition.")
         return redirect("requisitions_list")
@@ -592,61 +628,100 @@ def detail_view(request, pk):
     role_code = getattr(user, "role_code", None) or (
         user.role.code if hasattr(user, "role") and user.role else Role.SUPER_ADMIN
     )
-    if role_code == Role.REQUESTER and not user.is_superuser:
-        pr = PurchaseRequisition.objects.filter(pk=pk).select_related(
-            "requester", "department", "cost_center"
-        ).prefetch_related("lines", "attachments", "purchase_orders", "sourcing_events").first()
-        if not pr:
-            from django.http import Http404
-            raise Http404("Purchase requisition not found.")
-        # Requesters can view their own PRs or PRs belonging to their department/cost-center
-        if (
-            pr.requester_id != user.id
-            and (not user.department_id or pr.department_id != user.department_id)
-            and (not user.cost_center_id or pr.cost_center_id != user.cost_center_id)
-        ):
-            from django.http import Http404
-            raise Http404("Purchase requisition not found.")
-    else:
-        pr = get_object_or_404(
-            PurchaseRequisition.objects.select_related(
-                "requester", "department", "cost_center"
-            ).prefetch_related("lines", "attachments", "purchase_orders", "sourcing_events"),
-            pk=pk,
-        )
-
-    if not user.is_superuser and (getattr(user, "is_vendor", False) or role_code in [Role.VENDOR_USER, Role.STORES_RECEIVER, Role.LEGAL_MGR]):
+    if not user.is_superuser and (
+        getattr(user, "is_vendor", False)
+        or role_code in [Role.VENDOR_USER, Role.STORES_RECEIVER, Role.LEGAL_MGR]
+    ):
         from django.core.exceptions import PermissionDenied
 
         raise PermissionDenied("Access to Purchase Requisitions is restricted for your role.")
 
-    # Multi-tenant boundary validation
+    # 1. Resolve PR by UUID or business PR number (e.g. PR-2026-00706)
+    base_qs = PurchaseRequisition.objects.select_related(
+        "requester",
+        "department",
+        "department__organization",
+        "cost_center",
+        "cost_center__department",
+        "cost_center__department__organization",
+    ).prefetch_related("lines", "attachments", "purchase_orders", "sourcing_events")
+
+    pr = _get_pr_by_pk_or_number(pk, qs=base_qs)
+    if not pr:
+        from django.http import Http404
+
+        raise Http404("Purchase requisition not found.")
+
+    pr_dept_id = pr.department_id or getattr(getattr(pr, "cost_center", None), "department_id", None)
+    user_dept_id = getattr(user, "department_id", None)
+    user_cc_id = getattr(user, "cost_center_id", None)
+    pr_cc_id = pr.cost_center_id
+    is_cc_manager = bool(pr.cost_center and getattr(pr.cost_center, "manager_id", None) == user.id)
+
+    # 2. Role-based scoping and object-level permissions
+    if role_code == Role.REQUESTER and not user.is_superuser:
+        is_own_pr = bool(pr.requester_id == user.id)
+        is_same_dept = bool(user_dept_id and pr_dept_id and user_dept_id == pr_dept_id)
+        is_same_cc = bool(user_cc_id and pr_cc_id and user_cc_id == pr_cc_id)
+        if not (is_own_pr or is_same_dept or is_same_cc or is_cc_manager):
+            from django.core.exceptions import PermissionDenied
+
+            raise PermissionDenied("You do not have permission to view requisitions from another department.")
+
+    elif role_code == Role.DEPT_APPROVER and not user.is_superuser:
+        is_own_pr = bool(pr.requester_id == user.id)
+        is_same_dept = bool(user_dept_id and pr_dept_id and user_dept_id == pr_dept_id)
+        is_same_cc = bool(user_cc_id and pr_cc_id and user_cc_id == pr_cc_id)
+        is_org_approver = False
+        user_org = (
+            getattr(user, "organization", None)
+            or getattr(user, "effective_organization", None)
+            or getattr(getattr(user, "department", None), "organization", None)
+        )
+        if user_org:
+            if pr_dept_id:
+                has_own_approver = Department.objects.filter(
+                    id=pr_dept_id,
+                    users__role__code=Role.DEPT_APPROVER,
+                    users__is_active=True,
+                ).exists()
+                if not has_own_approver:
+                    is_org_approver = True
+            else:
+                is_org_approver = True
+
+        if not (is_own_pr or is_same_dept or is_same_cc or is_cc_manager or is_org_approver):
+            from django.core.exceptions import PermissionDenied
+
+            raise PermissionDenied("You do not have permission to view this department's requisition.")
+
+    # 3. Multi-tenant boundary validation (strict cross-organization check)
     pr_org_ids = set()
     for candidate_org in [
         getattr(getattr(pr, "department", None), "organization", None),
         getattr(getattr(getattr(pr, "cost_center", None), "department", None), "organization", None),
         getattr(pr.requester, "effective_organization", None),
         getattr(pr.requester, "organization", None),
+        getattr(getattr(pr.requester, "department", None), "organization", None),
     ]:
         if candidate_org and candidate_org.id:
             pr_org_ids.add(candidate_org.id)
 
-    user_org = getattr(user, "effective_organization", None) or getattr(user, "organization", None)
-    is_authorized_actor = (
-        pr.requester_id == user.id
-        or (user.department_id and pr.department_id and user.department_id == pr.department_id)
-        or (pr.cost_center and getattr(pr.cost_center, "manager_id", None) == user.id)
-        or (user.cost_center_id and pr.cost_center_id and user.cost_center_id == pr.cost_center_id)
+    user_org = (
+        getattr(user, "effective_organization", None)
+        or getattr(user, "organization", None)
+        or getattr(getattr(user, "department", None), "organization", None)
+        or getattr(getattr(getattr(user, "cost_center", None), "department", None), "organization", None)
     )
 
     if (
         user_org
         and pr_org_ids
         and user_org.id not in pr_org_ids
-        and not is_authorized_actor
         and not (user.is_superuser and not user.organization_id)
     ):
         from django.core.exceptions import PermissionDenied
+
         raise PermissionDenied("You do not have permission to view requisitions from another organization.")
 
     pr_org = (
@@ -796,7 +871,11 @@ def submit_view(request, pk):
     if request.method != "POST":
         return redirect("requisitions_list")
 
-    pr = get_object_or_404(PurchaseRequisition, pk=pk)
+    pr = _get_pr_by_pk_or_number(pk)
+    if not pr:
+        from django.http import Http404
+
+        raise Http404("Purchase requisition not found.")
 
     # Check permissions
     if pr.requester != request.user and not request.user.is_superuser:
@@ -826,7 +905,11 @@ def submit_view(request, pk):
 
 @login_required(login_url="/login/")
 def approve_view(request, pk):
-    pr = get_object_or_404(PurchaseRequisition, pk=pk)
+    pr = _get_pr_by_pk_or_number(pk)
+    if not pr:
+        from django.http import Http404
+
+        raise Http404("Purchase requisition not found.")
     if request.method == "POST":
         comments = request.POST.get("comments", "").strip()
         user = request.user
@@ -896,7 +979,11 @@ def approve_view(request, pk):
 
 @login_required(login_url="/login/")
 def reject_view(request, pk):
-    pr = get_object_or_404(PurchaseRequisition, pk=pk)
+    pr = _get_pr_by_pk_or_number(pk)
+    if not pr:
+        from django.http import Http404
+
+        raise Http404("Purchase requisition not found.")
     if request.method == "POST":
         comments = request.POST.get("comments", "").strip() or "Rejected by Approver."
         user = request.user
@@ -965,7 +1052,11 @@ def reject_view(request, pk):
 @login_required(login_url="/login/")
 def cancel_view(request, pk):
     if request.method == "POST":
-        pr = get_object_or_404(PurchaseRequisition, pk=pk)
+        pr = _get_pr_by_pk_or_number(pk)
+        if not pr:
+            from django.http import Http404
+
+            raise Http404("Purchase requisition not found.")
 
         if pr.requester != request.user and not request.user.is_superuser:
             messages.error(request, "You do not have permission to cancel this requisition.")
@@ -1019,7 +1110,11 @@ def cancel_view(request, pk):
 
 @login_required(login_url="/login/")
 def delete_view(request, pk):
-    pr = get_object_or_404(PurchaseRequisition, pk=pk)
+    pr = _get_pr_by_pk_or_number(pk)
+    if not pr:
+        from django.http import Http404
+
+        raise Http404("Purchase requisition not found.")
     if pr.status == PurchaseRequisition.STATUS_DRAFT and (
         pr.requester == request.user or request.user.is_superuser
     ):
@@ -1047,7 +1142,11 @@ def attachment_download_view(request, pk, attachment_id):
         user.role.code if hasattr(user, "role") and user.role else Role.SUPER_ADMIN
     )
 
-    pr = get_object_or_404(PurchaseRequisition, pk=pk)
+    pr = _get_pr_by_pk_or_number(pk)
+    if not pr:
+        from django.http import Http404
+
+        raise Http404("Purchase requisition not found.")
 
     # Scoping check
     if role_code == Role.REQUESTER and pr.requester != user:
