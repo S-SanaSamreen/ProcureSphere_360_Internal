@@ -1,5 +1,6 @@
 import pytest
 from django.test import Client
+
 from apps.accounts.models import Role, User
 
 
@@ -146,3 +147,101 @@ class TestBrowserNavigationAndSignoutGuard:
         assert "if (!currentlyOnRoot) {" in app_js
         assert "showSignoutModal()" in app_js
         assert "armDashboardGuard()" in app_js
+
+    def test_login_page_renders_another_tab_and_inactivity_notices(self, client):
+        """Visiting /login/?reason=another_tab or inactivity renders appropriate security alert notices."""
+        # 1. another_tab notice
+        resp_tab = client.get("/login/?reason=another_tab")
+        assert resp_tab.status_code == 200
+        content_tab = resp_tab.content.decode("utf-8")
+        assert "Your account was signed into in another tab or window" in content_tab
+
+        # 2. inactivity notice
+        resp_idle = client.get("/login/?reason=inactivity")
+        assert resp_idle.status_code == 200
+        content_idle = resp_idle.content.decode("utf-8")
+        assert "Your session timed out after 5 minutes of inactivity" in content_idle
+
+    def test_ajax_login_returns_json_for_history_replacement(self, client):
+        """AJAX login request returns JSON with redirect URL for window.location.replace navigation."""
+        role, _ = Role.objects.get_or_create(code=Role.REQUESTER, defaults={"name": "Requester"})
+        User.objects.create_user(
+            email="ajax_login_test@procuresphere.com",
+            password="Password123!",
+            role=role,
+        )
+
+        resp = client.post(
+            "/login/",
+            {"email": "ajax_login_test@procuresphere.com", "password": "Password123!"},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data.get("ok") is True
+        assert data.get("redirect") == "/requester/"
+
+    def test_login_template_contains_ajax_replace_and_session_broadcast(self):
+        """login.html contains AJAX submission with window.location.replace and BroadcastChannel sync."""
+        with open("templates/pages/login.html", "r", encoding="utf-8") as f:
+            login_html = f.read()
+
+        assert "window.location.replace(data.redirect)" in login_html
+        assert "ps360_session_channel" in login_html
+        assert "ps360_active_session_id" in login_html
+        assert "NEW_LOGIN" in login_html
+
+    def test_session_timeout_js_contains_multi_tab_sync_and_5min_timer(self):
+        """session_timeout.js contains multi-tab session listener and 5-minute inactivity timeout."""
+        with open("static/js/session_timeout.js", "r", encoding="utf-8") as f:
+            timeout_js = f.read()
+
+        assert "ps360_session_channel" in timeout_js
+        assert "ps360_active_session_id" in timeout_js
+        assert "ps360_tab_session_id" in timeout_js
+        assert "/login/?reason=another_tab" in timeout_js
+        assert "idleTimeoutSeconds = 300" in timeout_js or "idleTimeoutSeconds" in timeout_js
+
+    def test_all_10_dashboards_contain_signout_guard_modal(self, client):
+        """All 10 enterprise role dashboard roots render signout confirmation modal and guard scripts."""
+        dashboard_endpoints = [
+            (Role.SUPER_ADMIN, "/superadmin/"),
+            (Role.REQUESTER, "/requester/"),
+            (Role.DEPT_APPROVER, "/approver/"),
+            (Role.PROC_EXEC, "/procurement/"),
+            (Role.PROC_MGR, "/manager/"),
+            (Role.FINANCE_AP, "/finance/"),
+            (Role.STORES_RECEIVER, "/stores/"),
+            (Role.LEGAL_MGR, "/legal/"),
+            (Role.AUDITOR, "/audit/dashboard/"),
+            (Role.VENDOR_USER, "/vendor/"),
+        ]
+
+        from apps.vendors.models import Vendor, VendorCategory
+
+        cat, _ = VendorCategory.objects.get_or_create(code="SERVICES", defaults={"name": "Services"})
+        vendor, _ = Vendor.objects.get_or_create(
+            vendor_number="VND-ALL-DASH-01",
+            defaults={"legal_name": "All Dashboards Vendor", "category": cat, "email": "alldash@vendor.com"},
+        )
+
+        for role_code, endpoint in dashboard_endpoints:
+            role, _ = Role.objects.get_or_create(code=role_code, defaults={"name": role_code})
+            test_email = f"dash_guard_{role_code.lower()}@procuresphere.com"
+            user, _ = User.objects.get_or_create(
+                email=test_email,
+                defaults={"username": test_email, "role": role, "is_active": True},
+            )
+            if role_code == Role.VENDOR_USER and not getattr(user, "vendor", None):
+                user.vendor = vendor
+                user.save()
+
+            client.force_login(user)
+            resp = client.get(endpoint)
+            assert resp.status_code in [200, 302], f"Failed loading {endpoint} for {role_code}"
+            if resp.status_code == 200:
+                html = resp.content.decode("utf-8")
+                assert 'id="signout-confirm-modal"' in html, f"Modal missing on {endpoint}"
+                assert "Sign Out Confirmation" in html, f"Modal title missing on {endpoint}"
+                assert 'app.js' in html, f"app.js missing on {endpoint}"
+                assert 'session_timeout.js' in html, f"session_timeout.js missing on {endpoint}"

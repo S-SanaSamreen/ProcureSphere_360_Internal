@@ -90,6 +90,25 @@
     safeStorageRemove(STORAGE_EXPIRED_KEY);
     safeStorageSet(STORAGE_ACTIVITY_KEY, String(lastActivityAt));
 
+    // Multi-Tab Session Synchronization: track this tab's session ID
+    var currentActiveSession = safeStorageGet("ps360_active_session_id");
+    try {
+        var existingTabSession = sessionStorage.getItem("ps360_tab_session_id");
+        if (!existingTabSession) {
+            if (currentActiveSession) {
+                sessionStorage.setItem("ps360_tab_session_id", currentActiveSession);
+            } else {
+                var generatedId = "ps360_sess_" + Date.now() + "_" + Math.random().toString(36).substring(2, 9);
+                sessionStorage.setItem("ps360_tab_session_id", generatedId);
+                safeStorageSet("ps360_active_session_id", generatedId);
+            }
+        } else if (currentActiveSession && existingTabSession !== currentActiveSession) {
+            // Already superseded while this tab was asleep/inactive
+            performAutoLogout(true, "/login/?reason=another_tab");
+            return;
+        }
+    } catch (stErr) {}
+
     function getCsrfToken() {
         var input = document.querySelector('input[name="csrfmiddlewaretoken"]');
         if (input && input.value) {
@@ -194,7 +213,7 @@
         return lastActivityAt;
     }
 
-    function performAutoLogout(skipRemoteLogout) {
+    function performAutoLogout(skipRemoteLogout, customTargetUrl) {
         if (isLoggingOut) {
             return;
         }
@@ -206,8 +225,10 @@
         removeBanner();
         safeStorageSet(STORAGE_EXPIRED_KEY, String(Date.now()));
 
+        var targetUrl = customTargetUrl || loginUrl;
+
         if (skipRemoteLogout) {
-            window.location.replace(loginUrl);
+            window.location.replace(targetUrl);
             return;
         }
 
@@ -228,10 +249,10 @@
             }).catch(function () {
                 // Ignore network failure and proceed directly to login screen
             }).finally(function () {
-                window.location.replace(loginUrl);
+                window.location.replace(targetUrl);
             });
         } catch (err) {
-            window.location.replace(loginUrl);
+            window.location.replace(targetUrl);
         }
     }
 
@@ -395,16 +416,58 @@
                 lastActivityAt = sharedTs;
                 removeBanner();
             }
+        } else if (event.key === "ps360_active_session_id" && event.newValue) {
+            var myTabSession = null;
+            try {
+                myTabSession = sessionStorage.getItem("ps360_tab_session_id");
+            } catch (e) {}
+            if (myTabSession && event.newValue !== myTabSession) {
+                performAutoLogout(true, "/login/?reason=another_tab");
+            }
         }
     });
 
+    if (window.BroadcastChannel) {
+        try {
+            var sessionChannel = new BroadcastChannel("ps360_session_channel");
+            sessionChannel.addEventListener("message", function (event) {
+                if (event && event.data && event.data.type === "NEW_LOGIN") {
+                    var myTabSession = null;
+                    try {
+                        myTabSession = sessionStorage.getItem("ps360_tab_session_id");
+                    } catch (e) {}
+                    if (event.data.sessionId && myTabSession && event.data.sessionId !== myTabSession) {
+                        performAutoLogout(true, "/login/?reason=another_tab");
+                    }
+                }
+            });
+        } catch (bcErr) {}
+    }
+
+    function checkMultiTabSession() {
+        var activeSessionId = safeStorageGet("ps360_active_session_id");
+        if (activeSessionId) {
+            var myTabSession = null;
+            try {
+                myTabSession = sessionStorage.getItem("ps360_tab_session_id");
+            } catch (e) {}
+            if (myTabSession && activeSessionId !== myTabSession) {
+                performAutoLogout(true, "/login/?reason=another_tab");
+            }
+        }
+    }
+
     document.addEventListener("visibilitychange", function () {
         if (!document.hidden) {
+            checkMultiTabSession();
             checkIdleState();
         }
     });
 
-    window.addEventListener("focus", checkIdleState);
+    window.addEventListener("focus", function () {
+        checkMultiTabSession();
+        checkIdleState();
+    });
 
     window.PS360SessionTimeout = {
         getIdleTimeoutSeconds: function () {
