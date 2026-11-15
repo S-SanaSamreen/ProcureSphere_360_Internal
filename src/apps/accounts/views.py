@@ -183,7 +183,12 @@ def portal_login_view(request):
 
 
     context = {}
-    if request.GET.get("session_expired") == "1":
+    reason = request.GET.get("reason", "").strip().lower()
+    if reason == "another_tab":
+        context["session_expired_notice"] = (
+            "Your account was signed into in another tab or window. This session has been closed for security."
+        )
+    elif reason == "inactivity" or request.GET.get("session_expired") == "1":
         context["session_expired_notice"] = (
             "Your session timed out after 5 minutes of inactivity. Please sign in again."
         )

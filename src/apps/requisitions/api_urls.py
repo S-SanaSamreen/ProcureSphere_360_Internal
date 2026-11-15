@@ -465,8 +465,31 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
             else:
                 qs = self.queryset.all()
         else:
-            # Requesters are strictly scoped to their own requisitions (prevents IDOR)
-            qs = self.queryset.filter(requester=user)
+            # Requesters: can view their own requisitions or permitted departmental requisitions
+            from django.db.models import Q
+
+            req_q = Q(requester=user)
+            if user.department_id:
+                req_q |= Q(department_id=user.department_id) | Q(cost_center__department_id=user.department_id)
+            if user.cost_center_id:
+                req_q |= Q(cost_center_id=user.cost_center_id)
+            qs = self.queryset.filter(req_q).distinct()
+
+        # Multi-tenant organization enforcement
+        user_org = (
+            getattr(user, "effective_organization", None)
+            or getattr(user, "organization", None)
+            or getattr(getattr(user, "department", None), "organization", None)
+        )
+        if user_org and not (getattr(user, "is_superuser", False) and not user.organization_id):
+            from django.db.models import Q
+
+            qs = qs.filter(
+                Q(department__organization=user_org)
+                | Q(cost_center__department__organization=user_org)
+                | Q(requester__organization=user_org)
+                | Q(requester__department__organization=user_org)
+            ).distinct()
 
         # Filter by search
         search_param = (
@@ -494,6 +517,58 @@ class PurchaseRequisitionViewSet(viewsets.ModelViewSet):
             qs = qs.filter(status=status_param)
 
         return qs
+
+    def get_object(self):
+        lookup_url_kwarg = self.lookup_url_kwarg or self.lookup_field
+        lookup_val = self.kwargs.get(lookup_url_kwarg)
+
+        import uuid
+
+        is_valid_uuid = False
+        try:
+            uuid.UUID(str(lookup_val))
+            is_valid_uuid = True
+        except (ValueError, AttributeError, TypeError):
+            is_valid_uuid = False
+
+        from django.db.models import Q
+
+        queryset = self.filter_queryset(self.get_queryset())
+        if is_valid_uuid:
+            obj = queryset.filter(Q(pk=lookup_val) | Q(pr_number__iexact=str(lookup_val))).first()
+        else:
+            obj = queryset.filter(pr_number__iexact=str(lookup_val)).first()
+
+        if not obj:
+            # Check if record exists in the user's organization to differentiate 403 vs 404
+            # Cross-organization queries must return 404 to avoid leaking tenant resource existence (anti-IDOR)
+            from rest_framework.exceptions import NotFound, PermissionDenied
+
+            user_org = (
+                getattr(self.request.user, "effective_organization", None)
+                or getattr(self.request.user, "organization", None)
+                or getattr(getattr(self.request.user, "department", None), "organization", None)
+            )
+
+            if user_org:
+                same_org_qs = PurchaseRequisition.objects.filter(
+                    Q(department__organization=user_org)
+                    | Q(cost_center__department__organization=user_org)
+                    | Q(requester__organization=user_org)
+                    | Q(requester__department__organization=user_org)
+                )
+                if is_valid_uuid:
+                    in_same_org = same_org_qs.filter(Q(pk=lookup_val) | Q(pr_number__iexact=str(lookup_val))).exists()
+                else:
+                    in_same_org = same_org_qs.filter(pr_number__iexact=str(lookup_val)).exists()
+
+                if in_same_org:
+                    raise PermissionDenied("You do not have permission to access this purchase requisition.")
+
+            raise NotFound(f"Purchase requisition '{lookup_val}' not found.")
+
+        self.check_object_permissions(self.request, obj)
+        return obj
 
     def perform_create(self, serializer):
         user = self.request.user

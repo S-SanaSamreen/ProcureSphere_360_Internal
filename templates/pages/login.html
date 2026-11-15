@@ -751,13 +751,84 @@
 
         const loginForm = document.getElementById('loginForm');
         if (loginForm) {
-            loginForm.addEventListener('submit', function () {
+            loginForm.addEventListener('submit', async function (e) {
+                e.preventDefault();
+                const submitBtn = document.getElementById('login-submit-btn');
+                const originalBtnHtml = submitBtn ? submitBtn.innerHTML : '';
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<span>Signing in...</span>';
+                }
+
+                // Remove existing dynamic error banners
+                document.querySelectorAll('.login-alert-banner').forEach(function (el) { el.remove(); });
+
                 try {
-                    sessionStorage.removeItem('ps_nav_stack');
-                    sessionStorage.removeItem('ps_nav_index');
-                    sessionStorage.setItem('ps_just_logged_in', 'true');
-                    sessionStorage.setItem('ps_active_tab', 'true');
-                } catch (e) { }
+                    const formData = new FormData(loginForm);
+                    const response = await fetch(loginForm.action, {
+                        method: 'POST',
+                        body: formData,
+                        headers: {
+                            'X-Requested-With': 'XMLHttpRequest'
+                        }
+                    });
+
+                    let data = null;
+                    try {
+                        data = await response.json();
+                    } catch (parseErr) {
+                        data = null;
+                    }
+
+                    if (response.ok && data && data.ok && data.redirect) {
+                        const sessionId = 'ps360_sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+                        try {
+                            localStorage.setItem('ps360_active_session_id', sessionId);
+                            localStorage.setItem('ps360_active_session_time', String(Date.now()));
+                            localStorage.removeItem('ps360_idle_expired_at_ms');
+                            localStorage.setItem('ps360_idle_last_activity_ms', String(Date.now()));
+                            sessionStorage.setItem('ps360_tab_session_id', sessionId);
+                            sessionStorage.setItem('ps_just_logged_in', 'true');
+                            sessionStorage.setItem('ps_portal_initialized', 'true');
+                            sessionStorage.setItem('ps_nav_depth', '0');
+                            sessionStorage.removeItem('ps_visited_subpage');
+                        } catch (stErr) {}
+
+                        // Broadcast to other open tabs so they auto-logout immediately
+                        if (window.BroadcastChannel) {
+                            try {
+                                const bc = new BroadcastChannel('ps360_session_channel');
+                                bc.postMessage({ type: 'NEW_LOGIN', sessionId: sessionId, timestamp: Date.now() });
+                                bc.close();
+                            } catch (bcErr) {}
+                        }
+
+                        // Replace current history entry so /login/ is not in the history stack
+                        // (disables left arrow when opened in a new tab)
+                        window.location.replace(data.redirect);
+                        return;
+                    }
+
+                    // Handle login error
+                    const errorMsg = (data && data.error) ? data.error : 'Invalid email or password. Please try again.';
+                    const alertDiv = document.createElement('div');
+                    alertDiv.className = 'login-alert-banner alert-danger';
+                    alertDiv.innerHTML = '<div style="display:flex;align-items:center;gap:9px;">' +
+                        '<i class="fa-solid fa-circle-exclamation"></i>' +
+                        '<span>' + errorMsg + '</span></div>' +
+                        '<button type="button" onclick="this.closest(\'.login-alert-banner\').remove()" ' +
+                        'style="background:none;border:none;font-size:16px;cursor:pointer;color:inherit;padding:0 4px;line-height:1;opacity:0.7;" ' +
+                        'aria-label="Close alert">&times;</button>';
+                    loginForm.parentNode.insertBefore(alertDiv, loginForm);
+
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = originalBtnHtml;
+                    }
+                } catch (netErr) {
+                    // Fallback to native form submission
+                    loginForm.submit();
+                }
             });
         }
 

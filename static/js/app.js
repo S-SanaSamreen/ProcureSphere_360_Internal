@@ -685,24 +685,13 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
 
-        // Arm the history barrier ONLY at the initial entry point on a dashboard root
+        // Arm the history barrier on any dashboard root
         function armDashboardGuard() {
             if (!window.history || !window.history.pushState) return;
             const currentPath = window.location.pathname;
             if (!isDashboardRoot(currentPath)) return;
 
-            // Only arm at initial entry point
-            let navDepth = 0;
-            try {
-                navDepth = parseInt(sessionStorage.getItem('ps_nav_depth') || '0', 10);
-            } catch (e) {}
-
-            // If user navigated forward across internal modules (navDepth > 0), do not trap
-            if (navDepth > 0 && !isInitialEntry) {
-                return;
-            }
-
-            // Only push barrier if not already at guard state
+            // Push guard barrier state if not already at guard state
             if (!window.history.state || !window.history.state.isPsGuard) {
                 try {
                     window.history.replaceState(
@@ -719,21 +708,15 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
 
-        // Arm immediately on dashboard root page load ONLY at the initial entry point
-        if (onRoot && isInitialEntry) {
+        // Arm immediately on dashboard root page load
+        if (onRoot) {
             armDashboardGuard();
         }
 
-        // Re-arm when shown via browser navigation ONLY if at initial entry point
+        // Re-arm when shown via browser navigation on dashboard root
         window.addEventListener('pageshow', function () {
             if (isDashboardRoot(window.location.pathname)) {
-                let navDepth = 0;
-                try {
-                    navDepth = parseInt(sessionStorage.getItem('ps_nav_depth') || '0', 10);
-                } catch (e) {}
-                if (navDepth === 0) {
-                    armDashboardGuard();
-                }
+                armDashboardGuard();
             }
         });
 
@@ -822,7 +805,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     return;
                 }
 
-                // Case 4: Arrived at / on Dashboard Root from internal navigation
+                // Case 4: Back navigation while on a Dashboard Root
                 let cameFromSubpage = false;
                 try {
                     if (sessionStorage.getItem('ps_visited_subpage') === 'true') {
@@ -831,40 +814,28 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
                 } catch (err) {}
 
-                let curNavDepth = 0;
+                if (cameFromSubpage) {
+                    // Just arrived back onto the dashboard root from an internal subpage:
+                    // Allow seamless return to dashboard root and arm the barrier for subsequent back clicks.
+                    armDashboardGuard();
+                    return;
+                }
+
+                // Case 5: User is on the Dashboard Root and clicks Back (or double clicks / clicks repeatedly)
+                // IMMEDIATELY re-push the guard barrier to lock browser history on the dashboard root!
+                // This neutralizes rapid double-clicks, triple-clicks, or post-timer clicks,
+                // ensuring the user stays safely locked on the dashboard and NEVER escapes to /login/!
                 try {
-                    curNavDepth = parseInt(sessionStorage.getItem('ps_nav_depth') || '0', 10);
+                    window.history.pushState(
+                        { ps_portal: true, isPsGuard: true, isPsBase: true, isInitialEntry: true, rootPath: currentPath },
+                        document.title,
+                        window.location.href
+                    );
                 } catch (err) {}
 
-                // If user just backed into the root from a subpage, or landed on isPsGuard,
-                // or is navigating backwards through previously visited modules:
-                // DO NOT show modal! Allow them to seamlessly return through previous pages in history.
-                if (cameFromSubpage || (e.state && e.state.isPsGuard) || curNavDepth > 0) {
-                    return;
-                }
-
-                // Case 5: User is AT the Initial Entry Point barrier attempting to exit backwards
-                if (e.state && e.state.isPsBase) {
-                    // Prevent repeated triggers: only show if modal is not already showing
-                    const modalEl = document.getElementById('signout-confirm-modal');
-                    const isAlreadyOpen = modalEl && (modalEl.classList.contains('show') || modalEl.style.display === 'block');
-                    if (isAlreadyOpen) {
-                        return;
-                    }
-
-                    // Re-push barrier state immediately so browser stays locked on dashboard root
-                    try {
-                        window.history.pushState(
-                            { ps_portal: true, isPsGuard: true, isInitialEntry: true, rootPath: currentPath },
-                            document.title,
-                            window.location.href
-                        );
-                    } catch (err) {}
-
-                    // Trigger the sign-out confirmation toggle modal ONLY at initial entry point
-                    showSignoutModal();
-                    return;
-                }
+                // Trigger the sign-out confirmation toggle modal
+                showSignoutModal();
+                return;
             });
         }
     })();
